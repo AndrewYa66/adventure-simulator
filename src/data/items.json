@@ -1,0 +1,35 @@
+[
+  {
+    "id": "ITEM-001",
+    "name": "小型生命藥水",
+    "type": "consumable",
+    "effect": {
+      "hpRestore": 30
+    },
+    "buyPrice": 10,
+    "sellPrice": 5,
+    "description": "恢復 30 點生命值。"
+  },
+  {
+    "id": "ITEM-101",
+    "name": "精鋼短劍",
+    "type": "weapon",
+    "effect": {
+      "atkBonus": 5
+    },
+    "buyPrice": 50,
+    "sellPrice": 25,
+    "description": "堅固鋒利的精鋼短劍。"
+  },
+  {
+    "id": "ITEM-201",
+    "name": "冒險者皮甲",
+    "type": "armor",
+    "effect": {
+      "defBonus": 3
+    },
+    "buyPrice": 40,
+    "sellPrice": 20,
+    "description": "基礎冒險者護具。"
+  }
+]

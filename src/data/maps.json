@@ -1,0 +1,28 @@
+[
+  {
+    "id": "MAP-001",
+    "name": "橡木村",
+    "enName": "Oak Village",
+    "recommendedLevel": "1-3",
+    "zoneType": "城鎮",
+    "isSafeZone": true,
+    "description": "寧靜祥和的小村莊，冒險者聚集的起點。",
+    "connectedMapIds": ["MAP-002"],
+    "monstersPresent": [],
+    "pointsOfInterest": ["微風旅館", "冒險者公會告示板"],
+    "npcsPresent": ["村長埃爾德"]
+  },
+  {
+    "id": "MAP-002",
+    "name": "綠林古道",
+    "enName": "Greenwood Path",
+    "recommendedLevel": "1-5",
+    "zoneType": "野外",
+    "isSafeZone": false,
+    "description": "常有哥布林出沒的森林道路。",
+    "connectedMapIds": ["MAP-001"],
+    "monstersPresent": ["MON-001"],
+    "pointsOfInterest": ["廢棄驛站"],
+    "npcsPresent": []
+  }
+]

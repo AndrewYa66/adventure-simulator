@@ -1,0 +1,32 @@
+[
+  {
+    "id": "MON-001",
+    "name": "哥布林斥候",
+    "enName": "Goblin Scout",
+    "tier": "普通 (Common)",
+    "recommendedLevel": 1,
+    "stats": {
+      "hp": 25,
+      "atk": 6,
+      "def": 2,
+      "spd": 8
+    },
+    "rewards": {
+      "exp": 15,
+      "gold": 5,
+      "dropItems": [
+        {
+          "itemName": "哥布林耳朵",
+          "chance": 0.8
+        }
+      ]
+    },
+    "specialAbilities": [
+      {
+        "name": "偷襲",
+        "effect": "第一回合速度提升 50%"
+      }
+    ],
+    "tacticsAndBehavior": "性格膽小，血量低於 30% 時會嘗試逃跑。"
+  }
+]

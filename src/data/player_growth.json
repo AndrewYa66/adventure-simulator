@@ -1,0 +1,29 @@
+[
+  {
+    "level": 1,
+    "requiredExp": 100,
+    "maxHp": 100,
+    "maxMp": 30,
+    "baseAtk": 10,
+    "baseDef": 5,
+    "spd": 10,
+    "notes": "初始冒險者等級"
+  },
+  {
+    "level": 2,
+    "requiredExp": 250,
+    "maxHp": 120,
+    "maxMp": 40,
+    "baseAtk": 14,
+    "baseDef": 7,
+    "spd": 11,
+    "unlockedSkill": {
+      "id": "SKL-001",
+      "name": "重擊",
+      "type": "active",
+      "costMp": 10,
+      "description": "造成 1.5 倍物理傷害"
+    },
+    "notes": "解鎖基礎攻擊技能"
+  }
+]

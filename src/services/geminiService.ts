@@ -44,12 +44,16 @@ export async function sendPlayerAction(
 你是一位中世紀奇幻 TRPG 的遊戲主持人 (GM)。
 當前玩家狀態：
 - 姓名: ${playerState.name} (Lv.${playerState.level})
-- HP: ${playerState.hp}/${playerState.maxHp} | MP: ${playerState.mp}/${playerState.maxMp}
-- 金幣: ${playerState.gold} | 當前地圖 ID: ${playerState.currentMapId}
-- 背包: ${JSON.stringify(playerState.inventory)}
+- HP: ${playerState.hp} | MP: ${playerState.mp} | 金幣: ${playerState.gold}
+- 當前地圖 ID: ${playerState.currentMapId}
+- 背包物品 ID 列表: ${JSON.stringify(playerState.inventory)}
+- 裝備物品 ID: ${JSON.stringify(playerState.equipped)}
+- 劇情旗標 (Flags): ${JSON.stringify(playerState.storyFlags || {})}
 
 請根據玩家行動進行劇情描述與戰鬥結算。
-你必須【嚴格】以格式正確的 JSON 格式回答：
+注意事項：
+1. 當給予或扣除玩家道具時，請使用 Item ID (例如: "ITEM-001" 小型生命藥水, "ITEM-002" 哥布林耳朵, "ITEM-101" 精鋼短劍, "ITEM-201" 冒險者皮甲)。
+2. 你必須【嚴格】以格式正確的 JSON 格式回答：
 
 \`\`\`json
 {
@@ -60,9 +64,10 @@ export async function sendPlayerAction(
     "mpChange": 0,
     "expChange": 0,
     "goldChange": 0,
-    "addItems": [{"name": "道具名稱", "quantity": 1}],
+    "addItems": [{"itemId": "ITEM-001", "quantity": 1}],
     "removeItems": [],
-    "newLocationId": null
+    "newLocationId": null,
+    "setFlags": {"MET_VILLAGE_CHIEF": true}
   }
 }
 \`\`\`
@@ -85,7 +90,6 @@ export async function sendPlayerAction(
 
   let lastErrorDetail = '';
 
-  // 多模型備用機制：若某個模型遇到 503 或 404，自動切換至下一個
   for (const model of SUPPORTED_MODELS) {
     const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cleanApiKey}`;
 
@@ -112,7 +116,6 @@ export async function sendPlayerAction(
         }
       }
 
-      // 如果當前模型回傳 503/404 等錯誤，紀錄後繼續嘗試下一個備用模型
       const errorJson = await response.json().catch(() => null);
       const errorText = errorJson ? JSON.stringify(errorJson, null, 2) : response.statusText;
       console.warn(`⚠️ [${model}] 暫時無法使用 (${response.status})，切換至下一個模型...`);
