@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import type { PlayerState, StoryMessage } from './types/game';
 import { sendPlayerAction } from './services/geminiService';
 
