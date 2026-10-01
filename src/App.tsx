@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import type { PlayerState, StoryMessage } from './types/game';
 import { loadPlayerState, resetPlayerState, savePlayerState } from './utils/playerStorage';
+import { applyStateChanges } from './utils/applyStateChanges';
 import { sendPlayerAction } from './services/geminiService';
 import { PlayerHUD } from './components/PlayerHUD';
 import { StoryLog } from './components/StoryLog';
@@ -72,42 +73,7 @@ export default function App() {
 
       // 更新玩家 Local State
       if (aiResponse.stateChanges) {
-        const sc = aiResponse.stateChanges;
-        setPlayer((prev) => {
-          let updatedInventory = [...prev.inventory];
-
-          if (sc.addItems) {
-            sc.addItems.forEach((item) => {
-              const idx = updatedInventory.findIndex((i) => i.itemId === item.itemId);
-              if (idx > -1) {
-                updatedInventory[idx].quantity += item.quantity;
-              } else {
-                updatedInventory.push({ itemId: item.itemId, quantity: item.quantity });
-              }
-            });
-          }
-
-          if (sc.removeItems) {
-            sc.removeItems.forEach((item) => {
-              const idx = updatedInventory.findIndex((i) => i.itemId === item.itemId);
-              if (idx > -1) {
-                updatedInventory[idx].quantity -= item.quantity;
-                if (updatedInventory[idx].quantity <= 0) updatedInventory.splice(idx, 1);
-              }
-            });
-          }
-
-          return {
-            ...prev,
-            hp: Math.max(0, prev.hp + (sc.hpChange || 0)),
-            mp: Math.max(0, prev.mp + (sc.mpChange || 0)),
-            gold: Math.max(0, prev.gold + (sc.goldChange || 0)),
-            exp: prev.exp + (sc.expChange || 0),
-            inventory: updatedInventory,
-            storyFlags: { ...prev.storyFlags, ...(sc.setFlags || {}) },
-            currentMapId: sc.newLocationId || prev.currentMapId
-          };
-        });
+        setPlayer((prev) => applyStateChanges(prev, aiResponse));
       }
 
       setMessages((prev) => [
