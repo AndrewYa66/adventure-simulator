@@ -1,20 +1,18 @@
 import { useState, useEffect } from 'react';
 import type { PlayerState, StoryMessage } from './types/game';
-import { createInitialPlayer } from './utils/playerInit';
+import { loadPlayerState, resetPlayerState, savePlayerState } from './utils/playerStorage';
 import { sendPlayerAction } from './services/geminiService';
 import { PlayerHUD } from './components/PlayerHUD';
 import { StoryLog } from './components/StoryLog';
 import { ApiKeyModal } from './components/ApiKeyModal';
 
 export default function App() {
-  const [apiKey, setApiKey] = useState<string>(() => localStorage.getItem('TRPG_GEMINI_KEY') || '');
-  const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
-
-  // 無 LocalStorage 紀錄時，調用 createInitialPlayer()
-  const [player, setPlayer] = useState<PlayerState>(() => {
-    const saved = localStorage.getItem('TRPG_PLAYER_STATE');
-    return saved ? JSON.parse(saved) : createInitialPlayer();
+  const [apiKey, setApiKey] = useState<string>(() => {
+    try { return localStorage.getItem('TRPG_GEMINI_KEY') || ''; } catch { return ''; }
   });
+  const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
+  const [storageWarning, setStorageWarning] = useState(false);
+  const [player, setPlayer] = useState<PlayerState>(loadPlayerState);
 
   const [messages, setMessages] = useState<StoryMessage[]>([
     {
@@ -28,12 +26,28 @@ export default function App() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    localStorage.setItem('TRPG_PLAYER_STATE', JSON.stringify(player));
+    setStorageWarning(!savePlayerState(player));
   }, [player]);
 
   const handleSaveApiKey = (key: string) => {
     setApiKey(key);
-    localStorage.setItem('TRPG_GEMINI_KEY', key);
+    try {
+      localStorage.setItem('TRPG_GEMINI_KEY', key);
+    } catch {
+      setStorageWarning(true);
+    }
+  };
+
+  const handleResetPlayer = () => {
+    if (!window.confirm('確定要清除目前角色存檔並重新開始嗎？')) return;
+    setPlayer(resetPlayerState());
+    setMessages([{
+      id: Date.now().toString(),
+      sender: 'ai',
+      text: '新的冒險即將開始。你站在橡木村的微風旅館門口，村長正等待冒險者前來。',
+      options: ['向村長詢問任務細節', '前往綠林古道探索', '檢查背包裝備'],
+      timestamp: new Date().toLocaleTimeString()
+    }]);
   };
 
   const handleSendAction = async (actionText: string) => {
@@ -130,7 +144,7 @@ export default function App() {
         onOpenKeyModal={() => setIsKeyModalOpen(true)}
         hasApiKey={!!apiKey}
       />
-      <PlayerHUD player={player} />
+      <PlayerHUD player={player} onReset={handleResetPlayer} storageWarning={storageWarning} />
       <ApiKeyModal
         isOpen={isKeyModalOpen}
         currentKey={apiKey}

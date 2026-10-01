@@ -4,9 +4,11 @@ import { getItemById, getMapById, getPlayerGrowthByLevel } from '../data/staticD
 
 interface PlayerHUDProps {
   player: PlayerState;
+  onReset: () => void;
+  storageWarning: boolean;
 }
 
-export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player }) => {
+export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWarning }) => {
   const growth = getPlayerGrowthByLevel(player.level);
   const maxHp = growth?.maxHp || 100;
   const maxMp = growth?.maxMp || 30;
@@ -25,6 +27,11 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player }) => {
         <p style={{ margin: '4px 0' }}><strong>💰 金幣:</strong> {player.gold} Gold</p>
         <p style={{ margin: '4px 0' }}><strong>📍 位置:</strong> {currentMap?.name || player.currentMapId}</p>
       </div>
+
+      {storageWarning && <p role="status" style={{ color: '#ffb74d', margin: 0, fontSize: '12px' }}>瀏覽器儲存不可用，變更可能無法保存。</p>}
+      <button onClick={onReset} style={{ padding: '7px 10px', backgroundColor: '#5d3030', color: '#fff', border: '1px solid #844', borderRadius: '4px', cursor: 'pointer' }}>
+        清除存檔並重新開始
+      </button>
 
       {/* 血條與魔力條 */}
       <div>
