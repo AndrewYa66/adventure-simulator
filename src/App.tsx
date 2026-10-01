@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import type { PlayerState, StoryMessage } from './types/game';
 import { loadPlayerState, resetPlayerState, savePlayerState } from './utils/playerStorage';
 import { applyStateChanges } from './utils/applyStateChanges';
+import { getMapById, getQuestById } from './data/staticData';
 import { sendPlayerAction } from './services/geminiService';
 import { PlayerHUD } from './components/PlayerHUD';
 import { StoryLog } from './components/StoryLog';
@@ -47,6 +48,34 @@ export default function App() {
       sender: 'ai',
       text: '新的冒險即將開始。你站在橡木村的微風旅館門口，村長正等待冒險者前來。',
       options: ['向村長詢問任務細節', '前往綠林古道探索', '檢查背包裝備'],
+      timestamp: new Date().toLocaleTimeString()
+    }]);
+  };
+
+  const handleTravel = (mapId: string) => {
+    const currentMap = getMapById(player.currentMapId);
+    const destination = getMapById(mapId);
+    if (!currentMap?.connectedMapIds.includes(mapId) || !destination) return;
+    setPlayer((previous) => ({ ...previous, currentMapId: destination.id }));
+    setMessages((previous) => [...previous, {
+      id: Date.now().toString(),
+      sender: 'system',
+      text: `你已抵達${destination.name}。${destination.description}`,
+      timestamp: new Date().toLocaleTimeString()
+    }]);
+  };
+
+  const handleAcceptQuest = (questId: string) => {
+    const quest = getQuestById(questId);
+    if (!quest || player.activeQuests.some((active) => active.questId === questId)) return;
+    setPlayer((previous) => ({
+      ...previous,
+      activeQuests: [...previous.activeQuests, { questId, status: 'in_progress' }]
+    }));
+    setMessages((previous) => [...previous, {
+      id: Date.now().toString(),
+      sender: 'system',
+      text: `已接取任務「${quest.title}」：${quest.objective}`,
       timestamp: new Date().toLocaleTimeString()
     }]);
   };
@@ -110,7 +139,7 @@ export default function App() {
         onOpenKeyModal={() => setIsKeyModalOpen(true)}
         hasApiKey={!!apiKey}
       />
-      <PlayerHUD player={player} onReset={handleResetPlayer} storageWarning={storageWarning} />
+      <PlayerHUD player={player} onReset={handleResetPlayer} storageWarning={storageWarning} onTravel={handleTravel} onAcceptQuest={handleAcceptQuest} />
       <ApiKeyModal
         isOpen={isKeyModalOpen}
         currentKey={apiKey}

@@ -154,5 +154,6 @@ export interface AIResponsePayload {
     removeItems?: { itemId: string; quantity: number }[];
     newLocationId?: string;
     setFlags?: Record<string, boolean>;
+    questUpdates?: { questId: string; status: 'completed' }[];
   };
 }

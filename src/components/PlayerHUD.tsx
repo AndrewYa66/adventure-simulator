@@ -1,14 +1,16 @@
 import React from 'react';
 import type { PlayerState } from '../types/game';
-import { getItemById, getMapById, getPlayerGrowthByLevel } from '../data/staticData';
+import { getItemById, getMapById, getPlayerGrowthByLevel, questsDatabase } from '../data/staticData';
 
 interface PlayerHUDProps {
   player: PlayerState;
   onReset: () => void;
   storageWarning: boolean;
+  onTravel: (mapId: string) => void;
+  onAcceptQuest: (questId: string) => void;
 }
 
-export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWarning }) => {
+export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWarning, onTravel, onAcceptQuest }) => {
   const growth = getPlayerGrowthByLevel(player.level);
   const maxHp = growth?.maxHp || 100;
   const maxMp = growth?.maxMp || 30;
@@ -69,6 +71,27 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
             );
           })}
         </ul>
+      </div>
+
+      <div>
+        <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #444' }}>🧭 鄰近地點</h4>
+        {(currentMap?.connectedMapIds ?? []).map((mapId) => {
+          const destination = getMapById(mapId);
+          if (!destination) return null;
+          return <button key={mapId} onClick={() => onTravel(mapId)} style={{ display: 'block', margin: '4px 0', padding: '5px 8px', background: '#303c30', color: '#dcedc8', border: '1px solid #546e45', borderRadius: '4px', cursor: 'pointer' }}>前往 {destination.name}</button>;
+        })}
+      </div>
+
+      <div>
+        <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #444' }}>📜 任務</h4>
+        {questsDatabase.map((quest) => {
+          const status = player.activeQuests.find((active) => active.questId === quest.id)?.status;
+          return <div key={quest.id} style={{ marginBottom: '8px', fontSize: '12px' }}>
+            <strong>{quest.title}</strong>
+            <div>{status === 'completed' ? '已完成' : status === 'in_progress' ? '進行中' : quest.objective}</div>
+            {!status && <button onClick={() => onAcceptQuest(quest.id)} style={{ marginTop: '4px', padding: '4px 7px', cursor: 'pointer' }}>接取任務</button>}
+          </div>;
+        })}
       </div>
     </div>
   );

@@ -22,6 +22,9 @@ function parseAIResponse(value: unknown): AIResponsePayload | null {
     if (changes.removeItems !== undefined && !isItemChangeList(changes.removeItems)) return null;
     if (changes.newLocationId !== undefined && changes.newLocationId !== null && typeof changes.newLocationId !== 'string') return null;
     if (changes.setFlags !== undefined && (!isRecord(changes.setFlags) || !Object.values(changes.setFlags).every((flag) => typeof flag === 'boolean'))) return null;
+    if (changes.questUpdates !== undefined && (!Array.isArray(changes.questUpdates) || !changes.questUpdates.every((quest) =>
+      isRecord(quest) && typeof quest.questId === 'string' && quest.status === 'completed'
+    ))) return null;
   }
 
   return value as unknown as AIResponsePayload;
@@ -76,6 +79,7 @@ export async function sendPlayerAction(
 - 背包物品 ID 列表: ${JSON.stringify(playerState.inventory)}
 - 裝備物品 ID: ${JSON.stringify(playerState.equipped)}
 - 劇情旗標 (Flags): ${JSON.stringify(playerState.storyFlags || {})}
+- 進行中任務: ${JSON.stringify(playerState.activeQuests)}
 
 請根據玩家行動進行劇情描述與戰鬥結算。
 注意事項：
@@ -94,10 +98,12 @@ export async function sendPlayerAction(
     "addItems": [{"itemId": "ITEM-001", "quantity": 1}],
     "removeItems": [],
     "newLocationId": null,
-    "setFlags": {"MET_VILLAGE_CHIEF": true}
+    "setFlags": {"MET_VILLAGE_CHIEF": true},
+    "questUpdates": [{"questId": "QST-001", "status": "completed"}]
   }
 }
 \`\`\`
+只可回報玩家已接取且客觀目標已完成的任務；不可自行接取任務或宣告未完成目標完成。
 `;
 
   const recentHistory = storyHistory.slice(-4).join('\n');

@@ -68,7 +68,8 @@ Gemini 回應本文中的 `candidates[0].content.parts[0].text` 應為 `AIRespon
     "addItems": [{ "itemId": "ITEM-001", "quantity": 1 }],
     "removeItems": [],
     "newLocationId": "MAP-002",
-    "setFlags": { "MET_SCOUT": true }
+    "setFlags": { "MET_SCOUT": true },
+    "questUpdates": [{ "questId": "QST-001", "status": "completed" }]
   }
 }
 ```
@@ -84,8 +85,10 @@ Gemini 回應本文中的 `candidates[0].content.parts[0].text` 應為 `AIRespon
 | `stateChanges.addItems` / `removeItems` | `{ itemId: string; quantity: number }[]` | 增加/扣除背包道具。道具 ID 應存在 `items.json`。 |
 | `stateChanges.newLocationId` | `string` | 更新當前地圖 ID。 |
 | `stateChanges.setFlags` | `Record<string, boolean>` | 合併更新劇情旗標。 |
+| `stateChanges.questUpdates` | `{ questId: string; status: "completed" }[]` | 回報已接取且目標達成的任務。前端只會完成進行中的有效任務，並按靜態任務資料發放獎勵。 |
 
 玩家狀態由 `src/App.tsx` 套用：HP、MP、金幣最低為 0；經驗值直接加減；道具依 ID 合併數量，數量耗盡時從背包移除；新地圖及旗標有提供時才更新。
+AI 任務完成回報僅對應目前進行中的任務生效；接取任務由玩家在介面操作，跨地圖移動限制在靜態地圖資料定義的連通地點。
 
 ### 重試與錯誤
 
