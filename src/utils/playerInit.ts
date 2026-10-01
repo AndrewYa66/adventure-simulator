@@ -23,6 +23,7 @@ export const createInitialPlayer = (playerName: string = '亞瑟'): PlayerState 
       armorItemId: 'ITEM-201'
     },
     storyFlags: {},
+    defeatedMonsters: {},
     activeQuests: []
   };
 };

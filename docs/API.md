@@ -60,6 +60,15 @@ Gemini 回應本文中的 `candidates[0].content.parts[0].text` 應為 `AIRespon
 {
   "storyText": "你沿著綠林古道前進，遠處傳來窸窣聲。",
   "suggestedActions": ["查看聲音來源", "提高警戒繼續前進"],
+  "checkRequest": {
+    "stat": "spd",
+    "dc": 12,
+    "reason": "避開哥布林的伏擊"
+  },
+  "checkOutcomes": {
+    "successText": "你迅速側身閃過襲擊。",
+    "failureText": "你沒能及時避開，受到擦傷。"
+  },
   "stateChanges": {
     "hpChange": 0,
     "mpChange": 0,
@@ -69,12 +78,15 @@ Gemini 回應本文中的 `candidates[0].content.parts[0].text` 應為 `AIRespon
     "removeItems": [],
     "newLocationId": "MAP-002",
     "setFlags": { "MET_SCOUT": true },
+    "defeatedMonsters": [],
     "questUpdates": [{ "questId": "QST-001", "status": "completed" }]
-  }
+  },
+  "failureStateChanges": { "hpChange": -3 }
 }
 ```
 
-`storyText` 和 `suggestedActions` 為必要欄位；`stateChanges` 可省略，其欄位亦皆可省略。
+`storyText` 和 `suggestedActions` 為必要欄位；`stateChanges` 可省略，其欄位亦皆可省略。需要擲骰時，Gemini 回傳 `checkRequest`（`stat` 限 `atk`、`def`、`spd`，DC 為 5–25）及成功/失敗敘述。瀏覽器擲 d20，依角色成長數值與裝備修正計算結果。`stateChanges` 只在成功時套用；`failureStateChanges` 只在失敗時套用。未要求檢定的行動不擲骰。
+這是本專案的輕量行動檢定，不是完整 D&D 戰鬥模擬；目前尚未實作先攻、回合行動點或持續中的敵人 HP。
 
 | 欄位 | 型別 | 用途 |
 | --- | --- | --- |
@@ -86,9 +98,12 @@ Gemini 回應本文中的 `candidates[0].content.parts[0].text` 應為 `AIRespon
 | `stateChanges.newLocationId` | `string` | 更新當前地圖 ID。 |
 | `stateChanges.setFlags` | `Record<string, boolean>` | 合併更新劇情旗標。 |
 | `stateChanges.questUpdates` | `{ questId: string; status: "completed" }[]` | 回報已接取且目標達成的任務。前端只會完成進行中的有效任務，並按靜態任務資料發放獎勵。 |
+| `stateChanges.defeatedMonsters` | `{ monsterId: string; quantity: number }[]` | 回報成功擊敗的怪物數量；未知怪物 ID 和非正整數數量會忽略。 |
+| `failureStateChanges` | 同 `stateChanges` | 檢定失敗時套用的有限狀態變更。 |
 
 玩家狀態由 `src/App.tsx` 套用：HP、MP、金幣最低為 0；經驗值直接加減；道具依 ID 合併數量，數量耗盡時從背包移除；新地圖及旗標有提供時才更新。
 AI 任務完成回報僅對應目前進行中的任務生效；接取任務由玩家在介面操作，跨地圖移動限制在靜態地圖資料定義的連通地點。
+任務 JSON 的 `requirements` 以怪物 ID 和道具 ID 表示擊敗/收集條件；程式檢查玩家接取任務後的擊敗進度及背包數量，條件滿足後才完成任務，並消耗任務要求的收集物品。怪物掉落使用 `itemId` 參照道具資料。
 
 ### 重試與錯誤
 

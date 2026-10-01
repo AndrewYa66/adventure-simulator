@@ -4,6 +4,10 @@
     "title": "清理綠林古道",
     "questGiver": "村長埃爾德",
     "objective": "擊敗 3 隻哥布林斥候並帶回哥布林耳朵",
+    "requirements": {
+      "defeatMonsters": [{ "monsterId": "MON-001", "quantity": 3 }],
+      "collectItems": [{ "itemId": "ITEM-002", "quantity": 1 }]
+    },
     "rewards": {
       "exp": 100,
       "gold": 50,

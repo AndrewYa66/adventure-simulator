@@ -16,7 +16,7 @@
       "gold": 5,
       "dropItems": [
         {
-          "itemName": "哥布林耳朵",
+          "itemId": "ITEM-002",
           "chance": 0.8
         }
       ]

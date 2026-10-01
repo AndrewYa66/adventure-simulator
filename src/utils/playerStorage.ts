@@ -1,5 +1,5 @@
 import type { PlayerState } from '../types/game';
-import { getItemById, getMapById, getPlayerGrowthByLevel, getQuestById } from '../data/staticData';
+import { getItemById, getMapById, getMonsterById, getPlayerGrowthByLevel, getQuestById } from '../data/staticData';
 import { createInitialPlayer } from './playerInit';
 
 const PLAYER_STORAGE_KEY = 'TRPG_PLAYER_STATE';
@@ -30,8 +30,18 @@ function normalizePlayerState(value: unknown): PlayerState | null {
   const activeQuests = value.activeQuests.flatMap((entry) => {
     if (!isRecord(entry) || typeof entry.questId !== 'string' || !getQuestById(entry.questId) ||
         (entry.status !== 'in_progress' && entry.status !== 'completed')) return [];
-    return [{ questId: entry.questId, status: entry.status as 'in_progress' | 'completed' }];
+    const defeated: Record<string, number> = {};
+    const savedDefeats = isRecord(entry.progress) && isRecord(entry.progress.defeatedMonsters) ? entry.progress.defeatedMonsters : {};
+    for (const [monsterId, count] of Object.entries(savedDefeats)) {
+      if (getMonsterById(monsterId) && Number.isInteger(count) && (count as number) >= 0) defeated[monsterId] = count as number;
+    }
+    return [{ questId: entry.questId, status: entry.status as 'in_progress' | 'completed', progress: { defeatedMonsters: defeated } }];
   });
+  const defeatedMonsters: Record<string, number> = {};
+  if (value.defeatedMonsters !== undefined && !isRecord(value.defeatedMonsters)) return null;
+  for (const [monsterId, count] of Object.entries(value.defeatedMonsters ?? {})) {
+    if (getMonsterById(monsterId) && Number.isInteger(count) && (count as number) >= 0) defeatedMonsters[monsterId] = count as number;
+  }
 
   const equipped: PlayerState['equipped'] = {};
   for (const slot of ['weaponItemId', 'armorItemId', 'accessoryItemId'] as const) {
@@ -50,6 +60,7 @@ function normalizePlayerState(value: unknown): PlayerState | null {
     inventory,
     equipped,
     storyFlags: value.storyFlags as Record<string, boolean>,
+    defeatedMonsters,
     activeQuests
   };
 }

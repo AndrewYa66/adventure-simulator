@@ -3,6 +3,7 @@ import type { PlayerState, StoryMessage } from './types/game';
 import { loadPlayerState, resetPlayerState, savePlayerState } from './utils/playerStorage';
 import { applyStateChanges } from './utils/applyStateChanges';
 import { getMapById, getQuestById } from './data/staticData';
+import { resolveActionCheck } from './utils/gameChecks';
 import { sendPlayerAction } from './services/geminiService';
 import { PlayerHUD } from './components/PlayerHUD';
 import { StoryLog } from './components/StoryLog';
@@ -71,7 +72,7 @@ export default function App() {
     if (!quest || player.activeQuests.some((active) => active.questId === questId)) return;
     updatePlayer({
       ...player,
-      activeQuests: [...player.activeQuests, { questId, status: 'in_progress' }]
+      activeQuests: [...player.activeQuests, { questId, status: 'in_progress', progress: { defeatedMonsters: {} } }]
     });
     setMessages((previous) => [...previous, {
       id: Date.now().toString(),
@@ -100,10 +101,21 @@ export default function App() {
     try {
       const historyTexts = messages.map((m) => `${m.sender === 'user' ? '玩家' : 'GM'}: ${m.text}`);
       const aiResponse = await sendPlayerAction(apiKey, player, actionText, historyTexts);
+      let storyText = aiResponse.storyText;
+      let resultToApply = aiResponse;
+
+      if (aiResponse.checkRequest && aiResponse.checkOutcomes) {
+        const check = resolveActionCheck(player, aiResponse.checkRequest.stat, aiResponse.checkRequest.dc);
+        storyText = `${check.success ? aiResponse.checkOutcomes.successText : aiResponse.checkOutcomes.failureText}\n\n🎲 ${aiResponse.checkRequest.reason}：d20 ${check.die} ${check.modifier >= 0 ? '+' : '−'} ${Math.abs(check.modifier)} = ${check.total}，DC ${check.dc}，${check.success ? '成功' : '失敗'}。`;
+        resultToApply = {
+          ...aiResponse,
+          stateChanges: check.success ? aiResponse.stateChanges : aiResponse.failureStateChanges
+        };
+      }
 
       // 更新玩家 Local State
-      if (aiResponse.stateChanges) {
-        updatePlayer(applyStateChanges(player, aiResponse));
+      if (resultToApply.stateChanges) {
+        updatePlayer(applyStateChanges(player, resultToApply));
       }
 
       setMessages((prev) => [
@@ -111,7 +123,7 @@ export default function App() {
         {
           id: (Date.now() + 1).toString(),
           sender: 'ai',
-          text: aiResponse.storyText,
+          text: storyText,
           options: aiResponse.suggestedActions,
           timestamp: new Date().toLocaleTimeString()
         }

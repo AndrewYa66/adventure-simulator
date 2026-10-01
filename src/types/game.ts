@@ -56,7 +56,7 @@ export interface MonsterStatic {
     exp: number;
     gold: number;
     dropItems: {
-      itemName: string;
+      itemId: string;
       chance: number;     // 例如: 0.5 (50%)
     }[];
   };
@@ -88,6 +88,10 @@ export interface QuestStatic {
   title: string;
   questGiver: string;
   objective: string;
+  requirements: {
+    defeatMonsters?: { monsterId: string; quantity: number }[];
+    collectItems?: { itemId: string; quantity: number }[];
+  };
   rewards: {
     exp: number;
     gold: number;
@@ -124,11 +128,13 @@ export interface PlayerState {
 
   // 劇情進度與旗標，防止 AI 遺忘劇情進度
   storyFlags: Record<string, boolean>; // 例如: { "FLAG_TUTORIAL_DONE": true }
+  defeatedMonsters: Record<string, number>;
   
   // 當前進行中的任務
   activeQuests: {
     questId: string;
     status: 'in_progress' | 'completed';
+    progress?: { defeatedMonsters: Record<string, number> };
   }[];
 }
 
@@ -145,6 +151,15 @@ export interface StoryMessage {
 export interface AIResponsePayload {
   storyText: string;
   suggestedActions: string[];
+  checkRequest?: {
+    stat: 'atk' | 'def' | 'spd';
+    dc: number;
+    reason: string;
+  };
+  checkOutcomes?: {
+    successText: string;
+    failureText: string;
+  };
   stateChanges?: {
     hpChange?: number;
     mpChange?: number;
@@ -155,5 +170,7 @@ export interface AIResponsePayload {
     newLocationId?: string;
     setFlags?: Record<string, boolean>;
     questUpdates?: { questId: string; status: 'completed' }[];
+    defeatedMonsters?: { monsterId: string; quantity: number }[];
   };
+  failureStateChanges?: AIResponsePayload['stateChanges'];
 }
