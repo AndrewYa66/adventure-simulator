@@ -11,6 +11,15 @@
     "description": "恢復 30 點生命值。"
   },
   {
+    "id": "ITEM-002",
+    "name": "哥布林耳朵",
+    "type": "quest",
+    "effect": {},
+    "buyPrice": 0,
+    "sellPrice": 2,
+    "description": "哥布林斥候掉落的任務證物。"
+  },
+  {
     "id": "ITEM-101",
     "name": "精鋼短劍",
     "type": "weapon",
