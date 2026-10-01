@@ -1,5 +1,32 @@
 import type { PlayerState, AIResponsePayload } from '../types/game';
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isItemChangeList = (value: unknown): boolean =>
+  Array.isArray(value) && value.every((item) =>
+    isRecord(item) && typeof item.itemId === 'string' && Number.isInteger(item.quantity) && (item.quantity as number) > 0
+  );
+
+function parseAIResponse(value: unknown): AIResponsePayload | null {
+  if (!isRecord(value) || typeof value.storyText !== 'string' || !Array.isArray(value.suggestedActions) ||
+      !value.suggestedActions.every((action) => typeof action === 'string')) return null;
+
+  if (value.stateChanges !== undefined) {
+    const changes = value.stateChanges;
+    if (!isRecord(changes)) return null;
+    for (const field of ['hpChange', 'mpChange', 'expChange', 'goldChange']) {
+      if (changes[field] !== undefined && (typeof changes[field] !== 'number' || !Number.isFinite(changes[field]))) return null;
+    }
+    if (changes.addItems !== undefined && !isItemChangeList(changes.addItems)) return null;
+    if (changes.removeItems !== undefined && !isItemChangeList(changes.removeItems)) return null;
+    if (changes.newLocationId !== undefined && changes.newLocationId !== null && typeof changes.newLocationId !== 'string') return null;
+    if (changes.setFlags !== undefined && (!isRecord(changes.setFlags) || !Object.values(changes.setFlags).every((flag) => typeof flag === 'boolean'))) return null;
+  }
+
+  return value as unknown as AIResponsePayload;
+}
+
 // 輪替模型清單：優先使用 3.6-flash，若遇到 503 則順序嘗試其他模型
 const SUPPORTED_MODELS = [
   'gemini-3.6-flash',
@@ -107,7 +134,12 @@ export async function sendPlayerAction(
         const cleanedJsonStr = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
 
         try {
-          return JSON.parse(cleanedJsonStr) as AIResponsePayload;
+          const parsed = parseAIResponse(JSON.parse(cleanedJsonStr) as unknown);
+          if (parsed) return parsed;
+          return {
+            storyText: rawText || 'GM 回應格式不完整，請再嘗試一次。',
+            suggestedActions: ['重新描述行動', '觀察周圍環境']
+          };
         } catch (e) {
           return {
             storyText: rawText || '（GM 似乎沉思了一下）',
