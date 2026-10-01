@@ -7,9 +7,10 @@ interface StoryLogProps {
   onSendAction: (actionText: string) => void;
   onOpenKeyModal: () => void;
   hasApiKey: boolean;
+  selectedModel: string;
 }
 
-export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAction, onOpenKeyModal, hasApiKey }) => {
+export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAction, onOpenKeyModal, hasApiKey, selectedModel }) => {
   const [inputAction, setInputAction] = useState('');
 
   const handleSend = () => {
@@ -22,12 +23,15 @@ export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAct
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', borderRight: '1px solid #333' }}>
       {/* 頂部 Header */}
       <div style={{ padding: '12px 20px', backgroundColor: '#252525', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h2 style={{ margin: 0, fontSize: '18px' }}>⚔️ AI TRPG 冒險引擎 (BYOK)</h2>
+        <div>
+          <h2 style={{ margin: 0, fontSize: '18px' }}>⚔️ AI TRPG 冒險引擎</h2>
+          <span style={{ color: '#aaa', fontSize: '12px' }}>目前模型：{selectedModel}</span>
+        </div>
         <button
           onClick={onOpenKeyModal}
           style={{ padding: '6px 12px', background: hasApiKey ? '#2e7d32' : '#c62828', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
         >
-          {hasApiKey ? '🔑 Key 已設定' : '⚠️ 設定 API Key'}
+          {hasApiKey ? '⚙️ 模型設定' : '⚠️ 設定 API Key'}
         </button>
       </div>
 

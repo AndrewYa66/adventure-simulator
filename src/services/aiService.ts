@@ -1,4 +1,5 @@
 import type { PlayerState, AIResponsePayload } from '../types/game';
+import type { AIModelSettings } from './aiModels';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -53,13 +54,6 @@ function parseAIResponse(value: unknown): AIResponsePayload | null {
   return value as unknown as AIResponsePayload;
 }
 
-// 輪替模型清單：優先使用 3.6-flash，若遇到 503 則順序嘗試其他模型
-const SUPPORTED_MODELS = [
-  'gemini-3.6-flash',
-  'gemini-3.5-flash',
-  'gemini-3.1-flash'
-];
-
 /**
  * 遇到 503 / 429 時自動重試的 Fetch 輔助函式
  */
@@ -82,6 +76,7 @@ async function fetchWithRetry(url: string, options: RequestInit, retries = 2, de
 }
 
 export async function sendPlayerAction(
+  settings: AIModelSettings,
   apiKey: string,
   playerState: PlayerState,
   actionText: string,
@@ -90,7 +85,7 @@ export async function sendPlayerAction(
   const cleanApiKey = apiKey.trim();
 
   if (!cleanApiKey) {
-    throw new Error('API Key 為空，請檢查右上角設定。');
+    throw new Error('所選模型的 API Key 尚未設定。請開啟模型設定。');
   }
 
   const systemPrompt = `
@@ -141,61 +136,57 @@ export async function sendPlayerAction(
   const recentHistory = storyHistory.slice(-4).join('\n');
   const userPrompt = `【近期劇情回顧】\n${recentHistory}\n\n【玩家行動】\n${actionText}`;
 
-  const payload = {
-    contents: [
-      {
-        role: 'user',
-        parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }]
+  const isOpenAI = settings.provider === 'openai';
+  const endpoint = isOpenAI
+    ? 'https://api.openai.com/v1/responses'
+    : `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(settings.model)}:generateContent`;
+  const requestBody = isOpenAI
+    ? {
+        model: settings.model,
+        instructions: systemPrompt,
+        input: userPrompt,
+        text: { format: { type: 'json_object' } }
       }
-    ],
-    generationConfig: {
-      responseMimeType: "application/json"
+    : {
+        contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }] }],
+        generationConfig: { responseMimeType: 'application/json' }
+      };
+
+  try {
+    const response = await fetchWithRetry(endpoint, {
+      method: 'POST',
+      headers: isOpenAI
+        ? { 'Content-Type': 'application/json', Authorization: `Bearer ${cleanApiKey}` }
+        : { 'Content-Type': 'application/json', 'x-goog-api-key': cleanApiKey },
+      body: JSON.stringify(requestBody)
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.json().catch(() => null);
+      const detail = errorBody ? JSON.stringify(errorBody) : response.statusText;
+      throw new Error(`${settings.provider} ${settings.model} 回應 HTTP ${response.status}: ${detail}`);
     }
-  };
 
-  let lastErrorDetail = '';
-
-  for (const model of SUPPORTED_MODELS) {
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cleanApiKey}`;
+    const data = await response.json();
+    const rawText = isOpenAI
+      ? (data.output ?? []).flatMap((item: { content?: { type?: string; text?: string }[] }) =>
+          (item.content ?? []).filter((part) => part.type === 'output_text').map((part) => part.text ?? '')
+        ).join('')
+      : data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+    const cleanedJsonStr = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
 
     try {
-      console.log(`[Gemini Request] 嘗試連線至模型: ${model}`);
-      const response = await fetchWithRetry(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        const cleanedJsonStr = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
-
-        try {
-          const parsed = parseAIResponse(JSON.parse(cleanedJsonStr) as unknown);
-          if (parsed) return parsed;
-          return {
-            storyText: rawText || 'GM 回應格式不完整，請再嘗試一次。',
-            suggestedActions: ['重新描述行動', '觀察周圍環境']
-          };
-        } catch {
-          return {
-            storyText: rawText || '（GM 似乎沉思了一下）',
-            suggestedActions: ['繼續觀察周圍', '檢查裝備']
-          };
-        }
-      }
-
-      const errorJson = await response.json().catch(() => null);
-      const errorText = errorJson ? JSON.stringify(errorJson, null, 2) : response.statusText;
-      console.warn(`⚠️ [${model}] 暫時無法使用 (${response.status})，切換至下一個模型...`);
-      lastErrorDetail = `[Status ${response.status}] Model: ${model}\n詳細訊息: ${errorText}`;
-
-    } catch (err: unknown) {
-      console.warn(`⚠️ [${model}] 連線例外，切換至下一個模型...`);
-      lastErrorDetail = err instanceof Error ? err.message : '網路連線失敗';
+      const parsed = parseAIResponse(JSON.parse(cleanedJsonStr) as unknown);
+      if (parsed) return parsed;
+    } catch {
+      // Show a readable fallback below when the provider returns malformed JSON.
     }
-  }
 
-  throw new Error(`所有 Gemini 服務節點均忙碌中，請稍後再試:\n${lastErrorDetail}`);
+    return {
+      storyText: rawText || '模型回應格式不完整，請再描述一次行動。',
+      suggestedActions: ['重新描述行動', '觀察周圍環境']
+    };
+  } catch (err: unknown) {
+    throw new Error(err instanceof Error ? err.message : `${settings.provider} API 連線失敗。`);
+  }
 }

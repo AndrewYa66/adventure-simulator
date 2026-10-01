@@ -2,7 +2,7 @@
 
 [![GitHub Pages Status](https://img.shields.io/badge/site-Live-brightgreen)](https://andrewya66.github.io/adventure-simulator/)
 
-一個以 **AI（Gemini）作為遊戲主持人（DM）** 的純前端文字冒險遊戲。透過結合固定的遊戲資料庫與 AI 對話，推動文字遊戲進度與動態事件判斷。
+一個以 **AI 作為遊戲主持人（DM）** 的純前端文字冒險遊戲。可選擇 Google Gemini 或 OpenAI 模型，結合固定遊戲資料庫與 AI 對話推進劇情與動態事件。
 
 ## 🔗 相關連結
 - 🎮 **遊戲線上體驗：** [GitHub Pages](https://andrewya66.github.io/adventure-simulator/)
@@ -29,11 +29,13 @@
 
 ## 🤖 AI 設定與使用說明
 
-本專案目前採用 **Google Gemini API**。使用前請按照以下步驟設定：
+本專案支援 **Google Gemini** 與 **OpenAI API**。使用前請準備所選服務的 API Key：
 
-1. 前往 [Google AI Studio](https://aistudio.google.com/api-keys) 申請一組免費的 **API Key**。
-2. 開啟 [Adventure Simulator](https://andrewya66.github.io/adventure-simulator/) 網頁。
-3. 將 API Key 貼入網頁右上角的設定欄位即可開始遊玩。
+1. 從 [Google AI Studio](https://aistudio.google.com/api-keys) 或 [OpenAI API 平台](https://platform.openai.com/api-keys) 建立 API Key。
+2. 開啟 [Adventure Simulator](https://andrewya66.github.io/adventure-simulator/) 網頁，點選右上角「模型設定」。
+3. 選擇服務、模型並貼上對應的 API Key，再儲存即可開始遊玩。
+
+Gemini Key 會保存於此瀏覽器；OpenAI Key 僅保留在目前分頁記憶體，重新載入頁面後須重新輸入。此專案目前由瀏覽器直連模型服務；OpenAI 官方建議不要在用戶端暴露 API Key，正式公開部署應先改用伺服器端代理。
 
 ---
 
@@ -41,6 +43,7 @@
 
 ### `v0.1.0` (Alpha)
 - [x] 建立基本專案雛型與純前端介面。
-- [x] 實現 basic Gemini API 對話對接。
+- [x] 支援 Gemini 與 OpenAI 多模型選擇。
+- [x] 實現結構化回應、遊戲狀態結算與輕量 d20 判定。
 - [ ] *[待開發]* 完整 JSON 資料庫建置（玩家/怪物/地圖/NPC）。
 - [ ] *[待開發]* 結構化 LocalStorage 數據讀寫與擲骰判定機制。

@@ -4,15 +4,20 @@ import { loadPlayerState, resetPlayerState, savePlayerState } from './utils/play
 import { applyStateChanges } from './utils/applyStateChanges';
 import { getMapById, getQuestById } from './data/staticData';
 import { resolveActionCheck } from './utils/gameChecks';
-import { sendPlayerAction } from './services/geminiService';
+import { sendPlayerAction } from './services/aiService';
+import type { AIProvider } from './services/aiModels';
+import { loadAIModelSettings, saveAIModelSettings, type AIModelSettings } from './services/aiModels';
 import { PlayerHUD } from './components/PlayerHUD';
 import { StoryLog } from './components/StoryLog';
 import { ApiKeyModal } from './components/ApiKeyModal';
 
 export default function App() {
-  const [apiKey, setApiKey] = useState<string>(() => {
-    try { return localStorage.getItem('TRPG_GEMINI_KEY') || ''; } catch { return ''; }
+  const [modelSettings, setModelSettings] = useState<AIModelSettings>(loadAIModelSettings);
+  const [apiKeys, setApiKeys] = useState<Record<AIProvider, string>>(() => {
+    try { return { gemini: localStorage.getItem('TRPG_GEMINI_KEY') || '', openai: '' }; }
+    catch { return { gemini: '', openai: '' }; }
   });
+  const apiKey = apiKeys[modelSettings.provider];
   const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
   const [storageWarning, setStorageWarning] = useState(false);
   const [player, setPlayer] = useState<PlayerState>(loadPlayerState);
@@ -33,10 +38,12 @@ export default function App() {
     setStorageWarning(!savePlayerState(nextPlayer));
   };
 
-  const handleSaveApiKey = (key: string) => {
-    setApiKey(key);
+  const handleSaveAISettings = (settings: AIModelSettings, keys: Record<AIProvider, string>) => {
+    setModelSettings(settings);
+    setApiKeys(keys);
+    setStorageWarning(!saveAIModelSettings(settings));
     try {
-      localStorage.setItem('TRPG_GEMINI_KEY', key);
+      localStorage.setItem('TRPG_GEMINI_KEY', keys.gemini);
     } catch {
       setStorageWarning(true);
     }
@@ -100,7 +107,7 @@ export default function App() {
 
     try {
       const historyTexts = messages.map((m) => `${m.sender === 'user' ? '玩家' : 'GM'}: ${m.text}`);
-      const aiResponse = await sendPlayerAction(apiKey, player, actionText, historyTexts);
+      const aiResponse = await sendPlayerAction(modelSettings, apiKey, player, actionText, historyTexts);
       let storyText = aiResponse.storyText;
       let resultToApply = aiResponse;
 
@@ -152,14 +159,16 @@ export default function App() {
         onSendAction={handleSendAction}
         onOpenKeyModal={() => setIsKeyModalOpen(true)}
         hasApiKey={!!apiKey}
+        selectedModel={modelSettings.model}
       />
       <PlayerHUD player={player} onReset={handleResetPlayer} storageWarning={storageWarning} onTravel={handleTravel} onAcceptQuest={handleAcceptQuest} />
-      <ApiKeyModal
-        isOpen={isKeyModalOpen}
-        currentKey={apiKey}
-        onSave={handleSaveApiKey}
+      {isKeyModalOpen && <ApiKeyModal
+        isOpen={true}
+        currentSettings={modelSettings}
+        currentKeys={apiKeys}
+        onSave={handleSaveAISettings}
         onClose={() => setIsKeyModalOpen(false)}
-      />
+      />}
     </div>
   );
 }
