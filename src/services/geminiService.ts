@@ -146,7 +146,7 @@ export async function sendPlayerAction(
             storyText: rawText || 'GM 回應格式不完整，請再嘗試一次。',
             suggestedActions: ['重新描述行動', '觀察周圍環境']
           };
-        } catch (e) {
+        } catch {
           return {
             storyText: rawText || '（GM 似乎沉思了一下）',
             suggestedActions: ['繼續觀察周圍', '檢查裝備']
@@ -159,9 +159,9 @@ export async function sendPlayerAction(
       console.warn(`⚠️ [${model}] 暫時無法使用 (${response.status})，切換至下一個模型...`);
       lastErrorDetail = `[Status ${response.status}] Model: ${model}\n詳細訊息: ${errorText}`;
 
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.warn(`⚠️ [${model}] 連線例外，切換至下一個模型...`);
-      lastErrorDetail = err.message || '網路連線失敗';
+      lastErrorDetail = err instanceof Error ? err.message : '網路連線失敗';
     }
   }
 

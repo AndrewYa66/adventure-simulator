@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import type { PlayerState, StoryMessage } from './types/game';
 import { loadPlayerState, resetPlayerState, savePlayerState } from './utils/playerStorage';
 import { applyStateChanges } from './utils/applyStateChanges';
@@ -27,9 +27,10 @@ export default function App() {
   ]);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    setStorageWarning(!savePlayerState(player));
-  }, [player]);
+  const updatePlayer = (nextPlayer: PlayerState) => {
+    setPlayer(nextPlayer);
+    setStorageWarning(!savePlayerState(nextPlayer));
+  };
 
   const handleSaveApiKey = (key: string) => {
     setApiKey(key);
@@ -42,7 +43,7 @@ export default function App() {
 
   const handleResetPlayer = () => {
     if (!window.confirm('確定要清除目前角色存檔並重新開始嗎？')) return;
-    setPlayer(resetPlayerState());
+    updatePlayer(resetPlayerState());
     setMessages([{
       id: Date.now().toString(),
       sender: 'ai',
@@ -56,7 +57,7 @@ export default function App() {
     const currentMap = getMapById(player.currentMapId);
     const destination = getMapById(mapId);
     if (!currentMap?.connectedMapIds.includes(mapId) || !destination) return;
-    setPlayer((previous) => ({ ...previous, currentMapId: destination.id }));
+    updatePlayer({ ...player, currentMapId: destination.id });
     setMessages((previous) => [...previous, {
       id: Date.now().toString(),
       sender: 'system',
@@ -68,10 +69,10 @@ export default function App() {
   const handleAcceptQuest = (questId: string) => {
     const quest = getQuestById(questId);
     if (!quest || player.activeQuests.some((active) => active.questId === questId)) return;
-    setPlayer((previous) => ({
-      ...previous,
-      activeQuests: [...previous.activeQuests, { questId, status: 'in_progress' }]
-    }));
+    updatePlayer({
+      ...player,
+      activeQuests: [...player.activeQuests, { questId, status: 'in_progress' }]
+    });
     setMessages((previous) => [...previous, {
       id: Date.now().toString(),
       sender: 'system',
@@ -102,7 +103,7 @@ export default function App() {
 
       // 更新玩家 Local State
       if (aiResponse.stateChanges) {
-        setPlayer((prev) => applyStateChanges(prev, aiResponse));
+        updatePlayer(applyStateChanges(player, aiResponse));
       }
 
       setMessages((prev) => [
@@ -115,13 +116,14 @@ export default function App() {
           timestamp: new Date().toLocaleTimeString()
         }
       ]);
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : '無法連線至 AI 服務';
       setMessages((prev) => [
         ...prev,
         {
           id: Date.now().toString(),
           sender: 'system',
-          text: `❌ 發生錯誤: ${err.message || '無法連線至 AI 服務'}`,
+          text: `❌ 發生錯誤: ${errorMessage}`,
           timestamp: new Date().toLocaleTimeString()
         }
       ]);
