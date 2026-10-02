@@ -1,6 +1,6 @@
 import React from 'react';
 import type { PlayerState } from '../types/game';
-import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getMonsterById, getNpcById, getNpcCategoryById, getNpcStats, getPlayerGrowthByLevel, getPlayerResourceCaps, getQuestById, getShopForNpc, getUnlockedSkillsByLevel, questsDatabase } from '../data/staticData';
+import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getMonsterById, getNpcCategoryById, getPlayerGrowthByLevel, getPlayerResourceCaps, getQuestById, getShopForNpc, getUnlockedSkillsByLevel, getWorldUnitsAtMap, questsDatabase } from '../data/staticData';
 import { getPlayerStatBreakdown, STAT_LABELS } from '../utils/gameChecks';
 import { canAcceptQuest, canTurnInQuest } from '../utils/questRules';
 import { canPlayerAct, isPlayerUnconscious } from '../utils/playerStatus';
@@ -30,6 +30,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
   const unlockedSkills = getUnlockedSkillsByLevel(player.level);
 
   const currentMap = getMapById(player.currentMapId);
+  const presentNpcs = getWorldUnitsAtMap(player.currentMapId).filter((unit) => unit.kind === 'npc');
   const weapon = player.equipped.weaponItemId ? getItemById(player.equipped.weaponItemId) : null;
   const armor = player.equipped.armorItemId ? getItemById(player.equipped.armorItemId) : null;
   const combatStats = (['atk', 'def', 'spd'] as const).map((stat) => ({
@@ -140,10 +141,9 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
 
       <div>
         <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #444' }}>🧑‍🤝‍🧑 當前地區人物</h4>
-        {(currentMap?.npcsPresent ?? []).map((npcId) => {
-          const npc = getNpcById(npcId);
-          const stats = npc ? getNpcStats(npc) : undefined;
-          if (!npc || !stats) return null;
+        {presentNpcs.map((unit) => {
+          const npc = unit.source;
+          const stats = unit.stats;
           return <div key={npc.id} style={{ marginBottom: '7px', fontSize: '12px' }}>
             <strong>{npc.name}・{npc.title}</strong>
             <div style={{ color: '#aaa' }}>類別：{getNpcCategoryById(npc.categoryId)?.name ?? npc.categoryId} · HP {stats.hp} · ATK {stats.atk} · DEF {stats.def} · SPD {stats.spd}</div>
@@ -182,7 +182,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
             })()}
           </div>;
         })}
-        {!currentMap?.npcsPresent.length && <div style={{ color: '#888', fontSize: '12px' }}>目前沒有在場人物。</div>}
+        {!presentNpcs.length && <div style={{ color: '#888', fontSize: '12px' }}>目前沒有在場人物。</div>}
       </div>
 
       <div>
