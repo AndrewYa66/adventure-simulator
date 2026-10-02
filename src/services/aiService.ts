@@ -1,6 +1,6 @@
 import type { PlayerState, AIResponsePayload } from '../types/game';
 import type { AIModelSettings } from './aiModels';
-import { canPlayerEnterMap, getItemById, getMapById, getMonsterById, getNpcById, getNpcCategoryById, getNpcStats, itemsDatabase, questsDatabase } from '../data/staticData';
+import { canPlayerEnterMap, getItemById, getMapById, getMonsterById, getNpcCategoryById, getWorldUnitsAtMap, itemsDatabase, questsDatabase } from '../data/staticData';
 import { canAcceptQuest, canTurnInQuest } from '../utils/questRules';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from '../utils/travelIntent';
 
@@ -156,30 +156,25 @@ export async function sendPlayerAction(
       : [];
   }) ?? [];
   const previousMap = playerState.previousMapId ? getMapById(playerState.previousMapId) : undefined;
-  const presentNpcs = currentMap?.npcsPresent.flatMap((npcId) => {
-    const npc = getNpcById(npcId);
-    const stats = npc ? getNpcStats(npc) : undefined;
-    return npc && stats ? [{
-      id: npc.id,
-      name: npc.name,
-      title: npc.title,
-      category: getNpcCategoryById(npc.categoryId)?.name ?? npc.categoryId,
-      stats,
-      alignment: npc.alignment,
-      holdings: playerState.npcStates[npc.id] ?? { gold: npc.startingGold ?? 0, inventory: npc.startingInventory ?? [] },
-      description: npc.description
-    }] : [];
-  }) ?? [];
+  const currentUnits = getWorldUnitsAtMap(playerState.currentMapId);
+  const presentNpcs = currentUnits.flatMap((unit) => unit.kind === 'npc' ? [{
+    id: unit.id,
+    name: unit.name,
+    title: unit.title,
+    category: getNpcCategoryById(unit.categoryId)?.name ?? unit.categoryId,
+    stats: unit.stats,
+    alignment: unit.alignment,
+    holdings: playerState.npcStates[unit.id] ?? { gold: unit.source.startingGold ?? 0, inventory: unit.source.startingInventory ?? [] },
+    description: unit.source.description
+  }] : []);
   const availableQuests = questsDatabase.filter((quest) => canAcceptQuest(playerState, quest))
     .map((quest) => ({ id: quest.id, title: quest.title, giver: quest.questGiver, objective: quest.objective }));
   const turnInQuests = questsDatabase.filter((quest) => canTurnInQuest(playerState, quest))
     .map((quest) => ({ id: quest.id, title: quest.title, giver: quest.questGiver }));
-  const encounterCandidates = (currentMap?.monstersPresent ?? []).flatMap((monsterId) => {
-    const monster = getMonsterById(monsterId);
-    return monster && (!monster.requiredQuestId || playerState.activeQuests.some((quest) =>
-      quest.questId === monster.requiredQuestId && quest.status === 'in_progress'
-    )) ? [{ id: monster.id, name: monster.name }] : [];
-  });
+  const encounterCandidates = currentUnits.flatMap((unit) => unit.kind === 'monster' &&
+    (!unit.source.requiredQuestId || playerState.activeQuests.some((quest) =>
+      quest.questId === unit.source.requiredQuestId && quest.status === 'in_progress'
+    )) ? [{ id: unit.id, name: unit.name }] : []);
 
   if (!cleanApiKey) {
     throw new Error('所選模型的 API Key 尚未設定。請開啟模型設定。');
