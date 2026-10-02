@@ -40,7 +40,7 @@ type TravelIntentResolution =
   | { kind: 'none' };
 
 const destinationCategoryPhrases: Record<string, string[]> = {
-  village: ['村莊', '村庄', '村子', '村落', '回村', '返村'],
+  village: ['村莊', '村庄', '村子', '村落', '村', '回村', '返村'],
   settlement: ['城鎮', '城镇', '城裡', '城里', '城內', '城内'],
   forest: ['森林', '樹林', '树林', '林地', '回森林', '回林子'],
   wilderness: ['野外', '荒野']
@@ -49,8 +49,8 @@ const returnPhrases = ['回到', '返回', '折返', '回村', '返村', '回森
 
 function resolveExplicitTravelIntent(actionText: string, player: PlayerState): TravelIntentResolution {
   const normalized = actionText.toLocaleLowerCase();
-  if (/(不想|不打算|不要|先不|暫時不|暂时不|還不|还不|能不能|可不可以|是否|要不要|如何|怎麼|怎么|路線|路线|多遠|多远|多久|在哪|哪裡|哪里|位置|告訴我|告诉我)/.test(normalized) ||
-      !/(前往|前去|走到|移動到|移动到|進入|进入|出發前往|出发前往|帶我去|带我去|我要去|我想去|我決定去|我决定去|去往|出發去|出发去|回到|返回|折返|回村|回森林|回去)/.test(normalized)) {
+  if (/(不想|不打算|不去|不前往|不要|先不|暫時不|暂时不|還不|还不|能不能|可不可以|是否|要不要|如何|怎麼|怎么|路線|路线|多遠|多远|多久|在哪|哪裡|哪里|位置|告訴我|告诉我)/.test(normalized) ||
+      !/(前往|前去|走到|移動到|移动到|進入|进入|出發前往|出发前往|帶我去|带我去|我要去|我想去|我決定去|我决定去|去往|出發去|出发去|去|到|往|回到|返回|折返|回村|回森林|回去)/.test(normalized)) {
     return { kind: 'none' };
   }
 
