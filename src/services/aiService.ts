@@ -4,6 +4,47 @@ import type { AIModelSettings } from './aiModels';
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+const FORMAT_FALLBACK = '模型回應格式不完整，請重新描述行動再試一次。';
+
+function extractResponseText(data: unknown, provider: AIModelSettings['provider']): string {
+  if (!isRecord(data)) return '';
+  if (provider === 'openai') {
+    if (typeof data.output_text === 'string') return data.output_text;
+    if (!Array.isArray(data.output)) return '';
+    return data.output.flatMap((item) => {
+      if (!isRecord(item) || !Array.isArray(item.content)) return [];
+      return item.content.flatMap((part) =>
+        isRecord(part) && part.type === 'output_text' && typeof part.text === 'string' ? [part.text] : []
+      );
+    }).join('');
+  }
+
+  if (!Array.isArray(data.candidates) || !isRecord(data.candidates[0])) return '';
+  const content = data.candidates[0].content;
+  if (!isRecord(content) || !Array.isArray(content.parts)) return '';
+  return content.parts.flatMap((part) => isRecord(part) && typeof part.text === 'string' ? [part.text] : []).join('');
+}
+
+function getReadableNarrative(text: string, depth = 0): string {
+  const cleaned = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  if (!cleaned) return FORMAT_FALLBACK;
+
+  try {
+    const parsed: unknown = JSON.parse(cleaned);
+    if (isRecord(parsed) && typeof parsed.storyText === 'string' && depth < 2) {
+      return getReadableNarrative(parsed.storyText, depth + 1);
+    }
+    return FORMAT_FALLBACK;
+  } catch {
+    // Plain text is a useful fallback; JSON-like text is not suitable for the story log.
+  }
+
+  if (/^[\[{]/.test(cleaned) || /"(?:storyText|suggestedActions|stateChanges)"\s*:/.test(cleaned)) {
+    return FORMAT_FALLBACK;
+  }
+  return cleaned;
+}
+
 const isItemChangeList = (value: unknown): boolean =>
   Array.isArray(value) && value.every((item) =>
     isRecord(item) && typeof item.itemId === 'string' && Number.isInteger(item.quantity) && (item.quantity as number) > 0
@@ -51,7 +92,9 @@ function parseAIResponse(value: unknown): AIResponsePayload | null {
   if (isRecord(value.failureStateChanges) &&
       ['expChange', 'addItems', 'defeatedMonsters', 'questUpdates', 'newLocationId', 'setFlags'].some((field) => field in (value.failureStateChanges as Record<string, unknown>))) return null;
 
-  return value as unknown as AIResponsePayload;
+  const storyText = getReadableNarrative(value.storyText);
+  if (storyText === FORMAT_FALLBACK) return null;
+  return { ...value, storyText } as unknown as AIResponsePayload;
 }
 
 /**
@@ -61,7 +104,7 @@ async function fetchWithRetry(url: string, options: RequestInit, retries = 2, de
   try {
     const res = await fetch(url, options);
     if ((res.status === 503 || res.status === 429) && retries > 0) {
-      console.warn(`[Gemini API] 伺服器忙碌 (${res.status})，${delay / 1000} 秒後重試...`);
+      console.warn(`[AI API] 伺服器忙碌 (${res.status})，${delay / 1000} 秒後重試...`);
       await new Promise((resolve) => setTimeout(resolve, delay));
       return fetchWithRetry(url, options, retries - 1, delay * 1.5);
     }
@@ -167,12 +210,8 @@ export async function sendPlayerAction(
       throw new Error(`${settings.provider} ${settings.model} 回應 HTTP ${response.status}: ${detail}`);
     }
 
-    const data = await response.json();
-    const rawText = isOpenAI
-      ? (data.output ?? []).flatMap((item: { content?: { type?: string; text?: string }[] }) =>
-          (item.content ?? []).filter((part) => part.type === 'output_text').map((part) => part.text ?? '')
-        ).join('')
-      : data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+    const data: unknown = await response.json();
+    const rawText = extractResponseText(data, settings.provider);
     const cleanedJsonStr = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
 
     try {
@@ -183,7 +222,7 @@ export async function sendPlayerAction(
     }
 
     return {
-      storyText: rawText || '模型回應格式不完整，請再描述一次行動。',
+      storyText: getReadableNarrative(rawText),
       suggestedActions: ['重新描述行動', '觀察周圍環境']
     };
   } catch (err: unknown) {
