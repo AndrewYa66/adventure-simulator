@@ -1,5 +1,6 @@
 import type { PlayerState, AIResponsePayload } from '../types/game';
 import type { AIModelSettings } from './aiModels';
+import { getMapById } from '../data/staticData';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -126,6 +127,7 @@ export async function sendPlayerAction(
   storyHistory: string[]
 ): Promise<AIResponsePayload> {
   const cleanApiKey = apiKey.trim();
+  const currentMap = getMapById(playerState.currentMapId);
 
   if (!cleanApiKey) {
     throw new Error('所選模型的 API Key 尚未設定。請開啟模型設定。');
@@ -136,14 +138,15 @@ export async function sendPlayerAction(
 當前玩家狀態：
 - 姓名: ${playerState.name} (Lv.${playerState.level})
 - HP: ${playerState.hp} | MP: ${playerState.mp} | 金幣: ${playerState.gold}
-- 當前地圖 ID: ${playerState.currentMapId}
+- 當前地區: ${currentMap?.name ?? playerState.currentMapId} (${playerState.currentMapId})
+- 當前戰鬥: ${playerState.combat ? JSON.stringify(playerState.combat) : '無'}
 - 背包物品 ID 列表: ${JSON.stringify(playerState.inventory)}
 - 裝備物品 ID: ${JSON.stringify(playerState.equipped)}
 - 劇情旗標 (Flags): ${JSON.stringify(playerState.storyFlags || {})}
 - 進行中任務: ${JSON.stringify(playerState.activeQuests)}
 - 已擊敗怪物數量: ${JSON.stringify(playerState.defeatedMonsters)}
 
-請根據玩家行動進行劇情描述與戰鬥結算。
+請根據玩家行動進行劇情描述。地圖切換僅能使用相鄰地區 ID；一般戰鬥由遊戲規則結算，不可敘事中自行宣告擊敗或扣除怪物。
 注意事項：
 1. 當給予或扣除玩家道具時，請使用 Item ID (例如: "ITEM-001" 小型生命藥水, "ITEM-002" 哥布林耳朵, "ITEM-101" 精鋼短劍, "ITEM-201" 冒險者皮甲)。
 2. 只有結果不確定且失敗會有實質影響時才要求檢定；一般對話、觀察或無風險行動不擲骰。

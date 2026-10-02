@@ -67,6 +67,7 @@ export default function App() {
   };
 
   const handleTravel = (mapId: string) => {
+    if (player.combat) return;
     const currentMap = getMapById(player.currentMapId);
     const destination = getMapById(mapId);
     if (!currentMap?.connectedMapIds.includes(mapId) || !destination) return;
@@ -116,6 +117,7 @@ export default function App() {
       let storyText = aiResponse.storyText;
       let resultToApply = aiResponse;
       let checkResult: ActionCheckResult | undefined;
+      let nextPlayer = player;
 
       if (aiResponse.checkRequest && aiResponse.checkOutcomes) {
         const check = resolveActionCheck(player, aiResponse.checkRequest.stat, aiResponse.checkRequest.dc);
@@ -129,15 +131,22 @@ export default function App() {
 
       // 更新玩家 Local State
       if (resultToApply.stateChanges) {
-        updatePlayer(applyStateChanges(player, resultToApply));
+        nextPlayer = applyStateChanges(player, resultToApply);
+        updatePlayer(nextPlayer);
       }
+
+      const previousMap = getMapById(player.currentMapId);
+      const nextMap = getMapById(nextPlayer.currentMapId);
+      const locationNotice = previousMap && nextMap && previousMap.id !== nextMap.id
+        ? `\n\n📍 你已抵達${nextMap.name}。${nextMap.description}`
+        : '';
 
       setMessages((prev) => [
         ...prev,
         {
           id: (Date.now() + 1).toString(),
           sender: 'ai',
-          text: storyText,
+          text: `${storyText}${locationNotice}`,
           options: aiResponse.suggestedActions,
           checkResult,
           timestamp: new Date().toLocaleTimeString()
