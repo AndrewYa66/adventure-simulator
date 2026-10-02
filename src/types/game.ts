@@ -212,6 +212,7 @@ export interface PlayerState {
   // 劇情進度與旗標，防止 AI 遺忘劇情進度
   storyFlags: Record<string, boolean>; // 例如: { "FLAG_TUTORIAL_DONE": true }
   defeatedMonsters: Record<string, number>;
+  encounteredMonsterId?: string;
   
   // 當前進行中的任務
   activeQuests: {
@@ -259,6 +260,7 @@ export interface GameSession {
 export interface AIResponsePayload {
   storyText: string;
   suggestedActions: string[];
+  encounterRequest?: { monsterId: string } | null;
   travelRequest?: { destinationMapId: string } | null;
   checkRequest?: {
     stat: ActionCheckResult['stat'];

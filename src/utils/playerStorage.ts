@@ -78,6 +78,11 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     getMapById(value.currentMapId)?.connectedMapIds.includes(value.previousMapId)
     ? value.previousMapId
     : undefined;
+  const encounteredMonsterId = typeof value.encounteredMonsterId === 'string' &&
+    getMapById(value.currentMapId)?.monstersPresent.includes(value.encounteredMonsterId) &&
+    getMonsterById(value.encounteredMonsterId)
+    ? value.encounteredMonsterId
+    : undefined;
   const hp = Math.max(0, value.hp as number);
   const statusEffects = Array.isArray(value.statusEffects)
     ? value.statusEffects.flatMap((effect) => isRecord(effect) && effect.id === 'unconscious' &&
@@ -105,7 +110,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
   }));
   const transactionHistory = Array.isArray(value.transactionHistory) ? value.transactionHistory.flatMap((record) =>
     isRecord(record) && typeof record.id === 'string' &&
-    ['purchase', 'sale', 'service', 'quest_reward', 'npc_transfer'].includes(String(record.type)) &&
+    ['purchase', 'sale', 'service', 'quest_reward', 'npc_transfer', 'game_change'].includes(String(record.type)) &&
     typeof record.description === 'string' && Number.isFinite(record.goldChange) && Number.isFinite(record.timestamp)
       ? [{
         id: record.id,
@@ -140,6 +145,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     storyFlags: value.storyFlags as Record<string, boolean>,
     defeatedMonsters,
     activeQuests,
+    ...(encounteredMonsterId && !isDead ? { encounteredMonsterId } : {}),
     ...(combat && !isDead ? { combat } : {})
   };
 }

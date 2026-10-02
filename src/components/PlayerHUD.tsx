@@ -196,11 +196,15 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
             {unlockedSkills.filter((skill) => skill.effect.kind === 'damage_multiplier').map((skill) => <button key={skill.id} onClick={() => onUseSkill(skill.id)} disabled={!canPlayerAct(player) || player.mp < skill.costMp} title={skill.description} style={{ marginRight: '6px', padding: '6px 10px', cursor: player.mp < skill.costMp || !canPlayerAct(player) ? 'not-allowed' : 'pointer' }}>{skill.name}（MP {skill.costMp}）</button>)}
             <button onClick={onFleeCombat} disabled={!canPlayerAct(player)} style={{ padding: '6px 10px', cursor: canPlayerAct(player) ? 'pointer' : 'not-allowed' }}>脫離戰鬥</button>
           </div>;
-        })() : (currentMap?.isSafeZone ? <div style={{ color: '#aaa', fontSize: '12px' }}>安全地區沒有可挑戰的敵人。</div> : (currentMap?.monstersPresent ?? []).map((monsterId) => {
-          const monster = getMonsterById(monsterId);
-          if (!monster) return null;
-          return <button key={monsterId} onClick={() => onStartCombat(monsterId)} style={{ display: 'block', margin: '4px 0', padding: '5px 8px', background: '#4a2525', color: '#ffcdd2', border: '1px solid #844', borderRadius: '4px', cursor: 'pointer' }}>挑戰 {monster.name}</button>;
-        }))}
+        })() : (() => {
+          const monster = player.encounteredMonsterId ? getMonsterById(player.encounteredMonsterId) : undefined;
+          return monster && currentMap?.monstersPresent.includes(monster.id)
+            ? <div>
+              <div style={{ color: '#ffcc80', fontSize: '12px', marginBottom: '5px' }}>已遭遇</div>
+              <button onClick={() => onStartCombat(monster.id)} disabled={!canPlayerAct(player)} style={{ display: 'block', margin: '4px 0', padding: '5px 8px', background: '#4a2525', color: '#ffcdd2', border: '1px solid #844', borderRadius: '4px', cursor: canPlayerAct(player) ? 'pointer' : 'not-allowed' }}>挑戰 {monster.name}</button>
+            </div>
+            : <div style={{ color: '#aaa', fontSize: '12px' }}>{currentMap?.isSafeZone ? '安全地區沒有敵人。' : '尚未遭遇敵人；探索或搜索周遭以觸發遭遇。'}</div>;
+        })()}
         {!player.combat && unlockedSkills.filter((skill) => skill.effect.kind === 'healing').map((skill) => <button key={skill.id} onClick={() => onUseSkill(skill.id)} disabled={!canPlayerAct(player) || player.mp < skill.costMp || player.hp >= maxHp} title={skill.description} style={{ display: 'block', marginTop: '5px', padding: '6px 10px' }}>{skill.name}（MP {skill.costMp}）</button>)}
       </div>
 

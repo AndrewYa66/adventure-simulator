@@ -38,6 +38,7 @@ function resolveEnemyTurn(player: PlayerState, combat: NonNullable<PlayerState['
   if (unconsciousTurns > 0) statusEffects.push({ id: 'unconscious', remainingTurns: unconsciousTurns });
   const nextPlayer: PlayerState = {
     ...player, hp, isDead, statusEffects,
+    ...(isDead ? { encounteredMonsterId: undefined } : {}),
     ...(isDead ? { combat: undefined } : { combat: { ...combat, round: combat.round + 1 } })
   };
   const result = check.success
@@ -60,7 +61,8 @@ function createRestoreNotice(player: PlayerState, savedAt: number, messageCount:
     `持有物：${inventory.length ? inventory.join('、') : '無'}`
   ];
   if (combatMonster && player.combat) lines.push(`戰鬥恢復：第 ${player.combat.round} 回合，${combatMonster.name} HP ${player.combat.currentHp}/${combatMonster.stats.hp}`);
-  else lines.push('戰鬥狀態：目前沒有進行中的戰鬥。');
+  else if (player.encounteredMonsterId) lines.push(`已遭遇敵人：${getMonsterById(player.encounteredMonsterId)?.name ?? player.encounteredMonsterId}（可從 HUD 發起戰鬥）`);
+  else lines.push('戰鬥狀態：目前沒有進行中的戰鬥，也尚未遭遇敵人。');
   return {
     id: 'session-restore-notice',
     sender: 'system',
@@ -146,14 +148,14 @@ export default function App() {
     const currentMap = getMapById(sourcePlayer.currentMapId);
     const destination = getMapById(mapId);
     if (!currentMap?.connectedMapIds.includes(mapId) || !destination || !canPlayerEnterMap(sourcePlayer, destination)) return null;
-    const nextPlayer = { ...sourcePlayer, previousMapId: sourcePlayer.currentMapId, currentMapId: destination.id };
-    updatePlayer(nextPlayer);
+    const nextPlayer = { ...sourcePlayer, previousMapId: sourcePlayer.currentMapId, currentMapId: destination.id, encounteredMonsterId: undefined };
     return { player: nextPlayer, destination };
   };
 
   const handleTravel = (mapId: string) => {
     const travel = movePlayerTo(mapId);
     if (!travel) return;
+    updatePlayer(travel.player);
     setMessages((previous) => [...previous, {
       id: Date.now().toString(),
       sender: 'system',
@@ -250,7 +252,7 @@ export default function App() {
   const handleStartCombat = (monsterId: string) => {
     const map = getMapById(player.currentMapId);
     const monster = getMonsterById(monsterId);
-    if (player.combat || !canPlayerAct(player) || !map || map.isSafeZone || !map.monstersPresent.includes(monsterId) || !monster ||
+    if (player.combat || !canPlayerAct(player) || !map || map.isSafeZone || player.encounteredMonsterId !== monsterId || !map.monstersPresent.includes(monsterId) || !monster ||
         (monster.requiredQuestId && !player.activeQuests.some((quest) => quest.questId === monster.requiredQuestId && quest.status === 'in_progress'))) return;
     updatePlayer({ ...player, combat: { monsterId, currentHp: monster.stats.hp, round: 1 } });
     appendSystemMessage(`你與${monster.name}進入戰鬥！攻擊、已解鎖技能及消耗品各自消耗一個行動回合；敵人存活時會反擊並進行閃避檢定。`);
@@ -261,6 +263,7 @@ export default function App() {
     const monster = getMonsterById(player.combat.monsterId);
     const outOfCombat = { ...player };
     delete outOfCombat.combat;
+    delete outOfCombat.encounteredMonsterId;
     updatePlayer(outOfCombat);
     appendSystemMessage(`你與${monster?.name ?? '敵人'}拉開距離，戰鬥結束。`);
   };
@@ -323,6 +326,7 @@ export default function App() {
       const questText = completedQuests.map((quest) => `任務「${getQuestById(quest.questId)?.title ?? quest.questId}」完成，需求道具已交付並領取獎勵。`).join('\n');
       const victoryState = { ...nextPlayer };
       delete victoryState.combat;
+      delete victoryState.encounteredMonsterId;
       updatePlayer(victoryState);
       appendSystemMessage(`🏆 ${attackText}\n${monster.name}已被擊敗！獲得 ${monster.rewards.exp} EXP、${monster.rewards.gold} 金幣。${dropText}${questText ? `\n${questText}` : ''}`, checks);
       return;
@@ -429,25 +433,26 @@ export default function App() {
       const map = getMapById(player.currentMapId);
       const available = (map?.monstersPresent ?? []).map((id) => getMonsterById(id)).filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
       const matched = available.filter((monster) => actionText.includes(monster.name) || actionText.includes(monster.id) || actionText.toLowerCase().includes(monster.enName.toLowerCase()));
-      const target = matched.length === 1 ? matched[0] : !player.combat && matched.length === 0 && available.length === 1 ? available[0] : undefined;
+      const encountered = player.encounteredMonsterId ? getMonsterById(player.encounteredMonsterId) : undefined;
+      const target = matched.length === 1 ? matched[0] : matched.length === 0 ? encountered : undefined;
       const userMessage: StoryMessage = { id: `${Date.now()}-user`, sender: 'user', text: actionText, timestamp: new Date().toLocaleTimeString() };
-      if (!player.combat && (!map || map.isSafeZone || (matched.length !== 1 && available.length !== 1))) {
-        const text = map?.isSafeZone ? '此地區是安全區，不能發起戰鬥。' : available.length === 0 ? '目前地區沒有可交戰的敵人。' : `請指定敵人：${available.map((monster) => monster.name).join('、')}。`;
+      if (!player.combat && (!map || map.isSafeZone || !encountered)) {
+        const text = map?.isSafeZone ? '此地區是安全區，不能發起戰鬥。' : !encountered ? '你目前尚未遭遇敵人。請先探索或搜索周遭；敵人實際出現後，才能發起戰鬥。' : `目前沒有可交戰的敵人。`;
         setMessages((prev) => [...prev, userMessage, { id: `${Date.now()}-combat`, sender: 'system', text, timestamp: new Date().toLocaleTimeString() }]);
-        return;
-      }
-      if (!player.combat && target && target.requiredQuestId && !player.activeQuests.some((quest) => quest.questId === target.requiredQuestId && (quest.status === 'in_progress' || quest.status === 'completed'))) {
-        setMessages((prev) => [...prev, userMessage, { id: `${Date.now()}-combat`, sender: 'system', text: '目前尚未解鎖這場戰鬥。', timestamp: new Date().toLocaleTimeString() }]);
         return;
       }
       if (player.combat && matched.length === 1 && matched[0].id !== player.combat.monsterId) {
         setMessages((prev) => [...prev, userMessage, { id: `${Date.now()}-combat`, sender: 'system', text: `目前正在與${getMonsterById(player.combat!.monsterId)?.name ?? '敵人'}戰鬥，無法切換目標。`, timestamp: new Date().toLocaleTimeString() }]);
         return;
       }
+      if (!player.combat && matched.length === 1 && matched[0].id !== encountered?.id) {
+        setMessages((prev) => [...prev, userMessage, { id: `${Date.now()}-combat`, sender: 'system', text: `你尚未遭遇${matched[0].name}；目前遭遇的敵人是${encountered?.name ?? '無'}。`, timestamp: new Date().toLocaleTimeString() }]);
+        return;
+      }
       setMessages((prev) => [...prev, userMessage]);
       if (!player.combat && target) {
         const combatPlayer: PlayerState = { ...player, combat: { monsterId: target.id, currentHp: target.stats.hp, round: 1 } };
-        appendSystemMessage(`你與${target.name}進入戰鬥！`);
+        appendSystemMessage(`你與已遭遇的${target.name}進入戰鬥！`);
         handleCombatAction(undefined, combatPlayer);
       } else if (player.combat) handleCombatAction();
       return;
@@ -554,8 +559,18 @@ export default function App() {
       // 更新玩家 Local State
       if (resultToApply.stateChanges) {
         nextPlayer = applyStateChanges(player, resultToApply);
-        updatePlayer(nextPlayer);
       }
+      if (nextPlayer.isDead) nextPlayer = { ...nextPlayer, encounteredMonsterId: undefined };
+      const requestedEncounter = aiResponse.encounterRequest?.monsterId;
+      const requestedMonster = requestedEncounter ? getMonsterById(requestedEncounter) : undefined;
+      const currentMap = getMapById(player.currentMapId);
+      const encounterAllowed = !nextPlayer.combat && !nextPlayer.isDead && canPlayerAct(nextPlayer) && !!currentMap && !currentMap.isSafeZone &&
+        !!requestedMonster && currentMap.monstersPresent.includes(requestedMonster.id) &&
+        (!requestedMonster.requiredQuestId || nextPlayer.activeQuests.some((quest) => quest.questId === requestedMonster.requiredQuestId && quest.status === 'in_progress'));
+      const encounterNotice = encounterAllowed && requestedMonster
+        ? `\n\n👁️ 遭遇：${requestedMonster.name}。已加入 HUD，可從右側開始戰鬥。`
+        : '';
+      if (encounterAllowed && requestedMonster) nextPlayer = { ...nextPlayer, encounteredMonsterId: requestedMonster.id };
       const deathNotice = !player.isDead && nextPlayer.isDead
         ? '\n\n☠️ 你的生命值降至 0，角色死亡。這段冒險已結束。'
         : '';
@@ -594,6 +609,7 @@ export default function App() {
           : aiResponse.travelRequest?.destinationMapId;
       const travel = requestedDestinationId ? movePlayerTo(requestedDestinationId, nextPlayer) : null;
       if (travel) nextPlayer = travel.player;
+      updatePlayer(nextPlayer);
 
       const previousMap = getMapById(player.currentMapId);
       const nextMap = getMapById(nextPlayer.currentMapId);
@@ -614,7 +630,7 @@ export default function App() {
         {
           id: (Date.now() + 1).toString(),
           sender: 'ai',
-          text: `${storyText}${questNotice}${questCompletionNotice}${npcTransferNotice}${locationNotice}${deathNotice}`,
+          text: `${storyText}${questNotice}${questCompletionNotice}${npcTransferNotice}${encounterNotice}${locationNotice}${deathNotice}`,
           options: aiResponse.suggestedActions,
           travelOptions: textTravelIntent.kind === 'ambiguous'
             ? textTravelIntent.candidates.map((candidate) => ({ mapId: candidate.id, name: candidate.name }))

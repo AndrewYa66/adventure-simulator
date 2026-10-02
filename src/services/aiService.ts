@@ -1,6 +1,6 @@
 import type { PlayerState, AIResponsePayload } from '../types/game';
 import type { AIModelSettings } from './aiModels';
-import { canPlayerEnterMap, getItemById, getMapById, getNpcById, getNpcCategoryById, getNpcStats, itemsDatabase, questsDatabase } from '../data/staticData';
+import { canPlayerEnterMap, getItemById, getMapById, getMonsterById, getNpcById, getNpcCategoryById, getNpcStats, itemsDatabase, questsDatabase } from '../data/staticData';
 import { canAcceptQuest, canTurnInQuest } from '../utils/questRules';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from '../utils/travelIntent';
 
@@ -64,6 +64,8 @@ function parseAIResponse(value: unknown): AIResponsePayload | null {
 
   if (value.travelRequest !== undefined && value.travelRequest !== null &&
       (!isRecord(value.travelRequest) || typeof value.travelRequest.destinationMapId !== 'string')) return null;
+  if (value.encounterRequest !== undefined && value.encounterRequest !== null &&
+      (!isRecord(value.encounterRequest) || typeof value.encounterRequest.monsterId !== 'string')) return null;
 
   if (value.checkRequest !== undefined && value.checkRequest !== null) {
     const check = value.checkRequest;
@@ -172,6 +174,12 @@ export async function sendPlayerAction(
     .map((quest) => ({ id: quest.id, title: quest.title, giver: quest.questGiver, objective: quest.objective }));
   const turnInQuests = questsDatabase.filter((quest) => canTurnInQuest(playerState, quest))
     .map((quest) => ({ id: quest.id, title: quest.title, giver: quest.questGiver }));
+  const encounterCandidates = (currentMap?.monstersPresent ?? []).flatMap((monsterId) => {
+    const monster = getMonsterById(monsterId);
+    return monster && (!monster.requiredQuestId || playerState.activeQuests.some((quest) =>
+      quest.questId === monster.requiredQuestId && quest.status === 'in_progress'
+    )) ? [{ id: monster.id, name: monster.name }] : [];
+  });
 
   if (!cleanApiKey) {
     throw new Error('所選模型的 API Key 尚未設定。請開啟模型設定。');
@@ -193,6 +201,8 @@ export async function sendPlayerAction(
 - 當前可交付任務（需玩家回到任務給予者所在位置且需求齊備）: ${JSON.stringify(turnInQuests)}
 - 上一個地區: ${previousMap ? `${previousMap.name} (${previousMap.id})，分類 ${JSON.stringify(previousMap.locationTags ?? [])}` : '無'}
 - 當前戰鬥: ${playerState.combat ? JSON.stringify(playerState.combat) : '無'}
+- 目前已遭遇敵人: ${playerState.encounteredMonsterId ? getMonsterById(playerState.encounteredMonsterId)?.name ?? playerState.encounteredMonsterId : '無'}
+- 本地區可遭遇敵人（只可選這些 ID）: ${JSON.stringify(encounterCandidates)}
 - 背包物品 ID 列表: ${JSON.stringify(playerState.inventory)}
 - 世界靜態物品清單（只可使用這些 ID/名稱）: ${JSON.stringify(itemsDatabase.map((item) => ({ id: item.id, name: item.name, type: item.type })))}
 - 裝備物品 ID: ${JSON.stringify(playerState.equipped)}
@@ -215,6 +225,7 @@ export async function sendPlayerAction(
 - 非戰鬥行動若有風險且失敗會造成實質後果，依最相關能力提出 checkRequest（atk/def/spd 或 str/dex/con/int/wis/cha），在成功/失敗分支填入相應 HP/MP 變化。玩家明確提出自我傷害等會直接改變資源的行動時，必須依其明確數值回報變化，並照常套用 HP 歸零死亡規則。
 - 若玩家有自傷意圖但沒有說明傷害數值，先詢問數值，不要猜測或只用文字敘述扣血。
 - 一般戰鬥由遊戲規則結算，不可敘事中自行宣告擊敗或扣除怪物。
+- 每次回應都必須包含 encounterRequest；若玩家尚未實際看見或接觸敵人，設為 null。只有探索、搜索或情境中確實遇見敵人時，才指定本地區可遭遇清單中的 monsterId，並在敘事中描述遭遇。不可只因怪物存在於地圖資料，就宣稱玩家已遭遇；不可遭遇未列出的敵人。
 - 玩家在對話中明確要求攻擊目前地區的敵人時，不可假裝攻擊已命中、敵人已受傷或已被擊敗；戰鬥與獎勵由遊戲端確定性規則處理，若無法由遊戲端執行，只能說明尚未發起戰鬥。
 - 不可在敘事中宣稱玩家已使用消耗品、恢復 HP/MP 或已取得金幣/經驗/掉落物，除非對應狀態變更已由遊戲端結算。
 注意事項：
@@ -229,6 +240,7 @@ export async function sendPlayerAction(
 {
   "storyText": "精彩生動的情境描繪與戰況（約 100-200 字，繁體中文）",
   "suggestedActions": ["選項 1", "選項 2", "選項 3"],
+  "encounterRequest": null,
   "travelRequest": null,
   "checkRequest": null,
   "checkOutcomes": null,
@@ -263,6 +275,14 @@ export async function sendPlayerAction(
     properties: {
       storyText: { type: 'string' },
       suggestedActions: { type: 'array', items: { type: 'string' } },
+      encounterRequest: {
+        type: ['object', 'null'],
+        properties: {
+          monsterId: { type: 'string', enum: encounterCandidates.length ? encounterCandidates.map((monster) => monster.id) : ['__NO_AVAILABLE_MONSTER__'] }
+        },
+        required: ['monsterId'],
+        additionalProperties: false
+      },
       travelRequest: {
         type: ['object', 'null'],
         properties: {
@@ -302,7 +322,7 @@ export async function sendPlayerAction(
       failureStateChanges: { type: ['object', 'null'], additionalProperties: true }
     },
     required: [
-      'storyText', 'suggestedActions', 'travelRequest', 'checkRequest', 'checkOutcomes', 'stateChanges', 'failureStateChanges'
+      'storyText', 'suggestedActions', 'encounterRequest', 'travelRequest', 'checkRequest', 'checkOutcomes', 'stateChanges', 'failureStateChanges'
     ],
     additionalProperties: false
   };
