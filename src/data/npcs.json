@@ -1,0 +1,32 @@
+[
+  {
+    "id": "NPC-001",
+    "name": "埃爾德",
+    "title": "村長",
+    "categoryId": "NPC-CAT-001",
+    "mapId": "MAP-001",
+    "stats": { "hp": 24, "atk": 3, "def": 2, "spd": 2 },
+    "alignment": "守序善良",
+    "description": "負責管理橡木村並發布村莊委託。"
+  },
+  {
+    "id": "NPC-002",
+    "name": "凱斯",
+    "title": "鐵匠",
+    "categoryId": "NPC-CAT-001",
+    "mapId": "MAP-001",
+    "stats": { "hp": 26, "atk": 5, "def": 3, "spd": 2 },
+    "alignment": "絕對中立",
+    "description": "在村中鍛造與修理冒險者裝備。"
+  },
+  {
+    "id": "NPC-003",
+    "name": "艾莉絲",
+    "title": "農婦",
+    "categoryId": "NPC-CAT-001",
+    "mapId": "MAP-001",
+    "stats": { "hp": 19, "atk": 2, "def": 1, "spd": 3 },
+    "alignment": "中立善良",
+    "description": "在村外耕作，熟悉附近田地與道路。"
+  }
+]

@@ -2,6 +2,8 @@ import type {
   ItemStatic,
   MapStatic,
   MonsterStatic,
+  NpcCategoryStatic,
+  NpcStatic,
   PlayerGrowthStatic,
   QuestStatic
 } from '../types/game';
@@ -9,6 +11,8 @@ import type {
 import rawItems from './items.json';
 import rawMaps from './maps.json';
 import rawMonsters from './monsters.json';
+import rawNpcCategories from './npc_categories.json';
+import rawNpcs from './npcs.json';
 import rawPlayerGrowth from './player_growth.json';
 import rawQuests from './quests.json';
 
@@ -16,6 +20,8 @@ import rawQuests from './quests.json';
 export const itemsDatabase: ItemStatic[] = rawItems as ItemStatic[];
 export const mapsDatabase: MapStatic[] = rawMaps as MapStatic[];
 export const monstersDatabase: MonsterStatic[] = rawMonsters as MonsterStatic[];
+export const npcCategoriesDatabase: NpcCategoryStatic[] = rawNpcCategories as NpcCategoryStatic[];
+export const npcsDatabase: NpcStatic[] = rawNpcs as NpcStatic[];
 export const playerGrowthDatabase: PlayerGrowthStatic[] = rawPlayerGrowth as PlayerGrowthStatic[];
 export const questsDatabase: QuestStatic[] = rawQuests as QuestStatic[];
 
@@ -33,6 +39,18 @@ export const getMapById = (id: string): MapStatic | undefined => {
 
 export const getMonsterById = (id: string): MonsterStatic | undefined => {
   return monstersDatabase.find((monster) => monster.id === id);
+};
+
+export const getNpcCategoryById = (id: string): NpcCategoryStatic | undefined =>
+  npcCategoriesDatabase.find((category) => category.id === id);
+
+export const getNpcById = (id: string): NpcStatic | undefined =>
+  npcsDatabase.find((npc) => npc.id === id);
+
+export const getNpcStats = (npc: NpcStatic) => {
+  const baseStats = getNpcCategoryById(npc.categoryId)?.baseStats;
+  if (!baseStats) return undefined;
+  return { ...baseStats, ...npc.stats };
 };
 
 export const getPlayerGrowthByLevel = (level: number): PlayerGrowthStatic | undefined => {

@@ -1,0 +1,7 @@
+[
+  {
+    "id": "NPC-CAT-001",
+    "name": "一般村民",
+    "baseStats": { "hp": 20, "atk": 2, "def": 1, "spd": 3 }
+  }
+]

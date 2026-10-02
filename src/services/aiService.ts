@@ -1,6 +1,7 @@
 import type { PlayerState, AIResponsePayload } from '../types/game';
 import type { AIModelSettings } from './aiModels';
-import { getMapById } from '../data/staticData';
+import { getMapById, getNpcById, getNpcCategoryById, getNpcStats, questsDatabase } from '../data/staticData';
+import { canAcceptQuest } from '../utils/questRules';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from '../utils/travelIntent';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -92,10 +93,14 @@ function parseAIResponse(value: unknown): AIResponsePayload | null {
     return true;
   };
   if (!isValidStateChanges(value.stateChanges) || !isValidStateChanges(value.failureStateChanges)) return null;
+  for (const changes of [value.stateChanges, value.failureStateChanges]) {
+    if (isRecord(changes) && changes.questAcceptances !== undefined &&
+        (!Array.isArray(changes.questAcceptances) || !changes.questAcceptances.every((questId) => typeof questId === 'string'))) return null;
+  }
   if (isRecord(value.stateChanges) && value.stateChanges.defeatedMonsters !== undefined &&
       (!isRecord(value.checkRequest) || value.checkRequest.stat !== 'atk')) return null;
   if (isRecord(value.failureStateChanges) &&
-      ['expChange', 'addItems', 'defeatedMonsters', 'questUpdates', 'newLocationId', 'setFlags'].some((field) => field in (value.failureStateChanges as Record<string, unknown>))) return null;
+      ['expChange', 'addItems', 'defeatedMonsters', 'questUpdates', 'questAcceptances', 'newLocationId', 'setFlags'].some((field) => field in (value.failureStateChanges as Record<string, unknown>))) return null;
 
   const storyText = getReadableNarrative(value.storyText);
   if (storyText === FORMAT_FALLBACK) return null;
@@ -143,6 +148,21 @@ export async function sendPlayerAction(
     return map ? [{ id: map.id, name: map.name, aliases: map.aliases ?? [], tags: map.locationTags ?? [] }] : [];
   }) ?? [];
   const previousMap = playerState.previousMapId ? getMapById(playerState.previousMapId) : undefined;
+  const presentNpcs = currentMap?.npcsPresent.flatMap((npcId) => {
+    const npc = getNpcById(npcId);
+    const stats = npc ? getNpcStats(npc) : undefined;
+    return npc && stats ? [{
+      id: npc.id,
+      name: npc.name,
+      title: npc.title,
+      category: getNpcCategoryById(npc.categoryId)?.name ?? npc.categoryId,
+      stats,
+      alignment: npc.alignment,
+      description: npc.description
+    }] : [];
+  }) ?? [];
+  const availableQuests = questsDatabase.filter((quest) => canAcceptQuest(playerState, quest))
+    .map((quest) => ({ id: quest.id, title: quest.title, giver: quest.questGiver, objective: quest.objective }));
 
   if (!cleanApiKey) {
     throw new Error('所選模型的 API Key 尚未設定。請開啟模型設定。');
@@ -155,6 +175,8 @@ export async function sendPlayerAction(
 - HP: ${playerState.hp} | MP: ${playerState.mp} | 金幣: ${playerState.gold}
 - 當前地區: ${currentMap?.name ?? playerState.currentMapId} (${playerState.currentMapId})
 - 可前往的相鄰地區（只可選這些 ID）: ${JSON.stringify(availableDestinations)}
+- 當前地區在場 NPC 及數值: ${JSON.stringify(presentNpcs)}
+- 當前可接取任務（僅可接取這些 ID）: ${JSON.stringify(availableQuests)}
 - 上一個地區: ${previousMap ? `${previousMap.name} (${previousMap.id})，分類 ${JSON.stringify(previousMap.locationTags ?? [])}` : '無'}
 - 當前戰鬥: ${playerState.combat ? JSON.stringify(playerState.combat) : '無'}
 - 背包物品 ID 列表: ${JSON.stringify(playerState.inventory)}
@@ -169,6 +191,8 @@ export async function sendPlayerAction(
 - 詢問地點資訊、觀察遠方、談論某地或描述打算但尚未決定，都不算移動；travelRequest 設為 null。含糊的「去那裡看看」且目的地不明時，先在 storyText 詢問，不要猜測或切換。
 - 玩家說「回到/前往」+「村莊/森林」等泛稱時，先從相鄰地區中依 aliases/tags 找候選；若上一個地區符合且可返回或前往，優先選上一個地區。若仍有多個合理候選，travelRequest 設為 null，並在 storyText 詢問具體目的地。
 - 不要透過 stateChanges 修改地區；實際移動由遊戲驗證 travelRequest 後套用。不可前往清單以外的地區。
+- 任務只能從「當前可接取任務」中接受。玩家明確表示接取/接受某任務時，才在 stateChanges.questAcceptances 填入對應 ID；不可因詢問細節、委託描述或含糊回覆而接取。不可自行建立任務、改寫需求或獎勵。
+- 任務接取由遊戲端再次驗證所在地、任務給予者是否在場及任務是否已接取/完成；不可只在 storyText 宣稱已接取。
 - 一般戰鬥由遊戲規則結算，不可敘事中自行宣告擊敗或扣除怪物。
 注意事項：
 1. 當給予或扣除玩家道具時，請使用 Item ID (例如: "ITEM-001" 小型生命藥水, "ITEM-002" 哥布林耳朵, "ITEM-101" 精鋼短劍, "ITEM-201" 冒險者皮甲)。
@@ -194,7 +218,8 @@ export async function sendPlayerAction(
     "removeItems": [],
     "defeatedMonsters": [],
     "setFlags": {"MET_VILLAGE_CHIEF": true},
-    "questUpdates": [{"questId": "QST-001", "status": "completed"}]
+    "questUpdates": [{"questId": "QST-001", "status": "completed"}],
+    "questAcceptances": []
   },
   "failureStateChanges": null
 }
@@ -225,7 +250,16 @@ export async function sendPlayerAction(
       },
       checkRequest: { type: ['object', 'null'] },
       checkOutcomes: { type: ['object', 'null'] },
-      stateChanges: { type: ['object', 'null'], additionalProperties: true },
+      stateChanges: {
+        type: ['object', 'null'],
+        properties: {
+          questAcceptances: {
+            type: 'array',
+            items: { type: 'string', enum: availableQuests.length ? availableQuests.map((quest) => quest.id) : ['__NO_AVAILABLE_QUEST__'] }
+          }
+        },
+        additionalProperties: true
+      },
       failureStateChanges: { type: ['object', 'null'], additionalProperties: true }
     },
     required: [

@@ -1,7 +1,8 @@
 import React from 'react';
 import type { PlayerState } from '../types/game';
-import { getItemById, getMapById, getMonsterById, getPlayerGrowthByLevel, questsDatabase } from '../data/staticData';
+import { getItemById, getMapById, getMonsterById, getNpcById, getNpcCategoryById, getNpcStats, getPlayerGrowthByLevel, questsDatabase } from '../data/staticData';
 import { getPlayerStatBreakdown, STAT_LABELS } from '../utils/gameChecks';
+import { canAcceptQuest } from '../utils/questRules';
 
 interface PlayerHUDProps {
   player: PlayerState;
@@ -106,6 +107,20 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
       </div>
 
       <div>
+        <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #444' }}>🧑‍🤝‍🧑 當前地區人物</h4>
+        {(currentMap?.npcsPresent ?? []).map((npcId) => {
+          const npc = getNpcById(npcId);
+          const stats = npc ? getNpcStats(npc) : undefined;
+          if (!npc || !stats) return null;
+          return <div key={npc.id} style={{ marginBottom: '7px', fontSize: '12px' }}>
+            <strong>{npc.name}・{npc.title}</strong>
+            <div style={{ color: '#aaa' }}>類別：{getNpcCategoryById(npc.categoryId)?.name ?? npc.categoryId} · HP {stats.hp} · ATK {stats.atk} · DEF {stats.def} · SPD {stats.spd}</div>
+          </div>;
+        })}
+        {!currentMap?.npcsPresent.length && <div style={{ color: '#888', fontSize: '12px' }}>目前沒有在場人物。</div>}
+      </div>
+
+      <div>
         <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #444' }}>👹 遭遇</h4>
         {player.combat ? (() => {
           const monster = getMonsterById(player.combat.monsterId);
@@ -144,7 +159,9 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
                 </div>;
               })}
             </div>}
-            {!status && <button onClick={() => onAcceptQuest(quest.id)} style={{ marginTop: '4px', padding: '4px 7px', cursor: 'pointer' }}>接取任務</button>}
+            {!status && (canAcceptQuest(player, quest)
+              ? <button onClick={() => onAcceptQuest(quest.id)} style={{ marginTop: '4px', padding: '4px 7px', cursor: 'pointer' }}>接取任務</button>
+              : <div style={{ marginTop: '4px', color: '#888' }}>需在 {getMapById(quest.mapId)?.name ?? quest.mapId} 找到 {quest.questGiver}</div>)}
           </div>;
         })}
       </div>

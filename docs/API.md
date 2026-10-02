@@ -63,14 +63,14 @@ sendPlayerAction(
     "successText": "你及時閃開，避過敵人的突襲。",
     "failureText": "你閃避不及，受到擦傷。"
   },
-  "stateChanges": { "hpChange": 0, "expChange": 5 },
+  "stateChanges": { "hpChange": 0, "expChange": 5, "questAcceptances": [] },
   "failureStateChanges": { "hpChange": -3 }
 }
 ```
 
 有檢定時，`stat` 限 `atk`、`def`、`spd`，DC 限整數 5–25，且必須提供成功與失敗敘述。瀏覽器以 d20、角色成長數值及裝備加成計算結果；成功時套用 `stateChanges`，失敗時套用 `failureStateChanges`。失敗分支不能發放經驗、道具、任務完成或擊敗怪物紀錄。
 
-`stateChanges` 支援 HP/MP/EXP/金幣增減、道具增加/移除、劇情旗標、怪物擊敗紀錄及任務完成回報。地圖移動使用獨立欄位 `travelRequest`，格式為 `{ "destinationMapId": "MAP-002" }`。Gemini GenerateContent 請求會使用 JSON Schema 強制包含所有回應欄位，並將 `travelRequest.destinationMapId` 限制為本次可移動的相鄰地圖 ID；這保證格式與欄位，不代表語意正確，因此遊戲端仍會驗證。只有玩家明確要求移動時才設定；模型收到的可移動地區清單包含相鄰地圖 ID、正式名稱、專屬別名及分類標籤。泛稱地點會根據可到達候選和上一個地區解析；若仍有多個候選，前端要求玩家選擇，不把泛稱綁定到單一地圖。若 AI 敘事聲稱玩家已移動，但缺少或填錯 `travelRequest`，系統會附上合法目的地清單要求模型重產一次完整 JSON；仍無有效請求時不會移動，並會在對話明確提示。前端再次驗證地圖 ID、連通性及戰鬥狀態後，才更新 `currentMapId`。詢問地點、觀察或含糊意圖不會移動。舊格式 `stateChanges.newLocationId` 會轉換為同一移動請求並執行相同驗證；新回應不可用 `stateChanges` 修改地圖。
+`stateChanges` 支援 HP/MP/EXP/金幣增減、道具增加/移除、劇情旗標、怪物擊敗紀錄、任務接受及任務完成回報。AI 只能對遊戲提供的「目前地區可接取任務」提出 `questAcceptances: ["QST-001"]`；玩家詢問任務不等於接受。HUD 按鈕及對話接受會共用同一驗證，確認玩家位於任務指定地圖、任務給予者 NPC 確實在場，且任務尚未接取或完成。靜態任務資料定義需求、獎勵值及上下限，完成時再次檢查需求；交付道具會從背包扣除，獎勵只發放一次。NPC 靜態資料以 ID、姓名、職稱、類別和所在地圖定義，類別提供預設數值，NPC 可設定個別數值覆寫。地圖的 `npcsPresent` 使用 NPC ID。地圖移動使用獨立欄位 `travelRequest`，格式為 `{ "destinationMapId": "MAP-002" }`。Gemini GenerateContent 請求會使用 JSON Schema 強制包含所有回應欄位，並將 `travelRequest.destinationMapId` 限制為本次可移動的相鄰地圖 ID，將 `questAcceptances` 限制為本區可接取任務 ID；這保證格式與欄位，不代表語意正確，因此遊戲端仍會驗證。只有玩家明確要求移動時才設定；模型收到的可移動地區清單包含相鄰地圖 ID、正式名稱、專屬別名及分類標籤。泛稱地點會根據可到達候選和上一個地區解析；若仍有多個候選，前端要求玩家選擇，不把泛稱綁定到單一地圖。若 AI 敘事聲稱玩家已移動，但缺少或填錯 `travelRequest`，系統會附上合法目的地清單要求模型重產一次完整 JSON；仍無有效請求時不會移動，並會在對話明確提示。前端再次驗證地圖 ID、連通性及戰鬥狀態後，才更新 `currentMapId`。詢問地點、觀察或含糊意圖不會移動。舊格式 `stateChanges.newLocationId` 會轉換為同一移動請求並執行相同驗證；新回應不可用 `stateChanges` 修改地圖。
 
 ## 設定保存
 

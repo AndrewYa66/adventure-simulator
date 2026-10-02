@@ -67,6 +67,25 @@ export interface MonsterStatic {
   tacticsAndBehavior: string; // 供 AI DM 參考的行為提示
 }
 
+/** NPC 數值類別：類別提供預設能力值，個別 NPC 可覆寫數值。 */
+export interface NpcCategoryStatic {
+  id: string;
+  name: string;
+  baseStats: { hp: number; atk: number; def: number; spd: number };
+}
+
+/** NPC 靜態資料：身份、職稱、所屬地區與類別數值。 */
+export interface NpcStatic {
+  id: string;
+  name: string;
+  title: string;
+  categoryId: string;
+  mapId: string;
+  stats?: Partial<{ hp: number; atk: number; def: number; spd: number }>;
+  alignment?: '守序善良' | '中立善良' | '混亂善良' | '守序中立' | '絕對中立' | '混亂中立' | '守序邪惡' | '中立邪惡' | '混亂邪惡';
+  description: string;
+}
+
 /** 地圖靜態資料 (來自 maps.json) */
 export interface MapStatic {
   id: string;             // 例如: "MAP-001"
@@ -88,7 +107,9 @@ export interface MapStatic {
 export interface QuestStatic {
   id: string;             // 例如: "QST-001"
   title: string;
+  questGiverId: string;
   questGiver: string;
+  mapId: string;
   objective: string;
   requirements: {
     defeatMonsters?: { monsterId: string; quantity: number }[];
@@ -199,6 +220,7 @@ export interface AIResponsePayload {
     removeItems?: { itemId: string; quantity: number }[];
     setFlags?: Record<string, boolean>;
     questUpdates?: { questId: string; status: 'completed' }[];
+    questAcceptances?: string[];
     defeatedMonsters?: { monsterId: string; quantity: number }[];
   };
   failureStateChanges?: AIResponsePayload['stateChanges'];

@@ -2,7 +2,9 @@
   {
     "id": "QST-001",
     "title": "清理綠林古道",
+    "questGiverId": "NPC-001",
     "questGiver": "村長埃爾德",
+    "mapId": "MAP-001",
     "objective": "擊敗 3 隻哥布林斥候並帶回哥布林耳朵",
     "requirements": {
       "defeatMonsters": [{ "monsterId": "MON-001", "quantity": 3 }],

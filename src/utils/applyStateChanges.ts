@@ -1,5 +1,6 @@
 import type { AIResponsePayload, PlayerState } from '../types/game';
 import { getItemById, getMapById, getMonsterById, getPlayerGrowthByLevel, getQuestById } from '../data/staticData';
+import { acceptQuest } from './questRules';
 
 export function applyStateChanges(player: PlayerState, response: AIResponsePayload, source: 'ai' | 'game' = 'ai'): PlayerState {
   const changes = response.stateChanges;
@@ -11,6 +12,13 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
   let questGold = 0;
   const rewardItems: { itemId: string; quantity: number }[] = [];
   const activeQuests = player.activeQuests.map((quest) => ({ ...quest }));
+
+  for (const questId of changes.questAcceptances ?? []) {
+    const quest = getQuestById(questId);
+    if (!quest) continue;
+    const accepted = acceptQuest({ ...player, activeQuests }, quest);
+    if (accepted) activeQuests.push(accepted.activeQuests[accepted.activeQuests.length - 1]);
+  }
 
   for (const item of (source === 'game' ? changes.addItems ?? [] : [])) {
     if (!getItemById(item.itemId) || !Number.isInteger(item.quantity) || item.quantity <= 0) continue;

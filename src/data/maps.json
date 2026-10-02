@@ -12,7 +12,7 @@
     "connectedMapIds": ["MAP-002"],
     "monstersPresent": [],
     "pointsOfInterest": ["微風旅館", "冒險者公會告示板"],
-    "npcsPresent": ["村長埃爾德"]
+    "npcsPresent": ["NPC-001", "NPC-002", "NPC-003"]
   },
   {
     "id": "MAP-002",

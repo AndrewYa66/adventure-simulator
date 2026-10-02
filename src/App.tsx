@@ -6,6 +6,7 @@ import { getItemById, getMapById, getMonsterById, getQuestById } from './data/st
 import { getPlayerStatBreakdown, resolveActionCheck } from './utils/gameChecks';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from './utils/travelIntent';
 import { sendPlayerAction } from './services/aiService';
+import { acceptQuest } from './utils/questRules';
 import type { AIProvider } from './services/aiModels';
 import { loadAIModelSettings, saveAIModelSettings, type AIModelSettings } from './services/aiModels';
 import { PlayerHUD } from './components/PlayerHUD';
@@ -115,11 +116,10 @@ export default function App() {
 
   const handleAcceptQuest = (questId: string) => {
     const quest = getQuestById(questId);
-    if (!quest || player.activeQuests.some((active) => active.questId === questId)) return;
-    updatePlayer({
-      ...player,
-      activeQuests: [...player.activeQuests, { questId, status: 'in_progress', progress: { defeatedMonsters: {} } }]
-    });
+    if (!quest) return;
+    const accepted = acceptQuest(player, quest);
+    if (!accepted) return;
+    updatePlayer(accepted);
     setMessages((previous) => [...previous, {
       id: Date.now().toString(),
       sender: 'system',
@@ -265,6 +265,11 @@ export default function App() {
         nextPlayer = applyStateChanges(player, resultToApply);
         updatePlayer(nextPlayer);
       }
+      const acceptedQuests = nextPlayer.activeQuests.filter((entry) => entry.status === 'in_progress' &&
+        !player.activeQuests.some((previous) => previous.questId === entry.questId));
+      const questNotice = acceptedQuests.length
+        ? `\n\n📜 已接取任務「${acceptedQuests.map((entry) => getQuestById(entry.questId)?.title ?? entry.questId).join('、')}」。`
+        : '';
 
       const textTravelIntent = resolveExplicitTravelIntent(actionText, player);
       const requestedDestinationId = textTravelIntent.kind === 'resolved'
@@ -294,7 +299,7 @@ export default function App() {
         {
           id: (Date.now() + 1).toString(),
           sender: 'ai',
-          text: `${storyText}${locationNotice}`,
+          text: `${storyText}${questNotice}${locationNotice}`,
           options: aiResponse.suggestedActions,
           travelOptions: textTravelIntent.kind === 'ambiguous'
             ? textTravelIntent.candidates.map((candidate) => ({ mapId: candidate.id, name: candidate.name }))
