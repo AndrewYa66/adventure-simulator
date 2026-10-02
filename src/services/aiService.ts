@@ -167,7 +167,7 @@ export async function sendPlayerAction(
 - 每次回應都必須包含 travelRequest；不移動時設為 null。storyText 不得宣稱玩家已抵達或切換地區，除非同一回應提供有效 travelRequest.destinationMapId。
 - 只有玩家明確表達「前往、走到、離開目前地區去、移動到」某個可前往地區，才設定 travelRequest.destinationMapId。該 ID 必須完全符合上方相鄰地區清單。
 - 詢問地點資訊、觀察遠方、談論某地或描述打算但尚未決定，都不算移動；travelRequest 設為 null。含糊的「去那裡看看」且目的地不明時，先在 storyText 詢問，不要猜測或切換。
-- 玩家說「回到村莊/森林」等泛稱時，先從相鄰地區中依 aliases/tags 找候選；若上一個地區符合且可返回，優先選上一個地區。若仍有多個合理候選，travelRequest 設為 null，並在 storyText 詢問具體目的地。
+- 玩家說「回到/前往」+「村莊/森林」等泛稱時，先從相鄰地區中依 aliases/tags 找候選；若上一個地區符合且可返回或前往，優先選上一個地區。若仍有多個合理候選，travelRequest 設為 null，並在 storyText 詢問具體目的地。
 - 不要透過 stateChanges 修改地區；實際移動由遊戲驗證 travelRequest 後套用。不可前往清單以外的地區。
 - 一般戰鬥由遊戲規則結算，不可敘事中自行宣告擊敗或扣除怪物。
 注意事項：
@@ -206,6 +206,33 @@ export async function sendPlayerAction(
   const userPrompt = `【近期劇情回顧】\n${recentHistory}\n\n【玩家行動】\n${actionText}`;
 
   const isOpenAI = settings.provider === 'openai';
+  const availableDestinationIds = availableDestinations.map((destination) => destination.id);
+  const jsonResponseSchema = {
+    type: 'object',
+    properties: {
+      storyText: { type: 'string' },
+      suggestedActions: { type: 'array', items: { type: 'string' } },
+      travelRequest: {
+        type: ['object', 'null'],
+        properties: {
+          destinationMapId: {
+            type: 'string',
+            enum: availableDestinationIds.length > 0 ? availableDestinationIds : ['__NO_AVAILABLE_DESTINATION__']
+          }
+        },
+        required: ['destinationMapId'],
+        additionalProperties: false
+      },
+      checkRequest: { type: ['object', 'null'] },
+      checkOutcomes: { type: ['object', 'null'] },
+      stateChanges: { type: ['object', 'null'], additionalProperties: true },
+      failureStateChanges: { type: ['object', 'null'], additionalProperties: true }
+    },
+    required: [
+      'storyText', 'suggestedActions', 'travelRequest', 'checkRequest', 'checkOutcomes', 'stateChanges', 'failureStateChanges'
+    ],
+    additionalProperties: false
+  };
   const endpoint = isOpenAI
     ? 'https://api.openai.com/v1/responses'
     : `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(settings.model)}:generateContent`;
@@ -218,7 +245,7 @@ export async function sendPlayerAction(
       }
     : {
         contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n${input}` }] }],
-        generationConfig: { responseMimeType: 'application/json' }
+        generationConfig: { responseMimeType: 'application/json', responseJsonSchema: jsonResponseSchema }
       };
   const headers: Record<string, string> = isOpenAI
     ? { 'Content-Type': 'application/json', Authorization: `Bearer ${cleanApiKey}` }
