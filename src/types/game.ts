@@ -43,6 +43,24 @@ export interface PlayerGrowthStatic {
 
 export type CharacterAlignment = '守序善良' | '中立善良' | '混亂善良' | '守序中立' | '絕對中立' | '混亂中立' | '守序邪惡' | '中立邪惡' | '混亂邪惡';
 
+/** NPC 與魔物共用的靜態單位欄位；玩家動態資料及單位專屬規則會在後續階段遷移。 */
+export interface UnitStaticBase {
+  id: string;
+  name: string;
+  title?: string;
+  categoryId?: string;
+  alignment?: CharacterAlignment;
+  stats?: Partial<UnitStatBlock>;
+}
+
+/** 所有非玩家單位使用的基礎戰鬥數值欄位。 */
+export interface UnitStatBlock {
+  hp: number;
+  atk: number;
+  def: number;
+  spd: number;
+}
+
 export interface CharacterClassStatic {
   id: string;
   name: string;
@@ -54,19 +72,11 @@ export interface CharacterClassStatic {
 }
 
 /** 怪物靜態資料 (來自 monsters.json) */
-export interface MonsterStatic {
-  id: string;             // 例如: "MON-001"
-  name: string;
-  alignment?: CharacterAlignment;
+export interface MonsterStatic extends UnitStaticBase {
   enName: string;
   tier: string;           // 例如: "普通 (Common)"
   recommendedLevel: number;
-  stats: {
-    hp: number;
-    atk: number;
-    def: number;
-    spd: number;
-  };
+  stats: UnitStatBlock;
   rewards: {
     exp: number;
     gold: number;
@@ -95,18 +105,14 @@ export interface MonsterStatic {
 export interface NpcCategoryStatic {
   id: string;
   name: string;
-  baseStats: { hp: number; atk: number; def: number; spd: number };
+  baseStats: UnitStatBlock;
 }
 
 /** NPC 靜態資料：身份、職稱、所屬地區與類別數值。 */
-export interface NpcStatic {
-  id: string;
-  name: string;
+export interface NpcStatic extends UnitStaticBase {
   title: string;
   categoryId: string;
   mapId: string;
-  stats?: Partial<{ hp: number; atk: number; def: number; spd: number }>;
-  alignment?: CharacterAlignment;
   shopId?: string;
   startingGold?: number;
   startingInventory?: { itemId: string; quantity: number }[];

@@ -94,3 +94,69 @@ export const canPlayerEnterMap = (player: import('../types/game').PlayerState, m
   return player.activeQuests.some((quest) => quest.questId === map.requiredQuestId &&
     (quest.status === 'in_progress' || quest.status === 'completed'));
 };
+
+/** Validate the existing split NPC/monster files against the shared unit contract. */
+export function validateWorldUnitData(): string[] {
+  const issues: string[] = [];
+  const seenIds = new Set<string>();
+  const validAlignments = new Set([
+    '守序善良', '中立善良', '混亂善良', '守序中立', '絕對中立',
+    '混亂中立', '守序邪惡', '中立邪惡', '混亂邪惡'
+  ]);
+  const validateStats = (unitId: string, stats: unknown) => {
+    if (!stats || typeof stats !== 'object' || !('hp' in stats) || !('atk' in stats) || !('def' in stats) || !('spd' in stats)) {
+      issues.push(`${unitId}: 缺少有效的 HP/ATK/DEF/SPD 數值`);
+      return;
+    }
+    const values = stats as Record<'hp' | 'atk' | 'def' | 'spd', unknown>;
+    if (!Number.isFinite(values.hp) || (values.hp as number) <= 0 ||
+        ![values.atk, values.def, values.spd].every((value) => Number.isFinite(value) && (value as number) >= 0)) {
+      issues.push(`${unitId}: 缺少有效的 HP/ATK/DEF/SPD 數值`);
+    }
+  };
+
+  for (const unit of [...npcsDatabase, ...monstersDatabase]) {
+    if (typeof unit.id !== 'string' || !unit.id.trim() || typeof unit.name !== 'string' || !unit.name.trim()) {
+      issues.push('單位缺少有效的 ID 或名稱');
+    }
+    if (seenIds.has(unit.id)) issues.push(`單位 ID 重複：${unit.id}`);
+    seenIds.add(unit.id);
+    if (unit.alignment !== undefined && !validAlignments.has(unit.alignment)) issues.push(`${unit.id}: 無效陣營 ${unit.alignment}`);
+  }
+
+  const seenCategoryIds = new Set<string>();
+  for (const category of npcCategoriesDatabase) {
+    if (seenCategoryIds.has(category.id)) issues.push(`NPC 類別 ID 重複：${category.id}`);
+    seenCategoryIds.add(category.id);
+    validateStats(category.id, category.baseStats);
+  }
+
+  for (const npc of npcsDatabase) {
+    const category = getNpcCategoryById(npc.categoryId);
+    const map = getMapById(npc.mapId);
+    validateStats(npc.id, getNpcStats(npc));
+    if (!category) issues.push(`${npc.id}: 找不到類別 ${npc.categoryId}`);
+    if (!map || !map.npcsPresent.includes(npc.id)) issues.push(`${npc.id}: 所在地圖 ${npc.mapId} 未正確列出此 NPC`);
+    if (npc.shopId) {
+      const shop = getShopById(npc.shopId);
+      if (!shop || shop.npcId !== npc.id) issues.push(`${npc.id}: 商店參照 ${npc.shopId} 無效`);
+    }
+  }
+
+  for (const monster of monstersDatabase) {
+    validateStats(monster.id, monster.stats);
+    if (!mapsDatabase.some((map) => map.monstersPresent.includes(monster.id))) issues.push(`${monster.id}: 未被任何地圖列為可遭遇敵人`);
+    if (monster.requiredQuestId && !getQuestById(monster.requiredQuestId)) issues.push(`${monster.id}: 找不到前置任務 ${monster.requiredQuestId}`);
+  }
+
+  for (const map of mapsDatabase) {
+    for (const npcId of map.npcsPresent) {
+      if (!npcsDatabase.some((npc) => npc.id === npcId && npc.mapId === map.id)) issues.push(`${map.id}: NPC 參照 ${npcId} 無效或所在地不一致`);
+    }
+    for (const monsterId of map.monstersPresent) {
+      if (!getMonsterById(monsterId)) issues.push(`${map.id}: 怪物參照 ${monsterId} 無效`);
+    }
+  }
+
+  return issues;
+}
