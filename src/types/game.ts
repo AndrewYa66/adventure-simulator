@@ -35,6 +35,7 @@ export interface PlayerGrowthStatic {
     type: 'active' | 'passive';
     costMp: number;
     description: string;
+    effect: { kind: 'damage_multiplier'; multiplier: number };
   };
   notes: string;
 }

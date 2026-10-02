@@ -1,6 +1,6 @@
 import React from 'react';
 import type { PlayerState } from '../types/game';
-import { getItemById, getMapById, getMonsterById, getNpcById, getNpcCategoryById, getNpcStats, getPlayerGrowthByLevel, questsDatabase } from '../data/staticData';
+import { getItemById, getMapById, getMonsterById, getNpcById, getNpcCategoryById, getNpcStats, getPlayerGrowthByLevel, getUnlockedSkillsByLevel, questsDatabase } from '../data/staticData';
 import { getPlayerStatBreakdown, STAT_LABELS } from '../utils/gameChecks';
 import { canAcceptQuest } from '../utils/questRules';
 
@@ -13,13 +13,16 @@ interface PlayerHUDProps {
   onStartCombat: (monsterId: string) => void;
   onFleeCombat: () => void;
   onAttack: () => void;
+  onUseSkill: (skillId: string) => void;
+  onUseItem: (itemId: string) => void;
 }
 
-export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWarning, onTravel, onAcceptQuest, onStartCombat, onFleeCombat, onAttack }) => {
+export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWarning, onTravel, onAcceptQuest, onStartCombat, onFleeCombat, onAttack, onUseSkill, onUseItem }) => {
   const growth = getPlayerGrowthByLevel(player.level);
   const maxHp = growth?.maxHp || 100;
   const maxMp = growth?.maxMp || 30;
   const maxExp = growth?.requiredExp || 100;
+  const unlockedSkills = getUnlockedSkillsByLevel(player.level);
 
   const currentMap = getMapById(player.currentMapId);
   const weapon = player.equipped.weaponItemId ? getItemById(player.equipped.weaponItemId) : null;
@@ -91,6 +94,8 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
             return (
               <li key={item.itemId} style={{ marginBottom: '4px' }}>
                 {staticItem?.name || item.itemId} x{item.quantity}
+                {staticItem?.type === 'consumable' && <button onClick={() => onUseItem(item.itemId)} disabled={player.hp <= 0} style={{ marginLeft: '6px', padding: '2px 5px', cursor: player.hp <= 0 ? 'not-allowed' : 'pointer' }}>使用</button>}
+                {staticItem?.type === 'consumable' && <span style={{ display: 'block', color: '#888', fontSize: '11px' }}>{staticItem.description}</span>}
               </li>
             );
           })}
@@ -128,6 +133,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
             <div style={{ marginBottom: '6px' }}>{monster?.name || player.combat.monsterId} HP {player.combat.currentHp}/{monster?.stats.hp}</div>
             <div style={{ color: '#aaa', fontSize: '11px', marginBottom: '8px' }}>第 {player.combat.round} 回合</div>
             <button onClick={onAttack} disabled={player.hp <= 0} style={{ marginRight: '6px', padding: '6px 10px', background: '#8e2424', color: 'white', border: '1px solid #b44', borderRadius: '4px', cursor: 'pointer' }}>攻擊</button>
+            {unlockedSkills.map((skill) => <button key={skill.id} onClick={() => onUseSkill(skill.id)} disabled={player.hp <= 0 || player.mp < skill.costMp} title={skill.description} style={{ marginRight: '6px', padding: '6px 10px', cursor: player.mp < skill.costMp || player.hp <= 0 ? 'not-allowed' : 'pointer' }}>{skill.name}（MP {skill.costMp}）</button>)}
             <button onClick={onFleeCombat} style={{ padding: '6px 10px', cursor: 'pointer' }}>脫離戰鬥</button>
           </div>;
         })() : (currentMap?.isSafeZone ? <div style={{ color: '#aaa', fontSize: '12px' }}>安全地區沒有可挑戰的敵人。</div> : (currentMap?.monstersPresent ?? []).map((monsterId) => {

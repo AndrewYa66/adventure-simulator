@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import type { ActionCheckResult, PlayerState, StoryMessage } from './types/game';
+import type { ActionCheckResult, PlayerGrowthStatic, PlayerState, StoryMessage } from './types/game';
 import { loadGameSession, resetPlayerState, saveGameSession } from './utils/playerStorage';
 import { applyStateChanges } from './utils/applyStateChanges';
-import { getItemById, getMapById, getMonsterById, getQuestById } from './data/staticData';
+import { getItemById, getMapById, getMonsterById, getPlayerGrowthByLevel, getQuestById, getUnlockedSkillsByLevel } from './data/staticData';
 import { getPlayerStatBreakdown, resolveActionCheck } from './utils/gameChecks';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from './utils/travelIntent';
 import { sendPlayerAction } from './services/aiService';
@@ -143,7 +143,7 @@ export default function App() {
     const monster = getMonsterById(monsterId);
     if (player.combat || !map || map.isSafeZone || !map.monstersPresent.includes(monsterId) || !monster) return;
     updatePlayer({ ...player, combat: { monsterId, currentHp: monster.stats.hp, round: 1 } });
-    appendSystemMessage(`你與${monster.name}進入戰鬥！每回合請使用「攻擊」進行擲骰攻防。`);
+    appendSystemMessage(`你與${monster.name}進入戰鬥！攻擊、已解鎖技能及消耗品各自消耗一個行動回合；敵人存活時會反擊並進行閃避檢定。`);
   };
 
   const handleFleeCombat = () => {
@@ -155,25 +155,30 @@ export default function App() {
     appendSystemMessage(`你與${monster?.name ?? '敵人'}拉開距離，戰鬥結束。`);
   };
 
-  const handleAttack = () => {
+  const handleCombatAction = (skill?: NonNullable<PlayerGrowthStatic['unlockedSkill']>) => {
     const combat = player.combat;
     const monster = combat ? getMonsterById(combat.monsterId) : undefined;
     if (!combat || !monster || player.hp <= 0) return;
+    if (skill && player.mp < skill.costMp) return;
 
     const attackCheck = {
       ...resolveActionCheck(player, 'atk', 10 + monster.stats.def),
       stat: 'atk' as const,
-      reason: `第 ${combat.round} 回合：攻擊${monster.name}`,
+      reason: `第 ${combat.round} 回合：${skill?.name ?? '攻擊'}${monster.name}`,
       label: '玩家攻擊檢定'
     };
     const checks: ActionCheckResult[] = [attackCheck];
     const playerAttack = getPlayerStatBreakdown(player, 'atk').statValue;
+    const damage = attackCheck.success
+      ? Math.max(1, Math.floor(playerAttack * (skill?.effect.multiplier ?? 1)) - monster.stats.def)
+      : 0;
     const monsterHp = attackCheck.success
-      ? Math.max(0, combat.currentHp - Math.max(1, playerAttack - monster.stats.def))
+      ? Math.max(0, combat.currentHp - damage)
       : combat.currentHp;
     const attackText = attackCheck.success
-      ? `攻擊命中，對${monster.name}造成 ${Math.max(1, playerAttack - monster.stats.def)} 點傷害。`
-      : `攻擊未命中${monster.name}。`;
+      ? `${skill?.name ?? '攻擊'}命中，對${monster.name}造成 ${damage} 點傷害。`
+      : `${skill?.name ?? '攻擊'}未命中${monster.name}。`;
+    const actionPlayer = skill ? { ...player, mp: player.mp - skill.costMp } : player;
 
     if (monsterHp <= 0) {
       const dropItems = monster.rewards.dropItems.flatMap((drop) => {
@@ -184,7 +189,7 @@ export default function App() {
       });
       const questUpdates = player.activeQuests.filter((quest) => quest.status === 'in_progress')
         .map((quest) => ({ questId: quest.questId, status: 'completed' as const }));
-      const nextPlayer = applyStateChanges(player, {
+      const nextPlayer = applyStateChanges(actionPlayer, {
         storyText: '', suggestedActions: [],
         stateChanges: {
           expChange: monster.rewards.exp,
@@ -201,28 +206,80 @@ export default function App() {
       const victoryState = { ...nextPlayer };
       delete victoryState.combat;
       updatePlayer(victoryState);
-      appendSystemMessage(`🏆 ${monster.name}已被擊敗！獲得 ${monster.rewards.exp} EXP、${monster.rewards.gold} 金幣。${dropText}${questText ? `\n${questText}` : ''}`, checks);
+      appendSystemMessage(`🏆 ${attackText}\n${monster.name}已被擊敗！獲得 ${monster.rewards.exp} EXP、${monster.rewards.gold} 金幣。${dropText}${questText ? `\n${questText}` : ''}`, checks);
       return;
     }
 
     const dodgeCheck = {
-      ...resolveActionCheck(player, 'def', 10 + Math.floor(monster.stats.atk / 2)),
+      ...resolveActionCheck(actionPlayer, 'def', 10 + Math.floor(monster.stats.atk / 2)),
       stat: 'def' as const,
       reason: `${monster.name}反擊：玩家進行閃避檢定`,
       label: '玩家閃避檢定'
     };
     checks.push(dodgeCheck);
-    const damage = dodgeCheck.success ? 0 : Math.max(1, monster.stats.atk - Math.floor(getPlayerStatBreakdown(player, 'def').statValue / 4));
-    const hp = Math.max(0, player.hp - damage);
+    const receivedDamage = dodgeCheck.success ? 0 : Math.max(1, monster.stats.atk - Math.floor(getPlayerStatBreakdown(actionPlayer, 'def').statValue / 4));
+    const hp = Math.max(0, actionPlayer.hp - receivedDamage);
     const stillFighting = hp > 0;
     updatePlayer({
-      ...player,
+      ...actionPlayer,
       hp,
       ...(stillFighting ? { combat: { ...combat, currentHp: monsterHp, round: combat.round + 1 } } : { combat: undefined })
     });
     appendSystemMessage(`${attackText}\n${dodgeCheck.success
       ? `你成功閃避${monster.name}的反擊。`
-      : `${monster.name}反擊命中，你受到 ${damage} 點傷害。`}${stillFighting ? `\n第 ${combat.round + 1} 回合開始。` : '\n你失去戰鬥能力，敵人停止追擊。'}`, checks);
+      : `${monster.name}反擊命中，你受到 ${receivedDamage} 點傷害。`}${stillFighting ? `\n第 ${combat.round + 1} 回合開始。` : '\n你失去戰鬥能力，敵人停止追擊。'}`, checks);
+  };
+
+  const handleAttack = () => handleCombatAction();
+
+  const handleUseSkill = (skillId: string) => {
+    const skill = getUnlockedSkillsByLevel(player.level).find((entry) => entry.id === skillId);
+    if (!skill || !player.combat || player.mp < skill.costMp) return;
+    handleCombatAction(skill);
+  };
+
+  const handleUseItem = (itemId: string) => {
+    const item = getItemById(itemId);
+    const inventoryEntry = player.inventory.find((entry) => entry.itemId === itemId);
+    if (!item || item.type !== 'consumable' || !inventoryEntry || inventoryEntry.quantity <= 0 || player.hp <= 0) return;
+    const growth = getPlayerGrowthByLevel(player.level);
+    const hpRestore = Math.min(item.effect.hpRestore ?? 0, Math.max(0, (growth?.maxHp ?? player.hp) - player.hp));
+    const mpRestore = Math.min(item.effect.mpRestore ?? 0, Math.max(0, (growth?.maxMp ?? player.mp) - player.mp));
+    if (hpRestore <= 0 && mpRestore <= 0) {
+      appendSystemMessage(`${item.name}目前無法恢復任何 HP 或 MP，沒有消耗道具。`);
+      return;
+    }
+
+    const next = applyStateChanges(player, {
+      storyText: '', suggestedActions: [],
+      stateChanges: { hpChange: hpRestore, mpChange: mpRestore, removeItems: [{ itemId, quantity: 1 }] }
+    }, 'game');
+    const details = [hpRestore > 0 ? `HP +${hpRestore}` : '', mpRestore > 0 ? `MP +${mpRestore}` : ''].filter(Boolean).join('、');
+    if (!player.combat) {
+      updatePlayer(next);
+      appendSystemMessage(`使用${item.name}，${details}。`);
+      return;
+    }
+
+    const monster = getMonsterById(player.combat.monsterId);
+    if (!monster) return;
+    const dodgeCheck = {
+      ...resolveActionCheck(next, 'def', 10 + Math.floor(monster.stats.atk / 2)),
+      stat: 'def' as const,
+      reason: `${monster.name}反擊：玩家使用道具後進行閃避檢定`,
+      label: '玩家閃避檢定'
+    };
+    const receivedDamage = dodgeCheck.success ? 0 : Math.max(1, monster.stats.atk - Math.floor(getPlayerStatBreakdown(next, 'def').statValue / 4));
+    const hp = Math.max(0, next.hp - receivedDamage);
+    const stillFighting = hp > 0;
+    updatePlayer({
+      ...next,
+      hp,
+      ...(stillFighting ? { combat: { ...player.combat, round: player.combat.round + 1 } } : { combat: undefined })
+    });
+    appendSystemMessage(`使用${item.name}，${details}。\n${dodgeCheck.success
+      ? `你成功閃避${monster.name}的反擊。`
+      : `${monster.name}反擊命中，你受到 ${receivedDamage} 點傷害。`}${stillFighting ? `\n第 ${player.combat.round + 1} 回合開始。` : '\n你失去戰鬥能力，敵人停止追擊。'}`, [dodgeCheck]);
   };
 
   const handleSendAction = async (actionText: string) => {
@@ -338,7 +395,7 @@ export default function App() {
         combatActive={!!player.combat}
         onTravel={handleTravel}
       />
-      {isSidebarOpen && <PlayerHUD player={player} onReset={handleResetPlayer} storageWarning={storageWarning} onTravel={handleTravel} onAcceptQuest={handleAcceptQuest} onStartCombat={handleStartCombat} onFleeCombat={handleFleeCombat} onAttack={handleAttack} />}
+      {isSidebarOpen && <PlayerHUD player={player} onReset={handleResetPlayer} storageWarning={storageWarning} onTravel={handleTravel} onAcceptQuest={handleAcceptQuest} onStartCombat={handleStartCombat} onFleeCombat={handleFleeCombat} onAttack={handleAttack} onUseSkill={handleUseSkill} onUseItem={handleUseItem} />}
       {isKeyModalOpen && <ApiKeyModal
         isOpen={true}
         currentSettings={modelSettings}

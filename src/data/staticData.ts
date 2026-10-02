@@ -57,6 +57,10 @@ export const getPlayerGrowthByLevel = (level: number): PlayerGrowthStatic | unde
   return playerGrowthDatabase.find((growth) => growth.level === level);
 };
 
+export const getUnlockedSkillsByLevel = (level: number) => playerGrowthDatabase
+  .filter((growth) => growth.level <= level && growth.unlockedSkill?.type === 'active')
+  .flatMap((growth) => growth.unlockedSkill ? [growth.unlockedSkill] : []);
+
 export const getQuestById = (id: string): QuestStatic | undefined => {
   return questsDatabase.find((quest) => quest.id === id);
 };

@@ -8,7 +8,18 @@
     },
     "buyPrice": 10,
     "sellPrice": 5,
-    "description": "恢復 30 點生命值。"
+    "description": "使用後恢復 30 點生命值，可在戰鬥中使用。"
+  },
+  {
+    "id": "ITEM-003",
+    "name": "小型魔力藥水",
+    "type": "consumable",
+    "effect": {
+      "mpRestore": 15
+    },
+    "buyPrice": 12,
+    "sellPrice": 6,
+    "description": "使用後恢復 15 點魔力，可在戰鬥中使用。"
   },
   {
     "id": "ITEM-002",

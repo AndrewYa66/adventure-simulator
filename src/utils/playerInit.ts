@@ -16,6 +16,7 @@ export const createInitialPlayer = (playerName: string = '亞瑟'): PlayerState 
     currentMapId: 'MAP-001',
     inventory: [
       { itemId: 'ITEM-001', quantity: 2 },
+      { itemId: 'ITEM-003', quantity: 1 },
       { itemId: 'ITEM-002', quantity: 1 }
     ],
     equipped: {
