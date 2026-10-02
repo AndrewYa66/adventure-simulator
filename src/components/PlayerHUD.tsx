@@ -1,6 +1,6 @@
 import React from 'react';
 import type { PlayerState } from '../types/game';
-import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getMonsterById, getNpcCategoryById, getPlayerGrowthByLevel, getPlayerResourceCaps, getQuestById, getShopForNpc, getUnlockedSkillsByLevel, getWorldUnitsAtMap, questsDatabase } from '../data/staticData';
+import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getNpcCategoryById, getPlayerGrowthByLevel, getPlayerResourceCaps, getQuestById, getShopForNpc, getUnlockedSkillsByLevel, getWorldUnitById, getWorldUnitsAtMap, questsDatabase } from '../data/staticData';
 import { getPlayerStatBreakdown, STAT_LABELS } from '../utils/gameChecks';
 import { canAcceptQuest, canTurnInQuest } from '../utils/questRules';
 import { canPlayerAct, isPlayerUnconscious } from '../utils/playerStatus';
@@ -188,7 +188,8 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
       <div>
         <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #444' }}>👹 遭遇</h4>
         {player.combat ? (() => {
-          const monster = getMonsterById(player.combat.monsterId);
+          const unit = getWorldUnitById(player.combat.monsterId);
+          const monster = unit?.kind === 'monster' ? unit : undefined;
           return <div>
             <div style={{ marginBottom: '6px' }}>{monster?.name || player.combat.monsterId} HP {player.combat.currentHp}/{monster?.stats.hp}</div>
             <div style={{ color: '#aaa', fontSize: '11px', marginBottom: '8px' }}>第 {player.combat.round} 回合</div>
@@ -197,7 +198,8 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
             <button onClick={onFleeCombat} disabled={!canPlayerAct(player)} style={{ padding: '6px 10px', cursor: canPlayerAct(player) ? 'pointer' : 'not-allowed' }}>脫離戰鬥</button>
           </div>;
         })() : (() => {
-          const monster = player.encounteredMonsterId ? getMonsterById(player.encounteredMonsterId) : undefined;
+          const unit = player.encounteredMonsterId ? getWorldUnitById(player.encounteredMonsterId) : undefined;
+          const monster = unit?.kind === 'monster' ? unit : undefined;
           return monster && currentMap?.monstersPresent.includes(monster.id)
             ? <div>
               <div style={{ color: '#ffcc80', fontSize: '12px', marginBottom: '5px' }}>已遭遇</div>
@@ -220,7 +222,9 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
             {status && <div style={{ marginTop: '4px', color: '#bbb' }}>
               {(quest.requirements.defeatMonsters ?? []).map((requirement) => {
                 const count = active?.progress?.defeatedMonsters[requirement.monsterId] ?? 0;
-                return <div key={requirement.monsterId}>擊敗 {getMonsterById(requirement.monsterId)?.name || requirement.monsterId}: {Math.min(count, requirement.quantity)}/{requirement.quantity}</div>;
+                const unit = getWorldUnitById(requirement.monsterId);
+                const name = unit?.kind === 'monster' ? unit.name : requirement.monsterId;
+                return <div key={requirement.monsterId}>擊敗 {name}: {Math.min(count, requirement.quantity)}/{requirement.quantity}</div>;
               })}
               {(quest.requirements.collectItems ?? []).map((requirement) => {
                 const item = getItemById(requirement.itemId);

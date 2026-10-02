@@ -1,6 +1,6 @@
 import type { PlayerState, AIResponsePayload } from '../types/game';
 import type { AIModelSettings } from './aiModels';
-import { canPlayerEnterMap, getItemById, getMapById, getMonsterById, getNpcCategoryById, getWorldUnitsAtMap, itemsDatabase, questsDatabase } from '../data/staticData';
+import { canPlayerEnterMap, getItemById, getMapById, getNpcCategoryById, getWorldUnitById, getWorldUnitsAtMap, itemsDatabase, questsDatabase } from '../data/staticData';
 import { canAcceptQuest, canTurnInQuest } from '../utils/questRules';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from '../utils/travelIntent';
 
@@ -175,6 +175,7 @@ export async function sendPlayerAction(
     (!unit.source.requiredQuestId || playerState.activeQuests.some((quest) =>
       quest.questId === unit.source.requiredQuestId && quest.status === 'in_progress'
     )) ? [{ id: unit.id, name: unit.name }] : []);
+  const encounteredUnit = playerState.encounteredMonsterId ? getWorldUnitById(playerState.encounteredMonsterId) : undefined;
 
   if (!cleanApiKey) {
     throw new Error('所選模型的 API Key 尚未設定。請開啟模型設定。');
@@ -196,7 +197,7 @@ export async function sendPlayerAction(
 - 當前可交付任務（需玩家回到任務給予者所在位置且需求齊備）: ${JSON.stringify(turnInQuests)}
 - 上一個地區: ${previousMap ? `${previousMap.name} (${previousMap.id})，分類 ${JSON.stringify(previousMap.locationTags ?? [])}` : '無'}
 - 當前戰鬥: ${playerState.combat ? JSON.stringify(playerState.combat) : '無'}
-- 目前已遭遇敵人: ${playerState.encounteredMonsterId ? getMonsterById(playerState.encounteredMonsterId)?.name ?? playerState.encounteredMonsterId : '無'}
+- 目前已遭遇敵人: ${encounteredUnit?.kind === 'monster' ? encounteredUnit.name : playerState.encounteredMonsterId ?? '無'}
 - 本地區可遭遇敵人（只可選這些 ID）: ${JSON.stringify(encounterCandidates)}
 - 背包物品 ID 列表: ${JSON.stringify(playerState.inventory)}
 - 世界靜態物品清單（只可使用這些 ID/名稱）: ${JSON.stringify(itemsDatabase.map((item) => ({ id: item.id, name: item.name, type: item.type })))}

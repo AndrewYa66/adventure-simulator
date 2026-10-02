@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ActionCheckResult, PlayerGrowthStatic, PlayerState, StoryMessage } from './types/game';
 import { loadGameSession, resetPlayerState, saveGameSession } from './utils/playerStorage';
 import { applyStateChanges } from './utils/applyStateChanges';
-import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getMonsterById, getPlayerResourceCaps, getQuestById, getShopById, getUnlockedSkillsByLevel, itemsDatabase } from './data/staticData';
+import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getQuestById, getShopById, getUnlockedSkillsByLevel, getWorldUnitById, getWorldUnitsAtMap, itemsDatabase } from './data/staticData';
 import { getPlayerStatBreakdown, resolveActionCheck } from './utils/gameChecks';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from './utils/travelIntent';
 import { sendPlayerAction } from './services/aiService';
@@ -19,7 +19,12 @@ import { isSelfDamageIntent, parseExplicitSelfDamage, unsupportedInventoryItemRe
 import { buyItem, purchaseService, sellItem } from './utils/tradeRules';
 import type { CharacterAlignment } from './types/game';
 
-function resolveEnemyTurn(player: PlayerState, combat: NonNullable<PlayerState['combat']>, monster: NonNullable<ReturnType<typeof getMonsterById>>) {
+function getMonsterStatic(unitId: string) {
+  const unit = getWorldUnitById(unitId);
+  return unit?.kind === 'monster' ? unit.source : undefined;
+}
+
+function resolveEnemyTurn(player: PlayerState, combat: NonNullable<PlayerState['combat']>, monster: NonNullable<ReturnType<typeof getMonsterStatic>>) {
   const special = monster.specialAbilities.find((ability) => ability.combatAction && combat.round % ability.combatAction.triggerEveryRounds === 0);
   const action = special?.combatAction;
   const checkStat = action?.checkStat ?? 'def';
@@ -49,7 +54,7 @@ function resolveEnemyTurn(player: PlayerState, combat: NonNullable<PlayerState['
 
 function createRestoreNotice(player: PlayerState, savedAt: number, messageCount: number): StoryMessage {
   const map = getMapById(player.currentMapId);
-  const combatMonster = player.combat ? getMonsterById(player.combat.monsterId) : undefined;
+  const combatMonster = player.combat ? getMonsterStatic(player.combat.monsterId) : undefined;
   const activeQuests = player.activeQuests.filter((quest) => quest.status === 'in_progress')
     .map((quest) => getQuestById(quest.questId)?.title ?? quest.questId);
   const inventory = player.inventory.map((entry) => `${getItemById(entry.itemId)?.name ?? entry.itemId} ×${entry.quantity}`);
@@ -61,7 +66,7 @@ function createRestoreNotice(player: PlayerState, savedAt: number, messageCount:
     `持有物：${inventory.length ? inventory.join('、') : '無'}`
   ];
   if (combatMonster && player.combat) lines.push(`戰鬥恢復：第 ${player.combat.round} 回合，${combatMonster.name} HP ${player.combat.currentHp}/${combatMonster.stats.hp}`);
-  else if (player.encounteredMonsterId) lines.push(`已遭遇敵人：${getMonsterById(player.encounteredMonsterId)?.name ?? player.encounteredMonsterId}（可從 HUD 發起戰鬥）`);
+  else if (player.encounteredMonsterId) lines.push(`已遭遇敵人：${getMonsterStatic(player.encounteredMonsterId)?.name ?? player.encounteredMonsterId}（可從 HUD 發起戰鬥）`);
   else lines.push('戰鬥狀態：目前沒有進行中的戰鬥，也尚未遭遇敵人。');
   return {
     id: 'session-restore-notice',
@@ -251,7 +256,7 @@ export default function App() {
 
   const handleStartCombat = (monsterId: string) => {
     const map = getMapById(player.currentMapId);
-    const monster = getMonsterById(monsterId);
+    const monster = getMonsterStatic(monsterId);
     if (player.combat || !canPlayerAct(player) || !map || map.isSafeZone || player.encounteredMonsterId !== monsterId || !map.monstersPresent.includes(monsterId) || !monster ||
         (monster.requiredQuestId && !player.activeQuests.some((quest) => quest.questId === monster.requiredQuestId && quest.status === 'in_progress'))) return;
     updatePlayer({ ...player, combat: { monsterId, currentHp: monster.stats.hp, round: 1 } });
@@ -260,7 +265,7 @@ export default function App() {
 
   const handleFleeCombat = () => {
     if (!player.combat || !canPlayerAct(player)) return;
-    const monster = getMonsterById(player.combat.monsterId);
+    const monster = getMonsterStatic(player.combat.monsterId);
     const outOfCombat = { ...player };
     delete outOfCombat.combat;
     delete outOfCombat.encounteredMonsterId;
@@ -270,7 +275,7 @@ export default function App() {
 
   const handleCombatAction = (skill?: NonNullable<PlayerGrowthStatic['unlockedSkill']>, sourcePlayer: PlayerState = player) => {
     const combat = sourcePlayer.combat;
-    const monster = combat ? getMonsterById(combat.monsterId) : undefined;
+    const monster = combat ? getMonsterStatic(combat.monsterId) : undefined;
     if (!combat || !monster || sourcePlayer.isDead) return;
     if (isPlayerUnconscious(sourcePlayer)) {
       const recovered = { ...sourcePlayer, statusEffects: sourcePlayer.statusEffects.filter((effect) => effect.id !== 'unconscious'), combat: { ...combat } };
@@ -385,7 +390,7 @@ export default function App() {
       return;
     }
 
-    const monster = getMonsterById(player.combat.monsterId);
+    const monster = getMonsterStatic(player.combat.monsterId);
     if (!monster) return;
     const enemyTurn = resolveEnemyTurn({ ...next, combat: player.combat }, player.combat, monster);
     updatePlayer(enemyTurn.player);
@@ -431,9 +436,10 @@ export default function App() {
     const attackIntent = !isQuestion && /(?:攻擊|攻打|打倒|擊倒|砍向|砍|刺向|刺|揮擊|attack|strike|fight)/iu.test(actionText) && !/(?:攻擊自己|打自己|刺自己|砍自己)/u.test(actionText);
     if (attackIntent && canPlayerAct(player)) {
       const map = getMapById(player.currentMapId);
-      const available = (map?.monstersPresent ?? []).map((id) => getMonsterById(id)).filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
-      const matched = available.filter((monster) => actionText.includes(monster.name) || actionText.includes(monster.id) || actionText.toLowerCase().includes(monster.enName.toLowerCase()));
-      const encountered = player.encounteredMonsterId ? getMonsterById(player.encounteredMonsterId) : undefined;
+      const available = getWorldUnitsAtMap(player.currentMapId).filter((unit) => unit.kind === 'monster');
+      const matched = available.filter((unit) => actionText.includes(unit.name) || actionText.includes(unit.id) || actionText.toLowerCase().includes(unit.source.enName.toLowerCase()));
+      const encounteredUnit = player.encounteredMonsterId ? getWorldUnitById(player.encounteredMonsterId) : undefined;
+      const encountered = encounteredUnit?.kind === 'monster' ? encounteredUnit : undefined;
       const target = matched.length === 1 ? matched[0] : matched.length === 0 ? encountered : undefined;
       const userMessage: StoryMessage = { id: `${Date.now()}-user`, sender: 'user', text: actionText, timestamp: new Date().toLocaleTimeString() };
       if (!player.combat && (!map || map.isSafeZone || !encountered)) {
@@ -442,7 +448,7 @@ export default function App() {
         return;
       }
       if (player.combat && matched.length === 1 && matched[0].id !== player.combat.monsterId) {
-        setMessages((prev) => [...prev, userMessage, { id: `${Date.now()}-combat`, sender: 'system', text: `目前正在與${getMonsterById(player.combat!.monsterId)?.name ?? '敵人'}戰鬥，無法切換目標。`, timestamp: new Date().toLocaleTimeString() }]);
+        setMessages((prev) => [...prev, userMessage, { id: `${Date.now()}-combat`, sender: 'system', text: `目前正在與${getMonsterStatic(player.combat!.monsterId)?.name ?? '敵人'}戰鬥，無法切換目標。`, timestamp: new Date().toLocaleTimeString() }]);
         return;
       }
       if (!player.combat && matched.length === 1 && matched[0].id !== encountered?.id) {
@@ -562,11 +568,12 @@ export default function App() {
       }
       if (nextPlayer.isDead) nextPlayer = { ...nextPlayer, encounteredMonsterId: undefined };
       const requestedEncounter = aiResponse.encounterRequest?.monsterId;
-      const requestedMonster = requestedEncounter ? getMonsterById(requestedEncounter) : undefined;
+      const requestedUnit = requestedEncounter ? getWorldUnitById(requestedEncounter) : undefined;
+      const requestedMonster = requestedUnit?.kind === 'monster' ? requestedUnit : undefined;
       const currentMap = getMapById(player.currentMapId);
       const encounterAllowed = !nextPlayer.combat && !nextPlayer.isDead && canPlayerAct(nextPlayer) && !!currentMap && !currentMap.isSafeZone &&
-        !!requestedMonster && currentMap.monstersPresent.includes(requestedMonster.id) &&
-        (!requestedMonster.requiredQuestId || nextPlayer.activeQuests.some((quest) => quest.questId === requestedMonster.requiredQuestId && quest.status === 'in_progress'));
+        !!requestedMonster && requestedMonster.mapIds.includes(currentMap.id) && currentMap.monstersPresent.includes(requestedMonster.id) &&
+        (!requestedMonster.source.requiredQuestId || nextPlayer.activeQuests.some((quest) => quest.questId === requestedMonster.source.requiredQuestId && quest.status === 'in_progress'));
       const encounterNotice = encounterAllowed && requestedMonster
         ? `\n\n👁️ 遭遇：${requestedMonster.name}。已加入 HUD，可從右側開始戰鬥。`
         : '';
