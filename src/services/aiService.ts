@@ -39,7 +39,7 @@ function getReadableNarrative(text: string, depth = 0): string {
     // Plain text is a useful fallback; JSON-like text is not suitable for the story log.
   }
 
-  if (/^[\[{]/.test(cleaned) || /"(?:storyText|suggestedActions|stateChanges)"\s*:/.test(cleaned)) {
+  if (cleaned.startsWith('{') || cleaned.startsWith('[') || /"(?:storyText|suggestedActions|stateChanges)"\s*:/.test(cleaned)) {
     return FORMAT_FALLBACK;
   }
   return cleaned;
@@ -226,6 +226,6 @@ export async function sendPlayerAction(
       suggestedActions: ['重新描述行動', '觀察周圍環境']
     };
   } catch (err: unknown) {
-    throw new Error(err instanceof Error ? err.message : `${settings.provider} API 連線失敗。`);
+    throw new Error(err instanceof Error ? err.message : `${settings.provider} API 連線失敗。`, { cause: err });
   }
 }

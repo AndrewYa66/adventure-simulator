@@ -1,12 +1,17 @@
-import type { PlayerState } from '../types/game';
+import type { ActionCheckResult, PlayerState } from '../types/game';
 import { getItemById, getPlayerGrowthByLevel } from '../data/staticData';
 
-export interface CheckResult {
-  die: number;
+export const STAT_LABELS: Record<ActionCheckResult['stat'], string> = {
+  atk: '攻擊',
+  def: '防禦',
+  spd: '速度'
+};
+
+export interface PlayerStatBreakdown {
+  baseStat: number;
+  equipmentBonus: number;
+  statValue: number;
   modifier: number;
-  total: number;
-  dc: number;
-  success: boolean;
 }
 
 function randomD20(): number {
@@ -20,21 +25,29 @@ function randomD20(): number {
   return (values[0] % 20) + 1;
 }
 
-export function resolveActionCheck(
+export function getPlayerStatBreakdown(
   player: PlayerState,
-  stat: 'atk' | 'def' | 'spd',
-  dc: number
-): CheckResult {
+  stat: ActionCheckResult['stat']
+): PlayerStatBreakdown {
   const growth = getPlayerGrowthByLevel(player.level);
-  const base = stat === 'atk' ? growth?.baseAtk ?? 10 : stat === 'def' ? growth?.baseDef ?? 5 : growth?.spd ?? 10;
+  const baseStat = stat === 'atk' ? growth?.baseAtk ?? 10 : stat === 'def' ? growth?.baseDef ?? 5 : growth?.spd ?? 10;
   const equipmentIds = [player.equipped.weaponItemId, player.equipped.armorItemId, player.equipped.accessoryItemId];
-  const bonus = equipmentIds.reduce((total, itemId) => {
+  const equipmentBonus = equipmentIds.reduce((total, itemId) => {
     const effect = itemId ? getItemById(itemId)?.effect : undefined;
     const value = stat === 'atk' ? effect?.atkBonus : stat === 'def' ? effect?.defBonus : effect?.spdBonus;
     return total + (value ?? 0);
   }, 0);
-  const modifier = Math.floor((base + bonus - 10) / 2);
-  const die = randomD20();
-  const total = die + modifier;
-  return { die, modifier, total, dc, success: total >= dc };
+  const statValue = baseStat + equipmentBonus;
+  return { baseStat, equipmentBonus, statValue, modifier: Math.floor((statValue - 10) / 2) };
+}
+
+export function resolveActionCheck(
+  player: PlayerState,
+  stat: ActionCheckResult['stat'],
+  dc: number
+): Omit<ActionCheckResult, 'reason' | 'stat'> {
+  const breakdown = getPlayerStatBreakdown(player, stat);
+  const d20 = randomD20();
+  const total = d20 + breakdown.modifier;
+  return { ...breakdown, d20Rolls: [d20], total, dc, success: total >= dc };
 }

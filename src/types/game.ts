@@ -144,7 +144,21 @@ export interface StoryMessage {
   sender: 'ai' | 'user' | 'system';
   text: string;
   options?: string[];
+  checkResult?: ActionCheckResult;
   timestamp: string;
+}
+
+export interface ActionCheckResult {
+  reason: string;
+  stat: 'atk' | 'def' | 'spd';
+  d20Rolls: number[];
+  baseStat: number;
+  equipmentBonus: number;
+  statValue: number;
+  modifier: number;
+  total: number;
+  dc: number;
+  success: boolean;
 }
 
 /** AI 結構化回應 (Gemini 回傳格式) */

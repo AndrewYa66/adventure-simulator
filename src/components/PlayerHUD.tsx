@@ -1,6 +1,7 @@
 import React from 'react';
 import type { PlayerState } from '../types/game';
 import { getItemById, getMapById, getPlayerGrowthByLevel, questsDatabase } from '../data/staticData';
+import { getPlayerStatBreakdown, STAT_LABELS } from '../utils/gameChecks';
 
 interface PlayerHUDProps {
   player: PlayerState;
@@ -19,9 +20,14 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
   const currentMap = getMapById(player.currentMapId);
   const weapon = player.equipped.weaponItemId ? getItemById(player.equipped.weaponItemId) : null;
   const armor = player.equipped.armorItemId ? getItemById(player.equipped.armorItemId) : null;
+  const combatStats = (['atk', 'def', 'spd'] as const).map((stat) => ({
+    stat,
+    label: STAT_LABELS[stat],
+    ...getPlayerStatBreakdown(player, stat)
+  }));
 
   return (
-    <div style={{ width: '300px', backgroundColor: '#212121', padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+    <div style={{ width: '300px', minHeight: 0, overflowY: 'auto', backgroundColor: '#212121', padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
       <div>
         <h3 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #444', paddingBottom: '6px' }}>👤 角色狀態</h3>
         <p style={{ margin: '4px 0' }}><strong>姓名:</strong> {player.name}</p>
@@ -49,6 +55,20 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
             <div style={{ width: `${Math.min(100, (player.mp / maxMp) * 100)}%`, height: '100%', backgroundColor: '#1e88e5' }} />
           </div>
         </div>
+      </div>
+
+      <div>
+        <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #444' }}>📊 戰鬥能力</h4>
+        {combatStats.map((ability) => (
+          <div key={ability.stat} style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', padding: '3px 0', fontSize: '12px' }}>
+            <strong>{ability.label}</strong>
+            <span style={{ textAlign: 'right' }}>
+              <strong>{ability.statValue}</strong> <span style={{ color: '#aaa' }}>(修正 {ability.modifier >= 0 ? '+' : ''}{ability.modifier})</span>
+              <span style={{ display: 'block', color: '#888', fontSize: '10px' }}>基礎 {ability.baseStat} · 裝備 {ability.equipmentBonus >= 0 ? '+' : ''}{ability.equipmentBonus}</span>
+            </span>
+          </div>
+        ))}
+        <p style={{ color: '#888', fontSize: '11px', margin: '5px 0 0' }}>數值包含目前裝備加成；擲 d20 時使用修正值。</p>
       </div>
 
       {/* 裝備欄 */}

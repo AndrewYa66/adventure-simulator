@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { PlayerState, StoryMessage } from './types/game';
+import type { ActionCheckResult, PlayerState, StoryMessage } from './types/game';
 import { loadPlayerState, resetPlayerState, savePlayerState } from './utils/playerStorage';
 import { applyStateChanges } from './utils/applyStateChanges';
 import { getMapById, getQuestById } from './data/staticData';
@@ -110,10 +110,12 @@ export default function App() {
       const aiResponse = await sendPlayerAction(modelSettings, apiKey, player, actionText, historyTexts);
       let storyText = aiResponse.storyText;
       let resultToApply = aiResponse;
+      let checkResult: ActionCheckResult | undefined;
 
       if (aiResponse.checkRequest && aiResponse.checkOutcomes) {
         const check = resolveActionCheck(player, aiResponse.checkRequest.stat, aiResponse.checkRequest.dc);
-        storyText = `${check.success ? aiResponse.checkOutcomes.successText : aiResponse.checkOutcomes.failureText}\n\n🎲 ${aiResponse.checkRequest.reason}：d20 ${check.die} ${check.modifier >= 0 ? '+' : '−'} ${Math.abs(check.modifier)} = ${check.total}，DC ${check.dc}，${check.success ? '成功' : '失敗'}。`;
+        storyText = check.success ? aiResponse.checkOutcomes.successText : aiResponse.checkOutcomes.failureText;
+        checkResult = { ...check, stat: aiResponse.checkRequest.stat, reason: aiResponse.checkRequest.reason };
         resultToApply = {
           ...aiResponse,
           stateChanges: check.success ? aiResponse.stateChanges : aiResponse.failureStateChanges
@@ -132,6 +134,7 @@ export default function App() {
           sender: 'ai',
           text: storyText,
           options: aiResponse.suggestedActions,
+          checkResult,
           timestamp: new Date().toLocaleTimeString()
         }
       ]);
