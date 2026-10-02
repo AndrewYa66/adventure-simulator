@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { ActionCheckResult, PlayerState, StoryMessage } from './types/game';
+import type { ActionCheckResult, MapStatic, PlayerState, StoryMessage } from './types/game';
 import { loadGameSession, resetPlayerState, saveGameSession } from './utils/playerStorage';
 import { applyStateChanges } from './utils/applyStateChanges';
 import { getItemById, getMapById, getMonsterById, getQuestById } from './data/staticData';
@@ -34,14 +34,42 @@ function createRestoreNotice(player: PlayerState, savedAt: number, messageCount:
   };
 }
 
-function inferExplicitTravelDestination(actionText: string, player: PlayerState) {
+type TravelIntentResolution =
+  | { kind: 'resolved'; destination: MapStatic }
+  | { kind: 'ambiguous'; candidates: MapStatic[] }
+  | { kind: 'none' };
+
+function resolveExplicitTravelIntent(actionText: string, player: PlayerState): TravelIntentResolution {
   const normalized = actionText.toLocaleLowerCase();
-  if (/(不想|不打算|不要|先不|暫時不|暂时不|還不|还不|能不能|可不可以|是否|要不要|如何|怎麼|怎么|路線|路线|多遠|多远|多久|在哪|哪裡|哪里|位置|告訴我|告诉我)/.test(normalized)) return undefined;
-  if (!/(前往|前去|走到|移動到|移动到|進入|进入|出發前往|出发前往|帶我去|带我去|我要去|我想去|我決定去|我决定去|去往|出發去|出发去)/.test(normalized)) return undefined;
+  if (/(不想|不打算|不要|先不|暫時不|暂时不|還不|还不|能不能|可不可以|是否|要不要|如何|怎麼|怎么|路線|路线|多遠|多远|多久|在哪|哪裡|哪里|位置|告訴我|告诉我)/.test(normalized) ||
+      !/(前往|前去|走到|移動到|移动到|進入|进入|出發前往|出发前往|帶我去|带我去|我要去|我想去|我決定去|我决定去|去往|出發去|出发去|回到|返回|折返|回村|回森林|回去)/.test(normalized)) {
+    return { kind: 'none' };
+  }
+
   const currentMap = getMapById(player.currentMapId);
-  return currentMap?.connectedMapIds
+  const candidates = currentMap?.connectedMapIds
     .map((mapId) => getMapById(mapId))
-    .find((map) => map && normalized.includes(map.name.toLocaleLowerCase()));
+    .filter((map): map is MapStatic => !!map) ?? [];
+  const namedMatches = candidates.filter((map) => [map.name, ...(map.aliases ?? [])]
+    .some((label) => label && normalized.includes(label.toLocaleLowerCase())));
+  let matches = namedMatches;
+
+  if (matches.length === 0) {
+    const requestedTags = new Set<string>();
+    if (/(村莊|村庄|村子|村落)/.test(normalized)) requestedTags.add('village');
+    if (/(城鎮|城镇|城裡|城里|城內|城内)/.test(normalized)) requestedTags.add('settlement');
+    if (/(森林|樹林|树林|林地)/.test(normalized)) requestedTags.add('forest');
+    if (/(野外|荒野)/.test(normalized)) requestedTags.add('wilderness');
+    matches = candidates.filter((map) => (map.locationTags ?? []).some((tag) => requestedTags.has(tag)));
+  }
+
+  if (/(回到|返回|折返|回村|回森林|回去)/.test(normalized) && player.previousMapId) {
+    const previousDestination = matches.find((map) => map.id === player.previousMapId);
+    if (previousDestination) return { kind: 'resolved', destination: previousDestination };
+  }
+  if (matches.length === 1) return { kind: 'resolved', destination: matches[0] };
+  if (matches.length > 1) return { kind: 'ambiguous', candidates: matches };
+  return { kind: 'none' };
 }
 
 export default function App() {
@@ -106,7 +134,7 @@ export default function App() {
     const currentMap = getMapById(sourcePlayer.currentMapId);
     const destination = getMapById(mapId);
     if (!currentMap?.connectedMapIds.includes(mapId) || !destination) return null;
-    const nextPlayer = { ...sourcePlayer, currentMapId: destination.id };
+    const nextPlayer = { ...sourcePlayer, previousMapId: sourcePlayer.currentMapId, currentMapId: destination.id };
     updatePlayer(nextPlayer);
     return { player: nextPlayer, destination };
   };
@@ -275,8 +303,12 @@ export default function App() {
         updatePlayer(nextPlayer);
       }
 
-      const explicitlyNamedDestination = inferExplicitTravelDestination(actionText, player);
-      const requestedDestinationId = explicitlyNamedDestination?.id ?? aiResponse.travelRequest?.destinationMapId;
+      const textTravelIntent = resolveExplicitTravelIntent(actionText, player);
+      const requestedDestinationId = textTravelIntent.kind === 'resolved'
+        ? textTravelIntent.destination.id
+        : textTravelIntent.kind === 'ambiguous'
+          ? undefined
+          : aiResponse.travelRequest?.destinationMapId;
       const travel = requestedDestinationId ? movePlayerTo(requestedDestinationId, nextPlayer) : null;
       if (travel) nextPlayer = travel.player;
 
@@ -284,7 +316,9 @@ export default function App() {
       const nextMap = getMapById(nextPlayer.currentMapId);
       const locationNotice = travel
         ? `\n\n📍 你已抵達${travel.destination.name}。${travel.destination.description}`
-        : requestedDestinationId
+        : textTravelIntent.kind === 'ambiguous'
+          ? `\n\n📍 你想前往的地區有多個可能地點，請選擇目的地：`
+          : requestedDestinationId
           ? `\n\n⚠️ 目前無法前往「${getMapById(requestedDestinationId)?.name ?? requestedDestinationId}」，所在地區未變更。請選擇右側「鄰近地點」中的可前往區域。`
           : previousMap && nextMap && previousMap.id !== nextMap.id
             ? `\n\n⚠️ AI 敘事提及地區變更，但沒有有效的移動請求；所在地區維持${previousMap.name}。`
@@ -297,6 +331,9 @@ export default function App() {
           sender: 'ai',
           text: `${storyText}${locationNotice}`,
           options: aiResponse.suggestedActions,
+          travelOptions: textTravelIntent.kind === 'ambiguous'
+            ? textTravelIntent.candidates.map((candidate) => ({ mapId: candidate.id, name: candidate.name }))
+            : undefined,
           checkResult,
           timestamp: new Date().toLocaleTimeString()
         }
@@ -329,6 +366,7 @@ export default function App() {
         isSidebarOpen={isSidebarOpen}
         onToggleSidebar={() => setIsSidebarOpen((open) => !open)}
         combatActive={!!player.combat}
+        onTravel={handleTravel}
       />
       {isSidebarOpen && <PlayerHUD player={player} onReset={handleResetPlayer} storageWarning={storageWarning} onTravel={handleTravel} onAcceptQuest={handleAcceptQuest} onStartCombat={handleStartCombat} onFleeCombat={handleFleeCombat} onAttack={handleAttack} />}
       {isKeyModalOpen && <ApiKeyModal

@@ -139,8 +139,9 @@ export async function sendPlayerAction(
   const currentMap = getMapById(playerState.currentMapId);
   const availableDestinations = currentMap?.connectedMapIds.flatMap((mapId) => {
     const map = getMapById(mapId);
-    return map ? [{ id: map.id, name: map.name }] : [];
+    return map ? [{ id: map.id, name: map.name, aliases: map.aliases ?? [], tags: map.locationTags ?? [] }] : [];
   }) ?? [];
+  const previousMap = playerState.previousMapId ? getMapById(playerState.previousMapId) : undefined;
 
   if (!cleanApiKey) {
     throw new Error('所選模型的 API Key 尚未設定。請開啟模型設定。');
@@ -153,6 +154,7 @@ export async function sendPlayerAction(
 - HP: ${playerState.hp} | MP: ${playerState.mp} | 金幣: ${playerState.gold}
 - 當前地區: ${currentMap?.name ?? playerState.currentMapId} (${playerState.currentMapId})
 - 可前往的相鄰地區（只可選這些 ID）: ${JSON.stringify(availableDestinations)}
+- 上一個地區: ${previousMap ? `${previousMap.name} (${previousMap.id})，分類 ${JSON.stringify(previousMap.locationTags ?? [])}` : '無'}
 - 當前戰鬥: ${playerState.combat ? JSON.stringify(playerState.combat) : '無'}
 - 背包物品 ID 列表: ${JSON.stringify(playerState.inventory)}
 - 裝備物品 ID: ${JSON.stringify(playerState.equipped)}
@@ -163,6 +165,7 @@ export async function sendPlayerAction(
 請根據玩家行動進行劇情描述，並按下列規則判斷地區移動意圖：
 - 只有玩家明確表達「前往、走到、離開目前地區去、移動到」某個可前往地區，才設定 travelRequest.destinationMapId。該 ID 必須完全符合上方相鄰地區清單。
 - 詢問地點資訊、觀察遠方、談論某地或描述打算但尚未決定，都不算移動；travelRequest 設為 null。含糊的「去那裡看看」且目的地不明時，先在 storyText 詢問，不要猜測或切換。
+- 玩家說「回到村莊/森林」等泛稱時，先從相鄰地區中依 aliases/tags 找候選；若上一個地區符合且可返回，優先選上一個地區。若仍有多個合理候選，travelRequest 設為 null，並在 storyText 詢問具體目的地。
 - 不要透過 stateChanges 修改地區；實際移動由遊戲驗證 travelRequest 後套用。不可前往清單以外的地區。
 - 一般戰鬥由遊戲規則結算，不可敘事中自行宣告擊敗或扣除怪物。
 注意事項：

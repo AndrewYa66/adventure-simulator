@@ -12,9 +12,10 @@ interface StoryLogProps {
   isSidebarOpen: boolean;
   onToggleSidebar: () => void;
   combatActive: boolean;
+  onTravel: (mapId: string) => void;
 }
 
-export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAction, onOpenKeyModal, hasApiKey, selectedModel, isSidebarOpen, onToggleSidebar, combatActive }) => {
+export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAction, onOpenKeyModal, hasApiKey, selectedModel, isSidebarOpen, onToggleSidebar, combatActive, onTravel }) => {
   const [inputAction, setInputAction] = useState('');
 
   const handleSend = () => {
@@ -64,6 +65,14 @@ export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAct
 
             {msg.checkResult && <CheckResultCard result={msg.checkResult} />}
             {msg.checkResults?.map((result, index) => <CheckResultCard key={`${msg.id}-check-${index}`} result={result} />)}
+            {msg.travelOptions && msg.travelOptions.length > 0 && <div style={{ marginTop: '8px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              {msg.travelOptions.map((destination) => <button
+                key={destination.mapId}
+                disabled={loading || combatActive}
+                onClick={() => onTravel(destination.mapId)}
+                style={{ padding: '6px 12px', backgroundColor: '#303c30', color: '#dcedc8', border: '1px solid #546e45', borderRadius: '4px', cursor: 'pointer' }}
+              >前往 {destination.name}</button>)}
+            </div>}
 
             {/* 建議快捷按鈕 */}
             {msg.options && msg.options.length > 0 && (

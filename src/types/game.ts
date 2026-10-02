@@ -74,6 +74,8 @@ export interface MapStatic {
   enName: string;
   recommendedLevel: string;
   zoneType: string;
+  aliases?: string[];
+  locationTags?: string[];
   isSafeZone: boolean;
   description: string;
   connectedMapIds: string[];
@@ -114,6 +116,7 @@ export interface PlayerState {
   mp: number;
   gold: number;
   currentMapId: string;
+  previousMapId?: string;
   
   // 背包建議儲存 itemId 與 quantity，其餘詳細說明向靜態資料庫查詢
   inventory: { 
@@ -148,6 +151,7 @@ export interface StoryMessage {
   options?: string[];
   checkResult?: ActionCheckResult;
   checkResults?: ActionCheckResult[];
+  travelOptions?: { mapId: string; name: string }[];
   timestamp: string;
 }
 

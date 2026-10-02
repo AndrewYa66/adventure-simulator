@@ -66,6 +66,10 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
         !getMapById(value.currentMapId)?.monstersPresent.includes(value.combat.monsterId)) return null;
     combat = { monsterId: value.combat.monsterId, currentHp: value.combat.currentHp as number, round: value.combat.round as number };
   }
+  const previousMapId = typeof value.previousMapId === 'string' &&
+    getMapById(value.currentMapId)?.connectedMapIds.includes(value.previousMapId)
+    ? value.previousMapId
+    : undefined;
 
   return {
     name: value.name.trim(),
@@ -75,6 +79,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     mp: Math.max(0, value.mp as number),
     gold: value.gold as number,
     currentMapId: value.currentMapId,
+    ...(previousMapId ? { previousMapId } : {}),
     inventory,
     equipped,
     storyFlags: value.storyFlags as Record<string, boolean>,
