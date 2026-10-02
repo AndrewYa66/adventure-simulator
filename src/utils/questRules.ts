@@ -13,6 +13,19 @@ export function canAcceptQuest(player: PlayerState, quest: QuestStatic): boolean
   return !!map && !!giver && giver.mapId === map.id && map.npcsPresent.includes(giver.id);
 }
 
+export function canTurnInQuest(player: PlayerState, quest: QuestStatic): boolean {
+  const active = player.activeQuests.find((entry) => entry.questId === quest.id && entry.status === 'in_progress');
+  const map = getMapById(player.currentMapId);
+  if (!active || !map || map.id !== quest.mapId || !map.npcsPresent.includes(quest.questGiverId)) return false;
+  const defeatsMet = (quest.requirements.defeatMonsters ?? []).every((requirement) =>
+    (active.progress?.defeatedMonsters[requirement.monsterId] ?? 0) >= requirement.quantity
+  );
+  const itemsMet = (quest.requirements.collectItems ?? []).every((requirement) =>
+    (player.inventory.find((item) => item.itemId === requirement.itemId)?.quantity ?? 0) >= requirement.quantity
+  );
+  return defeatsMet && itemsMet;
+}
+
 export function acceptQuest(player: PlayerState, quest: QuestStatic): PlayerState | null {
   if (!canAcceptQuest(player, quest)) return null;
   return {

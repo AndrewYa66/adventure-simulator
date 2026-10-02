@@ -36,7 +36,7 @@ export interface PlayerGrowthStatic {
     type: 'active' | 'passive';
     costMp: number;
     description: string;
-    effect: { kind: 'damage_multiplier'; multiplier: number };
+    effect: { kind: 'damage_multiplier'; multiplier: number } | { kind: 'healing'; hpRestore: number };
   };
   notes: string;
 }
@@ -108,6 +108,8 @@ export interface NpcStatic {
   stats?: Partial<{ hp: number; atk: number; def: number; spd: number }>;
   alignment?: CharacterAlignment;
   shopId?: string;
+  startingGold?: number;
+  startingInventory?: { itemId: string; quantity: number }[];
   description: string;
 }
 
@@ -116,6 +118,20 @@ export interface ShopStatic {
   name: string;
   npcId: string;
   items: { itemId: string; buyPrice?: number }[];
+  services?: { id: string; name: string; price: number; kind: 'restore_resources'; description: string }[];
+}
+
+export interface NpcWorldState {
+  gold: number;
+  inventory: { itemId: string; quantity: number }[];
+}
+
+export interface TransactionRecord {
+  id: string;
+  type: 'purchase' | 'sale' | 'service' | 'quest_reward' | 'npc_transfer';
+  description: string;
+  goldChange: number;
+  timestamp: number;
 }
 
 /** 地圖靜態資料 (來自 maps.json) */
@@ -176,6 +192,8 @@ export interface PlayerState {
   hp: number;
   mp: number;
   gold: number;
+  npcStates: Record<string, NpcWorldState>;
+  transactionHistory: TransactionRecord[];
   currentMapId: string;
   previousMapId?: string;
   
@@ -243,7 +261,7 @@ export interface AIResponsePayload {
   suggestedActions: string[];
   travelRequest?: { destinationMapId: string } | null;
   checkRequest?: {
-    stat: 'atk' | 'def' | 'spd';
+    stat: ActionCheckResult['stat'];
     dc: number;
     reason: string;
   };
@@ -261,6 +279,7 @@ export interface AIResponsePayload {
     setFlags?: Record<string, boolean>;
     questUpdates?: { questId: string; status: 'completed' }[];
     questAcceptances?: string[];
+    npcItemTransfers?: { npcId: string; itemId: string; quantity: number }[];
     defeatedMonsters?: { monsterId: string; quantity: number }[];
   };
   failureStateChanges?: AIResponsePayload['stateChanges'];

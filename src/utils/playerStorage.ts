@@ -1,5 +1,5 @@
 import type { GameSession, PlayerState, StoryMessage } from '../types/game';
-import { getCharacterClassById, getItemById, getMapById, getMonsterById, getPlayerResourceCaps, getQuestById } from '../data/staticData';
+import { getCharacterClassById, getItemById, getMapById, getMonsterById, getPlayerResourceCaps, getQuestById, npcsDatabase } from '../data/staticData';
 import { createInitialPlayer } from './playerInit';
 
 const PLAYER_STORAGE_KEY = 'TRPG_PLAYER_STATE';
@@ -86,6 +86,35 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
       : [])
     : [];
   const isDead = value.isDead === true || hp === 0;
+  const savedNpcStates = isRecord(value.npcStates) ? value.npcStates : {};
+  const npcStates = Object.fromEntries(npcsDatabase.map((npc) => {
+    const savedState = savedNpcStates[npc.id];
+    if (!isRecord(savedState)) return [npc.id, {
+      gold: npc.startingGold ?? 0,
+      inventory: (npc.startingInventory ?? []).flatMap((entry) => getItemById(entry.itemId) && entry.quantity > 0 ? [{ ...entry }] : [])
+    }];
+    const savedInventory = Array.isArray(savedState.inventory) ? savedState.inventory.flatMap((entry) =>
+      isRecord(entry) && typeof entry.itemId === 'string' && getItemById(entry.itemId) &&
+      Number.isInteger(entry.quantity) && (entry.quantity as number) > 0
+        ? [{ itemId: entry.itemId, quantity: entry.quantity as number }]
+        : []) : [];
+    return [npc.id, {
+      gold: Number.isSafeInteger(savedState.gold) && (savedState.gold as number) >= 0 ? savedState.gold as number : 0,
+      inventory: savedInventory
+    }];
+  }));
+  const transactionHistory = Array.isArray(value.transactionHistory) ? value.transactionHistory.flatMap((record) =>
+    isRecord(record) && typeof record.id === 'string' &&
+    ['purchase', 'sale', 'service', 'quest_reward', 'npc_transfer'].includes(String(record.type)) &&
+    typeof record.description === 'string' && Number.isFinite(record.goldChange) && Number.isFinite(record.timestamp)
+      ? [{
+        id: record.id,
+        type: record.type as PlayerState['transactionHistory'][number]['type'],
+        description: record.description,
+        goldChange: record.goldChange as number,
+        timestamp: record.timestamp as number
+      }]
+      : []).slice(-100) : [];
 
   return {
     name: value.name.trim(),
@@ -102,6 +131,8 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     hp,
     mp: Math.max(0, value.mp as number),
     gold: value.gold as number,
+    npcStates,
+    transactionHistory,
     currentMapId: value.currentMapId,
     ...(previousMapId ? { previousMapId } : {}),
     inventory,

@@ -1,7 +1,7 @@
 import type { PlayerState, AIResponsePayload } from '../types/game';
 import type { AIModelSettings } from './aiModels';
-import { canPlayerEnterMap, getMapById, getNpcById, getNpcCategoryById, getNpcStats, questsDatabase } from '../data/staticData';
-import { canAcceptQuest } from '../utils/questRules';
+import { canPlayerEnterMap, getItemById, getMapById, getNpcById, getNpcCategoryById, getNpcStats, itemsDatabase, questsDatabase } from '../data/staticData';
+import { canAcceptQuest, canTurnInQuest } from '../utils/questRules';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from '../utils/travelIntent';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -84,6 +84,10 @@ function parseAIResponse(value: unknown): AIResponsePayload | null {
     }
     if (changes.addItems !== undefined && !isItemChangeList(changes.addItems)) return false;
     if (changes.removeItems !== undefined && !isItemChangeList(changes.removeItems)) return false;
+    if (changes.npcItemTransfers !== undefined && (!Array.isArray(changes.npcItemTransfers) || !changes.npcItemTransfers.every((transfer) =>
+      isRecord(transfer) && typeof transfer.npcId === 'string' && typeof transfer.itemId === 'string' &&
+      !!getItemById(transfer.itemId) && Number.isInteger(transfer.quantity) && (transfer.quantity as number) > 0 && (transfer.quantity as number) <= 99
+    ))) return false;
     if (changes.defeatedMonsters !== undefined && !isMonsterDefeatList(changes.defeatedMonsters)) return false;
     if (changes.newLocationId !== undefined && changes.newLocationId !== null && typeof changes.newLocationId !== 'string') return false;
     if (changes.setFlags !== undefined && (!isRecord(changes.setFlags) || !Object.values(changes.setFlags).every((flag) => typeof flag === 'boolean'))) return false;
@@ -100,7 +104,7 @@ function parseAIResponse(value: unknown): AIResponsePayload | null {
   if (isRecord(value.stateChanges) && value.stateChanges.defeatedMonsters !== undefined &&
       (!isRecord(value.checkRequest) || value.checkRequest.stat !== 'atk')) return null;
   if (isRecord(value.failureStateChanges) &&
-      ['expChange', 'addItems', 'defeatedMonsters', 'questUpdates', 'questAcceptances', 'newLocationId', 'setFlags'].some((field) => field in (value.failureStateChanges as Record<string, unknown>))) return null;
+      ['expChange', 'addItems', 'npcItemTransfers', 'defeatedMonsters', 'questUpdates', 'questAcceptances', 'newLocationId', 'setFlags'].some((field) => field in (value.failureStateChanges as Record<string, unknown>))) return null;
 
   const storyText = getReadableNarrative(value.storyText);
   if (storyText === FORMAT_FALLBACK) return null;
@@ -160,11 +164,14 @@ export async function sendPlayerAction(
       category: getNpcCategoryById(npc.categoryId)?.name ?? npc.categoryId,
       stats,
       alignment: npc.alignment,
+      holdings: playerState.npcStates[npc.id] ?? { gold: npc.startingGold ?? 0, inventory: npc.startingInventory ?? [] },
       description: npc.description
     }] : [];
   }) ?? [];
   const availableQuests = questsDatabase.filter((quest) => canAcceptQuest(playerState, quest))
     .map((quest) => ({ id: quest.id, title: quest.title, giver: quest.questGiver, objective: quest.objective }));
+  const turnInQuests = questsDatabase.filter((quest) => canTurnInQuest(playerState, quest))
+    .map((quest) => ({ id: quest.id, title: quest.title, giver: quest.questGiver }));
 
   if (!cleanApiKey) {
     throw new Error('所選模型的 API Key 尚未設定。請開啟模型設定。');
@@ -181,10 +188,13 @@ export async function sendPlayerAction(
 - 當前地區: ${currentMap?.name ?? playerState.currentMapId} (${playerState.currentMapId})
 - 可前往的相鄰地區（只可選這些 ID）: ${JSON.stringify(availableDestinations)}
 - 當前地區在場 NPC 及數值: ${JSON.stringify(presentNpcs)}
+- NPC 持有物與金幣即為世界實際庫存，不能憑空贈送或生成；只能在持有量足夠且玩家明確取得時回報 npcItemTransfers。
 - 當前可接取任務（僅可接取這些 ID）: ${JSON.stringify(availableQuests)}
+- 當前可交付任務（需玩家回到任務給予者所在位置且需求齊備）: ${JSON.stringify(turnInQuests)}
 - 上一個地區: ${previousMap ? `${previousMap.name} (${previousMap.id})，分類 ${JSON.stringify(previousMap.locationTags ?? [])}` : '無'}
 - 當前戰鬥: ${playerState.combat ? JSON.stringify(playerState.combat) : '無'}
 - 背包物品 ID 列表: ${JSON.stringify(playerState.inventory)}
+- 世界靜態物品清單（只可使用這些 ID/名稱）: ${JSON.stringify(itemsDatabase.map((item) => ({ id: item.id, name: item.name, type: item.type })))}
 - 裝備物品 ID: ${JSON.stringify(playerState.equipped)}
 - 劇情旗標 (Flags): ${JSON.stringify(playerState.storyFlags || {})}
 - 進行中任務: ${JSON.stringify(playerState.activeQuests)}
@@ -198,8 +208,12 @@ export async function sendPlayerAction(
 - 不要透過 stateChanges 修改地區；實際移動由遊戲驗證 travelRequest 後套用。不可前往清單以外的地區。
 - 任務只能從「當前可接取任務」中接受。玩家明確表示接取/接受某任務時，才在 stateChanges.questAcceptances 填入對應 ID；不可因詢問細節、委託描述或含糊回覆而接取。不可自行建立任務、改寫需求或獎勵。
 - 任務接取由遊戲端再次驗證所在地、任務給予者是否在場及任務是否已接取/完成；不可只在 storyText 宣稱已接取。
+- 任務僅能在上列可交付清單內回報完成。交付道具由程式轉入 NPC 持有物，任務獎勵金幣與物品從任務給予者的實際持有物中發放，不足時只發可取得部分並明確說明短缺。
+- 玩家不能取得物品資料庫或在場 NPC 持有物中不存在的道具；不得透過敘事生成手榴彈、槍械、裝備或消耗品。npcItemTransfers 僅能列出當前在場 NPC 與靜態物品 ID，且只在玩家明確偷取、拾取或接受贈與時使用。
+- 任何會持續改變玩家或世界狀態的行動，都必須在同一回應填入對應的結構化欄位；若沒有合法狀態欄位可套用，只能描述尚未完成的嘗試或詢問玩家，不可在敘事中宣稱效果已生效。
 - 玩家沒有劇情保護。合理危險、檢定失敗或敵方有效攻擊可以使 HP 降至 0；不得為避免死亡而竄改檢定結果、取消已成立的傷害或在 storyText 宣稱玩家倖存。HP 歸零就是死亡，不是昏迷；只有明確套用 unconscious 狀態才代表昏迷。
 - 非戰鬥行動若有風險且失敗會造成實質後果，依最相關能力提出 checkRequest（atk/def/spd 或 str/dex/con/int/wis/cha），在成功/失敗分支填入相應 HP/MP 變化。玩家明確提出自我傷害等會直接改變資源的行動時，必須依其明確數值回報變化，並照常套用 HP 歸零死亡規則。
+- 若玩家有自傷意圖但沒有說明傷害數值，先詢問數值，不要猜測或只用文字敘述扣血。
 - 一般戰鬥由遊戲規則結算，不可敘事中自行宣告擊敗或扣除怪物。
 注意事項：
 1. 當給予或扣除玩家道具時，請使用 Item ID (例如: "ITEM-001" 小型生命藥水, "ITEM-002" 哥布林耳朵, "ITEM-101" 精鋼短劍, "ITEM-201" 冒險者皮甲)。
@@ -226,7 +240,8 @@ export async function sendPlayerAction(
     "defeatedMonsters": [],
     "setFlags": {"MET_VILLAGE_CHIEF": true},
     "questUpdates": [{"questId": "QST-001", "status": "completed"}],
-    "questAcceptances": []
+    "questAcceptances": [],
+    "npcItemTransfers": []
   },
   "failureStateChanges": null
 }
@@ -239,6 +254,8 @@ export async function sendPlayerAction(
 
   const isOpenAI = settings.provider === 'openai';
   const availableDestinationIds = availableDestinations.map((destination) => destination.id);
+  const presentNpcIds = presentNpcs.map((npc) => npc.id);
+  const knownItemIds = itemsDatabase.map((item) => item.id);
   const jsonResponseSchema = {
     type: 'object',
     properties: {
@@ -263,6 +280,19 @@ export async function sendPlayerAction(
           questAcceptances: {
             type: 'array',
             items: { type: 'string', enum: availableQuests.length ? availableQuests.map((quest) => quest.id) : ['__NO_AVAILABLE_QUEST__'] }
+          },
+          npcItemTransfers: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                npcId: { type: 'string', enum: presentNpcIds.length ? presentNpcIds : ['__NO_PRESENT_NPC__'] },
+                itemId: { type: 'string', enum: knownItemIds },
+                quantity: { type: 'integer', minimum: 1, maximum: 99 }
+              },
+              required: ['npcId', 'itemId', 'quantity'],
+              additionalProperties: false
+            }
           }
         },
         additionalProperties: true

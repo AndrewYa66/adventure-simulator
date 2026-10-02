@@ -2,7 +2,7 @@ import React from 'react';
 import type { PlayerState } from '../types/game';
 import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getMonsterById, getNpcById, getNpcCategoryById, getNpcStats, getPlayerGrowthByLevel, getPlayerResourceCaps, getQuestById, getShopForNpc, getUnlockedSkillsByLevel, questsDatabase } from '../data/staticData';
 import { getPlayerStatBreakdown, STAT_LABELS } from '../utils/gameChecks';
-import { canAcceptQuest } from '../utils/questRules';
+import { canAcceptQuest, canTurnInQuest } from '../utils/questRules';
 import { canPlayerAct, isPlayerUnconscious } from '../utils/playerStatus';
 
 interface PlayerHUDProps {
@@ -19,9 +19,11 @@ interface PlayerHUDProps {
   onBuyItem: (shopId: string, itemId: string) => void;
   onSellItem: (shopId: string, itemId: string) => void;
   onEquipItem: (itemId: string) => void;
+  onUseService: (shopId: string, serviceId: string) => void;
+  onTurnInQuest: (questId: string) => void;
 }
 
-export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWarning, onTravel, onAcceptQuest, onStartCombat, onFleeCombat, onAttack, onUseSkill, onUseItem, onBuyItem, onSellItem, onEquipItem }) => {
+export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWarning, onTravel, onAcceptQuest, onStartCombat, onFleeCombat, onAttack, onUseSkill, onUseItem, onBuyItem, onSellItem, onEquipItem, onUseService, onTurnInQuest }) => {
   const growth = getPlayerGrowthByLevel(player.level);
   const { maxHp, maxMp } = getPlayerResourceCaps(player.level, player.classId);
   const maxExp = growth?.requiredExp || 100;
@@ -46,6 +48,12 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
         {(player.isDead || isPlayerUnconscious(player)) && <p role="status" style={{ margin: '4px 0', color: '#ff8a80', fontWeight: 'bold' }}>{player.isDead ? '☠️ 已死亡' : '💫 昏迷中'}</p>}
         <p style={{ margin: '4px 0' }}><strong>等級:</strong> Lv.{player.level} ({player.exp}/{maxExp} EXP)</p>
         <p style={{ margin: '4px 0' }}><strong>💰 金幣:</strong> {player.gold} Gold</p>
+        {player.transactionHistory.length > 0 && <details>
+          <summary style={{ cursor: 'pointer', fontSize: '12px' }}>交易紀錄（最近 {Math.min(5, player.transactionHistory.length)} 筆）</summary>
+          {player.transactionHistory.slice(0, 5).map((entry) => <div key={entry.id} style={{ color: '#bbb', fontSize: '11px', marginTop: '4px' }}>
+            {new Date(entry.timestamp).toLocaleString()} · {entry.description}{entry.goldChange ? ` (${entry.goldChange > 0 ? '+' : ''}${entry.goldChange} 金幣)` : ''}
+          </div>)}
+        </details>}
         <p style={{ margin: '4px 0' }}><strong>📍 位置:</strong> {currentMap?.name || player.currentMapId}</p>
       </div>
 
@@ -139,6 +147,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
           return <div key={npc.id} style={{ marginBottom: '7px', fontSize: '12px' }}>
             <strong>{npc.name}・{npc.title}</strong>
             <div style={{ color: '#aaa' }}>類別：{getNpcCategoryById(npc.categoryId)?.name ?? npc.categoryId} · HP {stats.hp} · ATK {stats.atk} · DEF {stats.def} · SPD {stats.spd}</div>
+            <div style={{ color: '#888' }}>持有：金幣 {player.npcStates[npc.id]?.gold ?? 0} · {(player.npcStates[npc.id]?.inventory ?? []).map((entry) => `${getItemById(entry.itemId)?.name ?? entry.itemId} ×${entry.quantity}`).join('、') || '無物品'}</div>
             {(() => {
               const shop = getShopForNpc(npc);
               if (!shop) return null;
@@ -149,11 +158,16 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
                   const item = getItemById(listing.itemId);
                   if (!item) return null;
                   const price = listing.buyPrice ?? item.buyPrice;
+                  const stock = player.npcStates[npc.id]?.inventory.find((entry) => entry.itemId === item.id)?.quantity ?? 0;
                   return <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '4px', marginTop: '4px' }}>
-                    <span>{item.name} · {price} 金幣</span>
-                    <button disabled={unavailable || player.gold < price} onClick={() => onBuyItem(shop.id, item.id)}>購買</button>
+                    <span>{item.name} · {price} 金幣 · 庫存 {stock}</span>
+                    <button disabled={unavailable || player.gold < price || stock <= 0} onClick={() => onBuyItem(shop.id, item.id)}>購買</button>
                   </div>;
                 })}
+                {(shop.services ?? []).map((service) => <div key={service.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '4px', marginTop: '5px' }}>
+                  <span title={service.description}>{service.name} · {service.price} 金幣</span>
+                  <button disabled={unavailable || player.gold < service.price || (service.kind === 'restore_resources' && player.hp >= maxHp && player.mp >= maxMp)} onClick={() => onUseService(shop.id, service.id)}>使用</button>
+                </div>)}
                 {player.inventory.filter((entry) => {
                   const item = getItemById(entry.itemId);
                   return item && item.type !== 'quest' && item.sellPrice > 0;
@@ -179,7 +193,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
             <div style={{ marginBottom: '6px' }}>{monster?.name || player.combat.monsterId} HP {player.combat.currentHp}/{monster?.stats.hp}</div>
             <div style={{ color: '#aaa', fontSize: '11px', marginBottom: '8px' }}>第 {player.combat.round} 回合</div>
             <button onClick={onAttack} disabled={player.isDead} style={{ marginRight: '6px', padding: '6px 10px', background: '#8e2424', color: 'white', border: '1px solid #b44', borderRadius: '4px', cursor: player.isDead ? 'not-allowed' : 'pointer' }}>{isPlayerUnconscious(player) ? '昏迷中（跳過回合）' : '攻擊'}</button>
-            {unlockedSkills.map((skill) => <button key={skill.id} onClick={() => onUseSkill(skill.id)} disabled={!canPlayerAct(player) || player.mp < skill.costMp} title={skill.description} style={{ marginRight: '6px', padding: '6px 10px', cursor: player.mp < skill.costMp || !canPlayerAct(player) ? 'not-allowed' : 'pointer' }}>{skill.name}（MP {skill.costMp}）</button>)}
+            {unlockedSkills.filter((skill) => skill.effect.kind === 'damage_multiplier').map((skill) => <button key={skill.id} onClick={() => onUseSkill(skill.id)} disabled={!canPlayerAct(player) || player.mp < skill.costMp} title={skill.description} style={{ marginRight: '6px', padding: '6px 10px', cursor: player.mp < skill.costMp || !canPlayerAct(player) ? 'not-allowed' : 'pointer' }}>{skill.name}（MP {skill.costMp}）</button>)}
             <button onClick={onFleeCombat} disabled={!canPlayerAct(player)} style={{ padding: '6px 10px', cursor: canPlayerAct(player) ? 'pointer' : 'not-allowed' }}>脫離戰鬥</button>
           </div>;
         })() : (currentMap?.isSafeZone ? <div style={{ color: '#aaa', fontSize: '12px' }}>安全地區沒有可挑戰的敵人。</div> : (currentMap?.monstersPresent ?? []).map((monsterId) => {
@@ -187,6 +201,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
           if (!monster) return null;
           return <button key={monsterId} onClick={() => onStartCombat(monsterId)} style={{ display: 'block', margin: '4px 0', padding: '5px 8px', background: '#4a2525', color: '#ffcdd2', border: '1px solid #844', borderRadius: '4px', cursor: 'pointer' }}>挑戰 {monster.name}</button>;
         }))}
+        {!player.combat && unlockedSkills.filter((skill) => skill.effect.kind === 'healing').map((skill) => <button key={skill.id} onClick={() => onUseSkill(skill.id)} disabled={!canPlayerAct(player) || player.mp < skill.costMp || player.hp >= maxHp} title={skill.description} style={{ display: 'block', marginTop: '5px', padding: '6px 10px' }}>{skill.name}（MP {skill.costMp}）</button>)}
       </div>
 
       <div>
@@ -214,6 +229,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
             {!status && (canAcceptQuest(player, quest)
               ? <button onClick={() => onAcceptQuest(quest.id)} style={{ marginTop: '4px', padding: '4px 7px', cursor: 'pointer' }}>接取任務</button>
               : <div style={{ marginTop: '4px', color: '#888' }}>需在 {getMapById(quest.mapId)?.name ?? quest.mapId} 找到 {quest.questGiver}</div>)}
+            {status === 'in_progress' && canTurnInQuest(player, quest) && <button onClick={() => onTurnInQuest(quest.id)} style={{ marginTop: '4px', padding: '4px 7px' }}>向 {quest.questGiver} 交付</button>}
           </div>;
         })}
       </div>

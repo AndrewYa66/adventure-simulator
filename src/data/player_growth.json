@@ -7,6 +7,14 @@
     "baseAtk": 10,
     "baseDef": 5,
     "spd": 10,
+    "unlockedSkill": {
+      "id": "SKL-002",
+      "name": "急救術",
+      "type": "active",
+      "costMp": 5,
+      "description": "戰鬥外施放，消耗 5 MP 恢復 20 HP。",
+      "effect": { "kind": "healing", "hpRestore": 20 }
+    },
     "notes": "初始冒險者等級"
   },
   {

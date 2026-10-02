@@ -6,7 +6,7 @@ import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getM
 import { getPlayerStatBreakdown, resolveActionCheck } from './utils/gameChecks';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from './utils/travelIntent';
 import { sendPlayerAction } from './services/aiService';
-import { acceptQuest } from './utils/questRules';
+import { acceptQuest, canTurnInQuest } from './utils/questRules';
 import { canPlayerAct, isPlayerUnconscious } from './utils/playerStatus';
 import type { AIProvider } from './services/aiModels';
 import { loadAIModelSettings, saveAIModelSettings, type AIModelSettings } from './services/aiModels';
@@ -15,8 +15,8 @@ import { StoryLog } from './components/StoryLog';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { CharacterSetup } from './components/CharacterSetup';
 import { createInitialPlayer } from './utils/playerInit';
-import { parseExplicitSelfDamage } from './utils/playerActionIntent';
-import { buyItem, sellItem } from './utils/tradeRules';
+import { isSelfDamageIntent, parseExplicitSelfDamage, unsupportedInventoryItemRequested } from './utils/playerActionIntent';
+import { buyItem, purchaseService, sellItem } from './utils/tradeRules';
 import type { CharacterAlignment } from './types/game';
 
 function resolveEnemyTurn(player: PlayerState, combat: NonNullable<PlayerState['combat']>, monster: NonNullable<ReturnType<typeof getMonsterById>>) {
@@ -176,6 +176,18 @@ export default function App() {
     }]);
   };
 
+  const handleTurnInQuest = (questId: string) => {
+    const quest = getQuestById(questId);
+    if (!quest || !canTurnInQuest(player, quest)) return;
+    const nextPlayer = applyStateChanges(player, {
+      storyText: '', suggestedActions: [], stateChanges: { questUpdates: [{ questId, status: 'completed' }] }
+    }, 'game');
+    updatePlayer(nextPlayer);
+    const rewardRecord = nextPlayer.transactionHistory.find((record) => record.type === 'quest_reward' &&
+      !player.transactionHistory.some((previous) => previous.id === record.id));
+    appendSystemMessage(rewardRecord?.description ?? `已向${quest.questGiver}交付任務「${quest.title}」。`);
+  };
+
   const handleBuyItem = (shopId: string, itemId: string) => {
     const shop = getShopById(shopId);
     const item = getItemById(itemId);
@@ -200,6 +212,19 @@ export default function App() {
     }
     updatePlayer(result.player);
     appendSystemMessage(`向${shop.name}出售${item.name} ×${result.quantity}，取得 ${result.totalPrice} 金幣。`);
+  };
+
+  const handleUseService = (shopId: string, serviceId: string) => {
+    const shop = getShopById(shopId);
+    if (!shop) return;
+    const service = shop.services?.find((entry) => entry.id === serviceId);
+    const result = purchaseService(player, shop, serviceId, player.currentMapId);
+    if (!result.ok) {
+      appendSystemMessage(`服務未完成：${result.reason}`);
+      return;
+    }
+    updatePlayer(result.player);
+    appendSystemMessage(`使用${service?.name ?? '服務'}，支付 ${result.totalPrice} 金幣，生命與魔力已恢復。服務時間將於時間系統實作後納入處理。`);
   };
 
   const handleEquipItem = (itemId: string) => {
@@ -261,8 +286,9 @@ export default function App() {
     };
     const checks: ActionCheckResult[] = [attackCheck];
     const playerAttack = getPlayerStatBreakdown(player, 'atk').statValue;
+    const skillMultiplier = skill?.effect.kind === 'damage_multiplier' ? skill.effect.multiplier : 1;
     const damage = attackCheck.success
-      ? Math.max(1, Math.floor(playerAttack * (skill?.effect.multiplier ?? 1)) - monster.stats.def)
+      ? Math.max(1, Math.floor(playerAttack * skillMultiplier) - monster.stats.def)
       : 0;
     const monsterHp = attackCheck.success
       ? Math.max(0, combat.currentHp - damage)
@@ -311,7 +337,24 @@ export default function App() {
 
   const handleUseSkill = (skillId: string) => {
     const skill = getUnlockedSkillsByLevel(player.level).find((entry) => entry.id === skillId);
-    if (!skill || !player.combat || !canPlayerAct(player) || player.mp < skill.costMp) return;
+    if (!skill || !canPlayerAct(player) || player.mp < skill.costMp) return;
+    if (skill.effect.kind === 'healing') {
+      if (player.combat) return;
+      const caps = getPlayerResourceCaps(player.level, player.classId);
+      const restored = Math.min(skill.effect.hpRestore, Math.max(0, caps.maxHp - player.hp));
+      if (restored <= 0) {
+        appendSystemMessage(`${skill.name}目前無法恢復 HP，沒有消耗 MP。`);
+        return;
+      }
+      const nextPlayer = applyStateChanges(player, {
+        storyText: '', suggestedActions: [],
+        stateChanges: { hpChange: restored, mpChange: -skill.costMp }
+      }, 'game');
+      updatePlayer(nextPlayer);
+      appendSystemMessage(`施放${skill.name}，HP +${restored}、MP -${skill.costMp}。`);
+      return;
+    }
+    if (!player.combat) return;
     handleCombatAction(skill);
   };
 
@@ -350,6 +393,67 @@ export default function App() {
       appendSystemMessage(player.isDead ? '角色已死亡，無法繼續行動。請重設角色開始新的冒險。' : '角色目前昏迷，無法採取行動。');
       return;
     }
+    const explicitSelfDamage = parseExplicitSelfDamage(actionText);
+    if (explicitSelfDamage !== undefined) {
+      const actualDamage = Math.min(player.hp, explicitSelfDamage);
+      const nextPlayer = applyStateChanges(player, {
+        storyText: '', suggestedActions: [], stateChanges: { hpChange: -actualDamage }
+      }, 'game');
+      updatePlayer(nextPlayer);
+      const now = Date.now();
+      setMessages((prev) => [...prev,
+        { id: `${now}-user`, sender: 'user', text: actionText, timestamp: new Date().toLocaleTimeString() },
+        { id: `${now}-result`, sender: 'system', text: `🩸 你對自己造成 ${actualDamage} 點傷害。HP ${player.hp} → ${nextPlayer.hp}.${nextPlayer.isDead ? ' HP 歸零，你已死亡。' : ''}`, timestamp: new Date().toLocaleTimeString() }
+      ]);
+      return;
+    }
+    if (isSelfDamageIntent(actionText) && explicitSelfDamage === undefined) {
+      setMessages((prev) => [...prev,
+        { id: `${Date.now()}-user`, sender: 'user', text: actionText, timestamp: new Date().toLocaleTimeString() },
+        { id: `${Date.now()}-clarify`, sender: 'system', text: '我理解你想讓角色受傷。請明確說明傷害點數，例如「對自己造成 3 點傷害」；在數值確認前不會改變 HP。', timestamp: new Date().toLocaleTimeString() }
+      ]);
+      return;
+    }
+    const unsupportedItem = unsupportedInventoryItemRequested(actionText);
+    if (unsupportedItem) {
+      setMessages((prev) => [...prev,
+        { id: `${Date.now()}-user`, sender: 'user', text: actionText, timestamp: new Date().toLocaleTimeString() },
+        { id: `${Date.now()}-item`, sender: 'system', text: `世界物品資料中沒有「${unsupportedItem}」，角色不能憑空取出、使用或裝備。請先從商店或遊戲內容取得已存在的物品。`, timestamp: new Date().toLocaleTimeString() }
+      ]);
+      return;
+    }
+    const requestedSkill = getUnlockedSkillsByLevel(player.level).find((skill) =>
+      (actionText.includes(skill.name) || actionText.includes(skill.id)) && /(?:施放|施展|使用|施法|發動)/u.test(actionText) &&
+      !/(?:如何|怎麼|能否|可不可以|是否|請問|教我|詢問|不要|不想|無法|不能)/u.test(actionText)
+    );
+    if (requestedSkill && !player.combat) {
+      const userMessage: StoryMessage = { id: `${Date.now()}-user`, sender: 'user', text: actionText, timestamp: new Date().toLocaleTimeString() };
+      if (requestedSkill.effect.kind !== 'healing') {
+        setMessages((prev) => [...prev, userMessage, {
+          id: `${Date.now()}-skill`, sender: 'system', text: `${requestedSkill.name}只能在戰鬥中使用，沒有消耗 MP。`, timestamp: new Date().toLocaleTimeString()
+        }]);
+        return;
+      }
+      const caps = getPlayerResourceCaps(player.level, player.classId);
+      const restored = Math.min(requestedSkill.effect.hpRestore, Math.max(0, caps.maxHp - player.hp));
+      if (player.mp < requestedSkill.costMp || restored <= 0) {
+        setMessages((prev) => [...prev, userMessage, {
+          id: `${Date.now()}-skill`, sender: 'system', text: player.mp < requestedSkill.costMp
+            ? `${requestedSkill.name}需要 ${requestedSkill.costMp} MP，目前魔力不足，沒有施放。`
+            : `${requestedSkill.name}目前無法恢復 HP，沒有消耗 MP。`,
+          timestamp: new Date().toLocaleTimeString()
+        }]);
+        return;
+      }
+      updatePlayer(applyStateChanges(player, {
+        storyText: '', suggestedActions: [],
+        stateChanges: { hpChange: restored, mpChange: -requestedSkill.costMp }
+      }, 'game'));
+      setMessages((prev) => [...prev, userMessage, {
+        id: `${Date.now()}-skill`, sender: 'system', text: `施放${requestedSkill.name}，HP +${restored}、MP -${requestedSkill.costMp}。`, timestamp: new Date().toLocaleTimeString()
+      }]);
+      return;
+    }
     if (!apiKey) {
       setIsKeyModalOpen(true);
       return;
@@ -367,19 +471,8 @@ export default function App() {
 
     try {
       const historyTexts = messages.map((m) => `${m.sender === 'user' ? '玩家' : 'GM'}: ${m.text}`);
-      let aiResponse = await sendPlayerAction(modelSettings, apiKey, player, actionText, historyTexts);
+      const aiResponse = await sendPlayerAction(modelSettings, apiKey, player, actionText, historyTexts);
       let storyText = aiResponse.storyText;
-      const explicitSelfDamage = parseExplicitSelfDamage(actionText);
-      if (explicitSelfDamage !== undefined) {
-        const actualDamage = Math.min(player.hp, explicitSelfDamage);
-        aiResponse = {
-          ...aiResponse,
-          checkRequest: undefined,
-          checkOutcomes: undefined,
-          stateChanges: { ...aiResponse.stateChanges, hpChange: -actualDamage }
-        };
-        storyText += `\n\n🩸 你對自己造成 ${actualDamage} 點傷害。`;
-      }
       let resultToApply = aiResponse;
       let checkResult: ActionCheckResult | undefined;
       let nextPlayer = player;
@@ -406,6 +499,27 @@ export default function App() {
         !player.activeQuests.some((previous) => previous.questId === entry.questId));
       const questNotice = acceptedQuests.length
         ? `\n\n📜 已接取任務「${acceptedQuests.map((entry) => getQuestById(entry.questId)?.title ?? entry.questId).join('、')}」。`
+        : '';
+      const completedQuests = nextPlayer.activeQuests.filter((entry) => entry.status === 'completed' &&
+        player.activeQuests.some((previous) => previous.questId === entry.questId && previous.status === 'in_progress'));
+      const rewardRecords = nextPlayer.transactionHistory.filter((record) =>
+        record.type === 'quest_reward' && !player.transactionHistory.some((previous) => previous.id === record.id));
+      const questCompletionNotice = completedQuests.length
+        ? `\n\n✅ ${completedQuests.map((entry) => {
+          const title = getQuestById(entry.questId)?.title ?? entry.questId;
+          const reward = rewardRecords.find((record) => record.description.includes(title));
+          return reward?.description ?? `任務「${title}」已完成。`;
+        }).join('\n')}`
+        : '';
+      const newNpcTransfers = nextPlayer.transactionHistory.filter((record) => record.type === 'npc_transfer' &&
+        !player.transactionHistory.some((previous) => previous.id === record.id));
+      const requestedNpcTransfers = resultToApply.stateChanges?.npcItemTransfers?.length ?? 0;
+      const successfulNpcTransfers = newNpcTransfers.filter((record) => record.description.startsWith('從 '));
+      const npcTransferNotice = successfulNpcTransfers.length || successfulNpcTransfers.length < requestedNpcTransfers
+        ? `\n\n📦 ${[
+          ...successfulNpcTransfers.map((record) => record.description),
+          ...(successfulNpcTransfers.length < requestedNpcTransfers ? ['NPC 不在場或持有物不足，未能取得敘事中提及的全部物品。'] : [])
+        ].join('\n')}`
         : '';
 
       const textTravelIntent = resolveExplicitTravelIntent(actionText, player);
@@ -436,7 +550,7 @@ export default function App() {
         {
           id: (Date.now() + 1).toString(),
           sender: 'ai',
-          text: `${storyText}${questNotice}${locationNotice}${deathNotice}`,
+          text: `${storyText}${questNotice}${questCompletionNotice}${npcTransferNotice}${locationNotice}${deathNotice}`,
           options: aiResponse.suggestedActions,
           travelOptions: textTravelIntent.kind === 'ambiguous'
             ? textTravelIntent.candidates.map((candidate) => ({ mapId: candidate.id, name: candidate.name }))
@@ -476,7 +590,7 @@ export default function App() {
         inputDisabled={player.isDead || isPlayerUnconscious(player)}
         onTravel={handleTravel}
       />
-      {isSidebarOpen && <PlayerHUD player={player} onReset={handleResetPlayer} storageWarning={storageWarning} onTravel={handleTravel} onAcceptQuest={handleAcceptQuest} onStartCombat={handleStartCombat} onFleeCombat={handleFleeCombat} onAttack={handleAttack} onUseSkill={handleUseSkill} onUseItem={handleUseItem} onBuyItem={handleBuyItem} onSellItem={handleSellItem} onEquipItem={handleEquipItem} />}
+      {isSidebarOpen && <PlayerHUD player={player} onReset={handleResetPlayer} storageWarning={storageWarning} onTravel={handleTravel} onAcceptQuest={handleAcceptQuest} onTurnInQuest={handleTurnInQuest} onStartCombat={handleStartCombat} onFleeCombat={handleFleeCombat} onAttack={handleAttack} onUseSkill={handleUseSkill} onUseItem={handleUseItem} onBuyItem={handleBuyItem} onSellItem={handleSellItem} onEquipItem={handleEquipItem} onUseService={handleUseService} />}
       {isKeyModalOpen && <ApiKeyModal
         isOpen={true}
         currentSettings={modelSettings}

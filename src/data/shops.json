@@ -6,7 +6,8 @@
     "items": [
       { "itemId": "ITEM-101" },
       { "itemId": "ITEM-201" }
-    ]
+    ],
+    "services": []
   },
   {
     "id": "SHOP-002",
@@ -15,6 +16,15 @@
     "items": [
       { "itemId": "ITEM-001" },
       { "itemId": "ITEM-003" }
+    ],
+    "services": [
+      {
+        "id": "SERVICE-REST-001",
+        "name": "旅店休息",
+        "price": 5,
+        "kind": "restore_resources",
+        "description": "支付 5 金幣，在旅店休息並恢復 HP 與 MP。休息時間之後由時間系統處理。"
+      }
     ]
   }
 ]
