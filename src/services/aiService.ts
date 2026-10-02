@@ -1,6 +1,7 @@
 import type { PlayerState, AIResponsePayload } from '../types/game';
 import type { AIModelSettings } from './aiModels';
 import { getMapById } from '../data/staticData';
+import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from '../utils/travelIntent';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -163,6 +164,7 @@ export async function sendPlayerAction(
 - 已擊敗怪物數量: ${JSON.stringify(playerState.defeatedMonsters)}
 
 請根據玩家行動進行劇情描述，並按下列規則判斷地區移動意圖：
+- 每次回應都必須包含 travelRequest；不移動時設為 null。storyText 不得宣稱玩家已抵達或切換地區，除非同一回應提供有效 travelRequest.destinationMapId。
 - 只有玩家明確表達「前往、走到、離開目前地區去、移動到」某個可前往地區，才設定 travelRequest.destinationMapId。該 ID 必須完全符合上方相鄰地區清單。
 - 詢問地點資訊、觀察遠方、談論某地或描述打算但尚未決定，都不算移動；travelRequest 設為 null。含糊的「去那裡看看」且目的地不明時，先在 storyText 詢問，不要猜測或切換。
 - 玩家說「回到村莊/森林」等泛稱時，先從相鄰地區中依 aliases/tags 找候選；若上一個地區符合且可返回，優先選上一個地區。若仍有多個合理候選，travelRequest 設為 null，並在 storyText 詢問具體目的地。
@@ -207,42 +209,67 @@ export async function sendPlayerAction(
   const endpoint = isOpenAI
     ? 'https://api.openai.com/v1/responses'
     : `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(settings.model)}:generateContent`;
-  const requestBody = isOpenAI
+  const createRequestBody = (input: string) => isOpenAI
     ? {
         model: settings.model,
         instructions: systemPrompt,
-        input: userPrompt,
+        input,
         text: { format: { type: 'json_object' } }
       }
     : {
-        contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }] }],
+        contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n${input}` }] }],
         generationConfig: { responseMimeType: 'application/json' }
       };
-
-  try {
+  const headers: Record<string, string> = isOpenAI
+    ? { 'Content-Type': 'application/json', Authorization: `Bearer ${cleanApiKey}` }
+    : { 'Content-Type': 'application/json', 'x-goog-api-key': cleanApiKey };
+  const requestModelText = async (input: string) => {
     const response = await fetchWithRetry(endpoint, {
       method: 'POST',
-      headers: isOpenAI
-        ? { 'Content-Type': 'application/json', Authorization: `Bearer ${cleanApiKey}` }
-        : { 'Content-Type': 'application/json', 'x-goog-api-key': cleanApiKey },
-      body: JSON.stringify(requestBody)
+      headers,
+      body: JSON.stringify(createRequestBody(input))
     });
-
     if (!response.ok) {
       const errorBody = await response.json().catch(() => null);
       const detail = errorBody ? JSON.stringify(errorBody) : response.statusText;
       throw new Error(`${settings.provider} ${settings.model} 回應 HTTP ${response.status}: ${detail}`);
     }
-
-    const data: unknown = await response.json();
-    const rawText = extractResponseText(data, settings.provider);
-    const cleanedJsonStr = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
-
+    return extractResponseText(await response.json() as unknown, settings.provider);
+  };
+  const parseResponseText = (text: string): AIResponsePayload | null => {
+    const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
     try {
-      const parsed = parseAIResponse(JSON.parse(cleanedJsonStr) as unknown);
-      if (parsed) return parsed;
+      return parseAIResponse(JSON.parse(cleaned) as unknown);
     } catch {
-      // Show a readable fallback below when the provider returns malformed JSON.
+      return null;
+    }
+  };
+
+  try {
+    const rawText = await requestModelText(userPrompt);
+    let parsed = parseResponseText(rawText);
+    if (parsed) {
+      const requestedId = parsed.travelRequest?.destinationMapId;
+      const requestIsValid = !!requestedId && availableDestinations.some((destination) => destination.id === requestedId);
+      const localIntent = resolveExplicitTravelIntent(actionText, playerState);
+      const narrativeClaimsTravel = storyClaimsPlayerMoved(parsed.storyText);
+
+      const requestNeedsRepair = (!!requestedId && !requestIsValid) ||
+        (!requestedId && (localIntent.kind === 'ambiguous' || narrativeClaimsTravel));
+      if (requestNeedsRepair) {
+        const repairPrompt = `${userPrompt}\n\n【移動回應一致性修正】\n上一份 JSON 的玩家行動為「${actionText}」，AI 敘事為「${parsed.storyText}」，但 travelRequest 缺漏或不是合法的相鄰地區 ID。請重新產生完整 JSON：如果玩家確實要求移動且目的地可唯一判斷，travelRequest.destinationMapId 必須使用可前往清單中的精確 ID；若目的地有多個可能，travelRequest 設為 null 並在 storyText 詢問玩家；若沒有實際移動，請改寫 storyText，不要描述玩家已抵達或切換地區。不要宣稱未執行的移動已完成。`;
+        try {
+          const repairedText = await requestModelText(repairPrompt);
+          const repaired = parseResponseText(repairedText);
+          if (repaired) {
+            const repairedId = repaired.travelRequest?.destinationMapId;
+            if (!repairedId || availableDestinations.some((destination) => destination.id === repairedId)) parsed = repaired;
+          }
+        } catch (repairError) {
+          console.warn('AI 移動回應修正失敗，保留初始回應並由遊戲端驗證。', repairError);
+        }
+      }
+      return parsed;
     }
 
     return {

@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import type { ActionCheckResult, MapStatic, PlayerState, StoryMessage } from './types/game';
+import type { ActionCheckResult, PlayerState, StoryMessage } from './types/game';
 import { loadGameSession, resetPlayerState, saveGameSession } from './utils/playerStorage';
 import { applyStateChanges } from './utils/applyStateChanges';
 import { getItemById, getMapById, getMonsterById, getQuestById } from './data/staticData';
 import { getPlayerStatBreakdown, resolveActionCheck } from './utils/gameChecks';
+import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from './utils/travelIntent';
 import { sendPlayerAction } from './services/aiService';
 import type { AIProvider } from './services/aiModels';
 import { loadAIModelSettings, saveAIModelSettings, type AIModelSettings } from './services/aiModels';
@@ -32,54 +33,6 @@ function createRestoreNotice(player: PlayerState, savedAt: number, messageCount:
     text: lines.join('\n'),
     timestamp: new Date(savedAt).toLocaleTimeString()
   };
-}
-
-type TravelIntentResolution =
-  | { kind: 'resolved'; destination: MapStatic }
-  | { kind: 'ambiguous'; candidates: MapStatic[] }
-  | { kind: 'none' };
-
-const destinationCategoryPhrases: Record<string, string[]> = {
-  village: ['村莊', '村庄', '村子', '村落', '村', '回村', '返村'],
-  settlement: ['城鎮', '城镇', '城裡', '城里', '城內', '城内'],
-  forest: ['森林', '樹林', '树林', '林地', '回森林', '回林子'],
-  wilderness: ['野外', '荒野']
-};
-const returnPhrases = ['回到', '返回', '折返', '回村', '返村', '回森林', '回林子', '回去'];
-
-function resolveExplicitTravelIntent(actionText: string, player: PlayerState): TravelIntentResolution {
-  const normalized = actionText.toLocaleLowerCase();
-  if (/(不想|不打算|不去|不前往|不要|先不|暫時不|暂时不|還不|还不|能不能|可不可以|是否|要不要|如何|怎麼|怎么|路線|路线|多遠|多远|多久|在哪|哪裡|哪里|位置|告訴我|告诉我)/.test(normalized) ||
-      !/(前往|前去|走到|移動到|移动到|進入|进入|出發前往|出发前往|帶我去|带我去|我要去|我想去|我決定去|我决定去|去往|出發去|出发去|去|到|往|回到|返回|折返|回村|回森林|回去)/.test(normalized)) {
-    return { kind: 'none' };
-  }
-
-  const currentMap = getMapById(player.currentMapId);
-  const candidates = currentMap?.connectedMapIds
-    .map((mapId) => getMapById(mapId))
-    .filter((map): map is MapStatic => !!map) ?? [];
-  const namedMatches = candidates.filter((map) => [map.name, ...(map.aliases ?? [])]
-    .some((label) => label && normalized.includes(label.toLocaleLowerCase())));
-  let matches = namedMatches;
-  const requestedTags = new Set<string>();
-
-  if (matches.length === 0) {
-    for (const [tag, phrases] of Object.entries(destinationCategoryPhrases)) {
-      if (phrases.some((phrase) => normalized.includes(phrase.toLocaleLowerCase()))) requestedTags.add(tag);
-    }
-    matches = candidates.filter((map) => (map.locationTags ?? []).some((tag) => requestedTags.has(tag)));
-  }
-
-  const isReturning = returnPhrases.some((phrase) => normalized.includes(phrase));
-  if (isReturning && player.previousMapId) {
-    const previousDestination = candidates.find((map) => map.id === player.previousMapId);
-    const previousMatchesIntent = matches.some((map) => map.id === player.previousMapId) ||
-      (namedMatches.length === 0 && requestedTags.size === 0);
-    if (previousDestination && previousMatchesIntent) return { kind: 'resolved', destination: previousDestination };
-  }
-  if (matches.length === 1) return { kind: 'resolved', destination: matches[0] };
-  if (matches.length > 1) return { kind: 'ambiguous', candidates: matches };
-  return { kind: 'none' };
 }
 
 export default function App() {
@@ -330,6 +283,8 @@ export default function App() {
           ? `\n\n📍 你想前往的地區有多個可能地點，請選擇目的地：`
           : requestedDestinationId
           ? `\n\n⚠️ 目前無法前往「${getMapById(requestedDestinationId)?.name ?? requestedDestinationId}」，所在地區未變更。請選擇右側「鄰近地點」中的可前往區域。`
+          : storyClaimsPlayerMoved(storyText)
+            ? `\n\n⚠️ 目前沒有有效的地區移動請求，因此所在地區未變更。若要移動，請明確指定可前往地點。`
           : previousMap && nextMap && previousMap.id !== nextMap.id
             ? `\n\n⚠️ AI 敘事提及地區變更，但沒有有效的移動請求；所在地區維持${previousMap.name}。`
             : '';
