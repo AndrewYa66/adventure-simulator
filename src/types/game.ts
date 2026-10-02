@@ -41,10 +41,23 @@ export interface PlayerGrowthStatic {
   notes: string;
 }
 
+export type CharacterAlignment = '守序善良' | '中立善良' | '混亂善良' | '守序中立' | '絕對中立' | '混亂中立' | '守序邪惡' | '中立邪惡' | '混亂邪惡';
+
+export interface CharacterClassStatic {
+  id: string;
+  name: string;
+  description: string;
+  baseAbilities: { str: number; dex: number; con: number; int: number; wis: number; cha: number };
+  bonuses: { atk: number; def: number; spd: number; maxHp: number; maxMp: number };
+  startingItems: { itemId: string; quantity: number }[];
+  startingEquipment: { weaponItemId?: string; armorItemId?: string; accessoryItemId?: string };
+}
+
 /** 怪物靜態資料 (來自 monsters.json) */
 export interface MonsterStatic {
   id: string;             // 例如: "MON-001"
   name: string;
+  alignment?: CharacterAlignment;
   enName: string;
   tier: string;           // 例如: "普通 (Common)"
   recommendedLevel: number;
@@ -65,7 +78,16 @@ export interface MonsterStatic {
   specialAbilities: {
     name: string;
     effect: string;
+    combatAction?: {
+      triggerEveryRounds: number;
+      checkStat: ActionCheckResult['stat'];
+      dc: number;
+      damageMultiplier: number;
+      applyUnconsciousTurnsOnFailure?: number;
+    };
   }[];
+  requiredQuestId?: string;
+  isBoss?: boolean;
   tacticsAndBehavior: string; // 供 AI DM 參考的行為提示
 }
 
@@ -84,7 +106,7 @@ export interface NpcStatic {
   categoryId: string;
   mapId: string;
   stats?: Partial<{ hp: number; atk: number; def: number; spd: number }>;
-  alignment?: '守序善良' | '中立善良' | '混亂善良' | '守序中立' | '絕對中立' | '混亂中立' | '守序邪惡' | '中立邪惡' | '混亂邪惡';
+  alignment?: CharacterAlignment;
   description: string;
 }
 
@@ -103,6 +125,7 @@ export interface MapStatic {
   monstersPresent: string[]; // 怪物 ID 陣列
   pointsOfInterest: string[];
   npcsPresent: string[];
+  requiredQuestId?: string;
 }
 
 /** 任務靜態資料 (來自 quests.json) */
@@ -112,6 +135,7 @@ export interface QuestStatic {
   questGiverId: string;
   questGiver: string;
   mapId: string;
+  prerequisiteQuestIds?: string[];
   objective: string;
   requirements: {
     defeatMonsters?: { monsterId: string; quantity: number }[];
@@ -133,6 +157,10 @@ export interface QuestStatic {
 /** 玩家動態存檔狀態 (寫入 LocalStorage) */
 export interface PlayerState {
   name: string;
+  classId: string;
+  alignment: CharacterAlignment;
+  setupComplete: boolean;
+  abilities: { str: number; dex: number; con: number; int: number; wis: number; cha: number };
   isDead: boolean;
   statusEffects: { id: 'unconscious'; remainingTurns: number }[];
   level: number;
@@ -182,7 +210,7 @@ export interface StoryMessage {
 
 export interface ActionCheckResult {
   reason: string;
-  stat: 'atk' | 'def' | 'spd';
+  stat: 'atk' | 'def' | 'spd' | 'str' | 'dex' | 'con' | 'int' | 'wis' | 'cha';
   d20Rolls: number[];
   baseStat: number;
   equipmentBonus: number;

@@ -1,5 +1,6 @@
 import type {
   ItemStatic,
+  CharacterClassStatic,
   MapStatic,
   MonsterStatic,
   NpcCategoryStatic,
@@ -9,6 +10,7 @@ import type {
 } from '../types/game';
 
 import rawItems from './items.json';
+import rawCharacterClasses from './character_classes.json';
 import rawMaps from './maps.json';
 import rawMonsters from './monsters.json';
 import rawNpcCategories from './npc_categories.json';
@@ -18,6 +20,7 @@ import rawQuests from './quests.json';
 
 // 進行靜態型別轉型，確保導出的資料陣列完全符合 DTO 規範
 export const itemsDatabase: ItemStatic[] = rawItems as ItemStatic[];
+export const characterClassesDatabase: CharacterClassStatic[] = rawCharacterClasses as CharacterClassStatic[];
 export const mapsDatabase: MapStatic[] = rawMaps as MapStatic[];
 export const monstersDatabase: MonsterStatic[] = rawMonsters as MonsterStatic[];
 export const npcCategoriesDatabase: NpcCategoryStatic[] = rawNpcCategories as NpcCategoryStatic[];
@@ -31,6 +34,18 @@ export const questsDatabase: QuestStatic[] = rawQuests as QuestStatic[];
 
 export const getItemById = (id: string): ItemStatic | undefined => {
   return itemsDatabase.find((item) => item.id === id);
+};
+
+export const getCharacterClassById = (id: string): CharacterClassStatic | undefined =>
+  characterClassesDatabase.find((characterClass) => characterClass.id === id);
+
+export const getPlayerResourceCaps = (level: number, classId: string) => {
+  const growth = getPlayerGrowthByLevel(level);
+  const characterClass = getCharacterClassById(classId);
+  return {
+    maxHp: Math.max(1, (growth?.maxHp ?? 100) + (characterClass?.bonuses.maxHp ?? 0)),
+    maxMp: Math.max(0, (growth?.maxMp ?? 30) + (characterClass?.bonuses.maxMp ?? 0))
+  };
 };
 
 export const getMapById = (id: string): MapStatic | undefined => {
@@ -63,4 +78,10 @@ export const getUnlockedSkillsByLevel = (level: number) => playerGrowthDatabase
 
 export const getQuestById = (id: string): QuestStatic | undefined => {
   return questsDatabase.find((quest) => quest.id === id);
+};
+
+export const canPlayerEnterMap = (player: import('../types/game').PlayerState, map: MapStatic): boolean => {
+  if (!map.requiredQuestId) return true;
+  return player.activeQuests.some((quest) => quest.questId === map.requiredQuestId &&
+    (quest.status === 'in_progress' || quest.status === 'completed'));
 };

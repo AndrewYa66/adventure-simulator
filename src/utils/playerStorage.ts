@@ -1,5 +1,5 @@
 import type { GameSession, PlayerState, StoryMessage } from '../types/game';
-import { getItemById, getMapById, getMonsterById, getPlayerGrowthByLevel, getQuestById } from '../data/staticData';
+import { getCharacterClassById, getItemById, getMapById, getMonsterById, getPlayerResourceCaps, getQuestById } from '../data/staticData';
 import { createInitialPlayer } from './playerInit';
 
 const PLAYER_STORAGE_KEY = 'TRPG_PLAYER_STATE';
@@ -27,8 +27,16 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
       !isRecord(value.storyFlags) || !Object.values(value.storyFlags).every((flag) => typeof flag === 'boolean') ||
       !Array.isArray(value.activeQuests)) return null;
 
-  const growth = getPlayerGrowthByLevel(value.level as number);
-  if (!growth || (value.hp as number) > growth.maxHp || (value.mp as number) > growth.maxMp) return null;
+  const classId = typeof value.classId === 'string' && getCharacterClassById(value.classId) ? value.classId : 'adventurer';
+  const resourceCaps = getPlayerResourceCaps(value.level as number, classId);
+  if ((value.hp as number) > resourceCaps.maxHp || (value.mp as number) > resourceCaps.maxMp) return null;
+  const abilityKeys = ['str', 'dex', 'con', 'int', 'wis', 'cha'] as const;
+  const savedAbilities = isRecord(value.abilities) ? value.abilities : {};
+  const abilityDefaults = getCharacterClassById(classId)?.baseAbilities ?? { str: 12, dex: 12, con: 12, int: 10, wis: 10, cha: 10 };
+  const abilities = Object.fromEntries(abilityKeys.map((key) => {
+    const score = savedAbilities[key];
+    return [key, Number.isInteger(score) && (score as number) >= 1 && (score as number) <= 30 ? score as number : abilityDefaults[key]];
+  })) as typeof abilityDefaults;
 
   const inventory = value.inventory.flatMap((entry) => {
     if (!isRecord(entry) || typeof entry.itemId !== 'string' || !getItemById(entry.itemId) ||
@@ -81,6 +89,12 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
 
   return {
     name: value.name.trim(),
+    classId,
+    alignment: ['守序善良', '中立善良', '混亂善良', '守序中立', '絕對中立', '混亂中立', '守序邪惡', '中立邪惡', '混亂邪惡'].includes(String(value.alignment))
+      ? value.alignment as PlayerState['alignment']
+      : '絕對中立',
+    setupComplete: typeof value.setupComplete === 'boolean' ? value.setupComplete : true,
+    abilities,
     isDead,
     statusEffects,
     level: value.level as number,

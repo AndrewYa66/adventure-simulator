@@ -1,0 +1,38 @@
+[
+  {
+    "id": "adventurer",
+    "name": "冒險者",
+    "description": "均衡的新手角色，適合熟悉基本規則。",
+    "baseAbilities": { "str": 12, "dex": 12, "con": 12, "int": 10, "wis": 10, "cha": 10 },
+    "bonuses": { "atk": 0, "def": 0, "spd": 0, "maxHp": 0, "maxMp": 0 },
+    "startingItems": [{ "itemId": "ITEM-001", "quantity": 2 }, { "itemId": "ITEM-003", "quantity": 1 }],
+    "startingEquipment": { "weaponItemId": "ITEM-101", "armorItemId": "ITEM-201" }
+  },
+  {
+    "id": "warrior",
+    "name": "戰士",
+    "description": "擅長近身作戰，生命與防禦較高。",
+    "baseAbilities": { "str": 15, "dex": 10, "con": 14, "int": 8, "wis": 10, "cha": 10 },
+    "bonuses": { "atk": 2, "def": 1, "spd": 0, "maxHp": 15, "maxMp": 0 },
+    "startingItems": [{ "itemId": "ITEM-001", "quantity": 2 }, { "itemId": "ITEM-003", "quantity": 1 }],
+    "startingEquipment": { "weaponItemId": "ITEM-101", "armorItemId": "ITEM-201" }
+  },
+  {
+    "id": "scout",
+    "name": "斥候",
+    "description": "身手靈活，擅長觀察、潛行與應變。",
+    "baseAbilities": { "str": 11, "dex": 15, "con": 11, "int": 10, "wis": 14, "cha": 9 },
+    "bonuses": { "atk": 1, "def": 0, "spd": 2, "maxHp": 0, "maxMp": 0 },
+    "startingItems": [{ "itemId": "ITEM-001", "quantity": 2 }, { "itemId": "ITEM-003", "quantity": 1 }],
+    "startingEquipment": { "weaponItemId": "ITEM-101", "armorItemId": "ITEM-201" }
+  },
+  {
+    "id": "mage",
+    "name": "法師",
+    "description": "魔力與學識較高，但近身作戰能力較弱。",
+    "baseAbilities": { "str": 8, "dex": 10, "con": 10, "int": 15, "wis": 13, "cha": 12 },
+    "bonuses": { "atk": -1, "def": -1, "spd": 0, "maxHp": -5, "maxMp": 15 },
+    "startingItems": [{ "itemId": "ITEM-001", "quantity": 1 }, { "itemId": "ITEM-003", "quantity": 2 }],
+    "startingEquipment": { "armorItemId": "ITEM-201" }
+  }
+]

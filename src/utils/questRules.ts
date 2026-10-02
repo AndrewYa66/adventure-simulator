@@ -4,6 +4,9 @@ import { getMapById, getNpcById } from '../data/staticData';
 export function canAcceptQuest(player: PlayerState, quest: QuestStatic): boolean {
   if (player.activeQuests.some((entry) => entry.questId === quest.id)) return false;
   if (player.currentMapId !== quest.mapId) return false;
+  if (!(quest.prerequisiteQuestIds ?? []).every((requiredId) =>
+    player.activeQuests.some((entry) => entry.questId === requiredId && entry.status === 'completed')
+  )) return false;
 
   const map = getMapById(player.currentMapId);
   const giver = getNpcById(quest.questGiverId);

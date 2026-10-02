@@ -1,5 +1,5 @@
 import type { AIResponsePayload, PlayerState } from '../types/game';
-import { getItemById, getMapById, getMonsterById, getPlayerGrowthByLevel, getQuestById } from '../data/staticData';
+import { getItemById, getMapById, getMonsterById, getPlayerGrowthByLevel, getPlayerResourceCaps, getQuestById } from '../data/staticData';
 import { acceptQuest } from './questRules';
 
 export function applyStateChanges(player: PlayerState, response: AIResponsePayload, source: 'ai' | 'game' = 'ai'): PlayerState {
@@ -95,15 +95,18 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
   while (growth && exp >= growth.requiredExp) {
     const nextGrowth = getPlayerGrowthByLevel(level + 1);
     if (!nextGrowth) break;
-    hp = Math.min(nextGrowth.maxHp, hp + (nextGrowth.maxHp - growth.maxHp));
-    mp = Math.min(nextGrowth.maxMp, mp + (nextGrowth.maxMp - growth.maxMp));
+    const previousCaps = getPlayerResourceCaps(level, player.classId);
+    const nextCaps = getPlayerResourceCaps(nextGrowth.level, player.classId);
+    hp = Math.min(nextCaps.maxHp, hp + (nextCaps.maxHp - previousCaps.maxHp));
+    mp = Math.min(nextCaps.maxMp, mp + (nextCaps.maxMp - previousCaps.maxMp));
     level = nextGrowth.level;
     growth = nextGrowth;
   }
 
   if (growth) {
-    hp = Math.min(hp, growth.maxHp);
-    mp = Math.min(mp, growth.maxMp);
+    const caps = getPlayerResourceCaps(level, player.classId);
+    hp = Math.min(hp, caps.maxHp);
+    mp = Math.min(mp, caps.maxMp);
   }
 
   return {

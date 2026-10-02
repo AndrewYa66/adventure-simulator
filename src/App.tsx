@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ActionCheckResult, PlayerGrowthStatic, PlayerState, StoryMessage } from './types/game';
 import { loadGameSession, resetPlayerState, saveGameSession } from './utils/playerStorage';
 import { applyStateChanges } from './utils/applyStateChanges';
-import { getItemById, getMapById, getMonsterById, getPlayerGrowthByLevel, getQuestById, getUnlockedSkillsByLevel } from './data/staticData';
+import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getMonsterById, getPlayerResourceCaps, getQuestById, getUnlockedSkillsByLevel } from './data/staticData';
 import { getPlayerStatBreakdown, resolveActionCheck } from './utils/gameChecks';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from './utils/travelIntent';
 import { sendPlayerAction } from './services/aiService';
@@ -13,6 +13,36 @@ import { loadAIModelSettings, saveAIModelSettings, type AIModelSettings } from '
 import { PlayerHUD } from './components/PlayerHUD';
 import { StoryLog } from './components/StoryLog';
 import { ApiKeyModal } from './components/ApiKeyModal';
+import { CharacterSetup } from './components/CharacterSetup';
+import { createInitialPlayer } from './utils/playerInit';
+import type { CharacterAlignment } from './types/game';
+
+function resolveEnemyTurn(player: PlayerState, combat: NonNullable<PlayerState['combat']>, monster: NonNullable<ReturnType<typeof getMonsterById>>) {
+  const special = monster.specialAbilities.find((ability) => ability.combatAction && combat.round % ability.combatAction.triggerEveryRounds === 0);
+  const action = special?.combatAction;
+  const checkStat = action?.checkStat ?? 'def';
+  const dc = action?.dc ?? 10 + Math.floor(monster.stats.atk / 2);
+  const check = {
+    ...resolveActionCheck(player, checkStat, dc),
+    stat: checkStat,
+    reason: action ? `${monster.name}施放${special?.name}：玩家進行${checkStat === 'dex' ? '閃避' : '抵抗'}檢定` : `${monster.name}反擊：玩家進行閃避檢定`,
+    label: action ? `${special?.name}檢定` : '玩家閃避檢定'
+  } satisfies ActionCheckResult;
+  const damage = check.success ? 0 : Math.max(1, Math.floor(monster.stats.atk * (action?.damageMultiplier ?? 1)) - Math.floor(getPlayerStatBreakdown(player, 'def').statValue / 4));
+  const hp = Math.max(0, player.hp - damage);
+  const isDead = hp <= 0;
+  const unconsciousTurns = !isDead && !check.success ? action?.applyUnconsciousTurnsOnFailure ?? 0 : 0;
+  const statusEffects = player.statusEffects.filter((effect) => effect.id !== 'unconscious');
+  if (unconsciousTurns > 0) statusEffects.push({ id: 'unconscious', remainingTurns: unconsciousTurns });
+  const nextPlayer: PlayerState = {
+    ...player, hp, isDead, statusEffects,
+    ...(isDead ? { combat: undefined } : { combat: { ...combat, round: combat.round + 1 } })
+  };
+  const result = check.success
+    ? action ? `你成功閃過${special?.name}。` : `你成功閃避${monster.name}的反擊。`
+    : `${action ? `${special?.name}命中` : `${monster.name}反擊命中`}，你受到 ${damage} 點傷害。${unconsciousTurns ? `你陷入昏迷 ${unconsciousTurns} 回合。` : ''}`;
+  return { player: nextPlayer, check, text: `${result}${isDead ? '\n☠️ HP 歸零，你已死亡。' : `\n第 ${combat.round + 1} 回合開始。`}` };
+}
 
 function createRestoreNotice(player: PlayerState, savedAt: number, messageCount: number): StoryMessage {
   const map = getMapById(player.currentMapId);
@@ -49,6 +79,7 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [storageWarning, setStorageWarning] = useState(false);
   const [player, setPlayer] = useState<PlayerState>(initialSession.player);
+  const [isCharacterSetupOpen, setIsCharacterSetupOpen] = useState(!initialSession.player.setupComplete);
 
   const [messages, setMessages] = useState<StoryMessage[]>(initialSession.resumed
     ? [createRestoreNotice(initialSession.player, initialSession.savedAt!, initialSession.messages.filter((message) => message.id !== 'session-restore-notice').length), ...initialSession.messages.filter((message) => message.id !== 'session-restore-notice')]
@@ -85,6 +116,7 @@ export default function App() {
   const handleResetPlayer = () => {
     if (!window.confirm('確定要清除目前角色存檔並重新開始嗎？')) return;
     updatePlayer(resetPlayerState());
+    setIsCharacterSetupOpen(true);
     setMessages([{
       id: Date.now().toString(),
       sender: 'ai',
@@ -94,11 +126,24 @@ export default function App() {
     }]);
   };
 
+  const handleCreateCharacter = (name: string, classId: string, alignment: CharacterAlignment) => {
+    const newPlayer = createInitialPlayer(name, classId, alignment, true);
+    updatePlayer(newPlayer);
+    setIsCharacterSetupOpen(false);
+    setMessages([{
+      id: `${Date.now()}`,
+      sender: 'ai',
+      text: `新的冒險即將開始。${name}（${getCharacterClassById(classId)?.name ?? classId}）來到橡木村，村長埃爾德正在公會告示板前等候冒險者。`,
+      options: ['向村長詢問任務細節', '前往綠林古道探索', '檢查背包裝備'],
+      timestamp: new Date().toLocaleTimeString()
+    }]);
+  };
+
   const movePlayerTo = (mapId: string, sourcePlayer: PlayerState = player) => {
     if (sourcePlayer.combat || !canPlayerAct(sourcePlayer)) return null;
     const currentMap = getMapById(sourcePlayer.currentMapId);
     const destination = getMapById(mapId);
-    if (!currentMap?.connectedMapIds.includes(mapId) || !destination) return null;
+    if (!currentMap?.connectedMapIds.includes(mapId) || !destination || !canPlayerEnterMap(sourcePlayer, destination)) return null;
     const nextPlayer = { ...sourcePlayer, previousMapId: sourcePlayer.currentMapId, currentMapId: destination.id };
     updatePlayer(nextPlayer);
     return { player: nextPlayer, destination };
@@ -142,7 +187,8 @@ export default function App() {
   const handleStartCombat = (monsterId: string) => {
     const map = getMapById(player.currentMapId);
     const monster = getMonsterById(monsterId);
-    if (player.combat || !canPlayerAct(player) || !map || map.isSafeZone || !map.monstersPresent.includes(monsterId) || !monster) return;
+    if (player.combat || !canPlayerAct(player) || !map || map.isSafeZone || !map.monstersPresent.includes(monsterId) || !monster ||
+        (monster.requiredQuestId && !player.activeQuests.some((quest) => quest.questId === monster.requiredQuestId && quest.status === 'in_progress'))) return;
     updatePlayer({ ...player, combat: { monsterId, currentHp: monster.stats.hp, round: 1 } });
     appendSystemMessage(`你與${monster.name}進入戰鬥！攻擊、已解鎖技能及消耗品各自消耗一個行動回合；敵人存活時會反擊並進行閃避檢定。`);
   };
@@ -159,7 +205,14 @@ export default function App() {
   const handleCombatAction = (skill?: NonNullable<PlayerGrowthStatic['unlockedSkill']>) => {
     const combat = player.combat;
     const monster = combat ? getMonsterById(combat.monsterId) : undefined;
-    if (!combat || !monster || !canPlayerAct(player)) return;
+    if (!combat || !monster || player.isDead) return;
+    if (isPlayerUnconscious(player)) {
+      const recovered = { ...player, statusEffects: player.statusEffects.filter((effect) => effect.id !== 'unconscious'), combat: { ...combat } };
+      const enemyTurn = resolveEnemyTurn(recovered, combat, monster);
+      updatePlayer(enemyTurn.player);
+      appendSystemMessage(`你仍昏迷，失去本回合行動。\n${enemyTurn.text}`, [enemyTurn.check]);
+      return;
+    }
     if (skill && player.mp < skill.costMp) return;
 
     const attackCheck = {
@@ -211,25 +264,9 @@ export default function App() {
       return;
     }
 
-    const dodgeCheck = {
-      ...resolveActionCheck(actionPlayer, 'def', 10 + Math.floor(monster.stats.atk / 2)),
-      stat: 'def' as const,
-      reason: `${monster.name}反擊：玩家進行閃避檢定`,
-      label: '玩家閃避檢定'
-    };
-    checks.push(dodgeCheck);
-    const receivedDamage = dodgeCheck.success ? 0 : Math.max(1, monster.stats.atk - Math.floor(getPlayerStatBreakdown(actionPlayer, 'def').statValue / 4));
-    const hp = Math.max(0, actionPlayer.hp - receivedDamage);
-    const stillFighting = hp > 0;
-    updatePlayer({
-      ...actionPlayer,
-      hp,
-      isDead: hp <= 0,
-      ...(stillFighting ? { combat: { ...combat, currentHp: monsterHp, round: combat.round + 1 } } : { combat: undefined })
-    });
-    appendSystemMessage(`${attackText}\n${dodgeCheck.success
-      ? `你成功閃避${monster.name}的反擊。`
-      : `${monster.name}反擊命中，你受到 ${receivedDamage} 點傷害。`}${stillFighting ? `\n第 ${combat.round + 1} 回合開始。` : '\n☠️ HP 歸零，你已死亡。'}`, checks);
+    const enemyTurn = resolveEnemyTurn({ ...actionPlayer, combat: { ...combat, currentHp: monsterHp } }, { ...combat, currentHp: monsterHp }, monster);
+    updatePlayer(enemyTurn.player);
+    appendSystemMessage(`${attackText}\n${enemyTurn.text}`, [...checks, enemyTurn.check]);
   };
 
   const handleAttack = () => handleCombatAction();
@@ -244,9 +281,9 @@ export default function App() {
     const item = getItemById(itemId);
     const inventoryEntry = player.inventory.find((entry) => entry.itemId === itemId);
     if (!item || item.type !== 'consumable' || !inventoryEntry || inventoryEntry.quantity <= 0 || !canPlayerAct(player) || (player.combat && !item.usableInCombat)) return;
-    const growth = getPlayerGrowthByLevel(player.level);
-    const hpRestore = Math.min(item.effect.hpRestore ?? 0, Math.max(0, (growth?.maxHp ?? player.hp) - player.hp));
-    const mpRestore = Math.min(item.effect.mpRestore ?? 0, Math.max(0, (growth?.maxMp ?? player.mp) - player.mp));
+    const caps = getPlayerResourceCaps(player.level, player.classId);
+    const hpRestore = Math.min(item.effect.hpRestore ?? 0, Math.max(0, caps.maxHp - player.hp));
+    const mpRestore = Math.min(item.effect.mpRestore ?? 0, Math.max(0, caps.maxMp - player.mp));
     if (hpRestore <= 0 && mpRestore <= 0) {
       appendSystemMessage(`${item.name}目前無法恢復任何 HP 或 MP，沒有消耗道具。`);
       return;
@@ -265,24 +302,9 @@ export default function App() {
 
     const monster = getMonsterById(player.combat.monsterId);
     if (!monster) return;
-    const dodgeCheck = {
-      ...resolveActionCheck(next, 'def', 10 + Math.floor(monster.stats.atk / 2)),
-      stat: 'def' as const,
-      reason: `${monster.name}反擊：玩家使用道具後進行閃避檢定`,
-      label: '玩家閃避檢定'
-    };
-    const receivedDamage = dodgeCheck.success ? 0 : Math.max(1, monster.stats.atk - Math.floor(getPlayerStatBreakdown(next, 'def').statValue / 4));
-    const hp = Math.max(0, next.hp - receivedDamage);
-    const stillFighting = hp > 0;
-    updatePlayer({
-      ...next,
-      hp,
-      isDead: hp <= 0,
-      ...(stillFighting ? { combat: { ...player.combat, round: player.combat.round + 1 } } : { combat: undefined })
-    });
-    appendSystemMessage(`使用${item.name}，${details}。\n${dodgeCheck.success
-      ? `你成功閃避${monster.name}的反擊。`
-      : `${monster.name}反擊命中，你受到 ${receivedDamage} 點傷害。`}${stillFighting ? `\n第 ${player.combat.round + 1} 回合開始。` : '\n☠️ HP 歸零，你已死亡。'}`, [dodgeCheck]);
+    const enemyTurn = resolveEnemyTurn({ ...next, combat: player.combat }, player.combat, monster);
+    updatePlayer(enemyTurn.player);
+    appendSystemMessage(`使用${item.name}，${details}。\n${enemyTurn.text}`, [enemyTurn.check]);
   };
 
   const handleSendAction = async (actionText: string) => {
@@ -413,6 +435,7 @@ export default function App() {
         onSave={handleSaveAISettings}
         onClose={() => setIsKeyModalOpen(false)}
       />}
+      {isCharacterSetupOpen && <CharacterSetup onCreate={handleCreateCharacter} />}
     </div>
   );
 }

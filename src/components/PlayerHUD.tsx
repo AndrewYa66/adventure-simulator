@@ -1,6 +1,6 @@
 import React from 'react';
 import type { PlayerState } from '../types/game';
-import { getItemById, getMapById, getMonsterById, getNpcById, getNpcCategoryById, getNpcStats, getPlayerGrowthByLevel, getUnlockedSkillsByLevel, questsDatabase } from '../data/staticData';
+import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getMonsterById, getNpcById, getNpcCategoryById, getNpcStats, getPlayerGrowthByLevel, getPlayerResourceCaps, getQuestById, getUnlockedSkillsByLevel, questsDatabase } from '../data/staticData';
 import { getPlayerStatBreakdown, STAT_LABELS } from '../utils/gameChecks';
 import { canAcceptQuest } from '../utils/questRules';
 import { canPlayerAct, isPlayerUnconscious } from '../utils/playerStatus';
@@ -20,8 +20,7 @@ interface PlayerHUDProps {
 
 export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWarning, onTravel, onAcceptQuest, onStartCombat, onFleeCombat, onAttack, onUseSkill, onUseItem }) => {
   const growth = getPlayerGrowthByLevel(player.level);
-  const maxHp = growth?.maxHp || 100;
-  const maxMp = growth?.maxMp || 30;
+  const { maxHp, maxMp } = getPlayerResourceCaps(player.level, player.classId);
   const maxExp = growth?.requiredExp || 100;
   const unlockedSkills = getUnlockedSkillsByLevel(player.level);
 
@@ -39,6 +38,8 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
       <div>
         <h3 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #444', paddingBottom: '6px' }}>👤 角色狀態</h3>
         <p style={{ margin: '4px 0' }}><strong>姓名:</strong> {player.name}</p>
+        <p style={{ margin: '4px 0' }}><strong>職業:</strong> {getCharacterClassById(player.classId)?.name ?? player.classId}</p>
+        <p style={{ margin: '4px 0' }}><strong>傾向:</strong> {player.alignment}</p>
         {(player.isDead || isPlayerUnconscious(player)) && <p role="status" style={{ margin: '4px 0', color: '#ff8a80', fontWeight: 'bold' }}>{player.isDead ? '☠️ 已死亡' : '💫 昏迷中'}</p>}
         <p style={{ margin: '4px 0' }}><strong>等級:</strong> Lv.{player.level} ({player.exp}/{maxExp} EXP)</p>
         <p style={{ margin: '4px 0' }}><strong>💰 金幣:</strong> {player.gold} Gold</p>
@@ -80,6 +81,15 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
         <p style={{ color: '#888', fontSize: '11px', margin: '5px 0 0' }}>數值包含目前裝備加成；擲 d20 時使用修正值。</p>
       </div>
 
+      <div>
+        <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #444' }}>🎲 冒險能力</h4>
+        {(Object.entries(player.abilities) as [keyof PlayerState['abilities'], number][]).map(([stat, score]) => (
+          <div key={stat} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '12px' }}>
+            <span>{STAT_LABELS[stat]}</span><span>{score}（修正 {Math.floor((score - 10) / 2) >= 0 ? '+' : ''}{Math.floor((score - 10) / 2)}）</span>
+          </div>
+        ))}
+      </div>
+
       {/* 裝備欄 */}
       <div>
         <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #444' }}>⚔️ 當前裝備</h4>
@@ -109,7 +119,10 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
         {(currentMap?.connectedMapIds ?? []).map((mapId) => {
           const destination = getMapById(mapId);
           if (!destination) return null;
-          return <button key={mapId} disabled={!!player.combat} onClick={() => onTravel(mapId)} style={{ display: 'block', margin: '4px 0', padding: '5px 8px', background: '#303c30', color: '#dcedc8', border: '1px solid #546e45', borderRadius: '4px', cursor: player.combat ? 'not-allowed' : 'pointer', opacity: player.combat ? 0.5 : 1 }}>前往 {destination.name}</button>;
+          const locked = !canPlayerEnterMap(player, destination);
+          const disabled = !!player.combat || !canPlayerAct(player) || locked;
+          const requirement = destination.requiredQuestId ? getQuestById(destination.requiredQuestId) : undefined;
+          return <button key={mapId} disabled={disabled} title={locked ? `需先接取「${requirement?.title ?? destination.requiredQuestId}」` : undefined} onClick={() => onTravel(mapId)} style={{ display: 'block', margin: '4px 0', padding: '5px 8px', background: '#303c30', color: '#dcedc8', border: '1px solid #546e45', borderRadius: '4px', cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.5 : 1 }}>前往 {destination.name}{locked ? `（需接取${requirement?.title ?? '前置任務'}）` : ''}</button>;
         })}
       </div>
 
@@ -134,7 +147,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
           return <div>
             <div style={{ marginBottom: '6px' }}>{monster?.name || player.combat.monsterId} HP {player.combat.currentHp}/{monster?.stats.hp}</div>
             <div style={{ color: '#aaa', fontSize: '11px', marginBottom: '8px' }}>第 {player.combat.round} 回合</div>
-            <button onClick={onAttack} disabled={!canPlayerAct(player)} style={{ marginRight: '6px', padding: '6px 10px', background: '#8e2424', color: 'white', border: '1px solid #b44', borderRadius: '4px', cursor: 'pointer' }}>攻擊</button>
+            <button onClick={onAttack} disabled={player.isDead} style={{ marginRight: '6px', padding: '6px 10px', background: '#8e2424', color: 'white', border: '1px solid #b44', borderRadius: '4px', cursor: player.isDead ? 'not-allowed' : 'pointer' }}>{isPlayerUnconscious(player) ? '昏迷中（跳過回合）' : '攻擊'}</button>
             {unlockedSkills.map((skill) => <button key={skill.id} onClick={() => onUseSkill(skill.id)} disabled={!canPlayerAct(player) || player.mp < skill.costMp} title={skill.description} style={{ marginRight: '6px', padding: '6px 10px', cursor: player.mp < skill.costMp || !canPlayerAct(player) ? 'not-allowed' : 'pointer' }}>{skill.name}（MP {skill.costMp}）</button>)}
             <button onClick={onFleeCombat} disabled={!canPlayerAct(player)} style={{ padding: '6px 10px', cursor: canPlayerAct(player) ? 'pointer' : 'not-allowed' }}>脫離戰鬥</button>
           </div>;

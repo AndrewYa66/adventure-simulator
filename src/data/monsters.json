@@ -3,30 +3,84 @@
     "id": "MON-001",
     "name": "哥布林斥候",
     "enName": "Goblin Scout",
+    "alignment": "混亂邪惡",
     "tier": "普通 (Common)",
     "recommendedLevel": 1,
-    "stats": {
-      "hp": 25,
-      "atk": 6,
-      "def": 2,
-      "spd": 8
-    },
+    "stats": { "hp": 25, "atk": 6, "def": 2, "spd": 8 },
     "rewards": {
-      "exp": 15,
+      "exp": 20,
       "gold": 5,
-      "dropItems": [
-        {
-          "itemId": "ITEM-002",
-          "chance": 0.8
-        }
-      ]
+      "dropItems": [{ "itemId": "ITEM-002", "chance": 0.8 }]
+    },
+    "specialAbilities": [
+      { "name": "偷襲", "effect": "第一回合速度提升 50%。" }
+    ],
+    "tacticsAndBehavior": "性格膽小，血量低於 30% 時可能逃跑。"
+  },
+  {
+    "id": "MON-002",
+    "name": "哥布林打手",
+    "enName": "Goblin Bruiser",
+    "alignment": "混亂邪惡",
+    "tier": "普通 (Common)",
+    "recommendedLevel": 2,
+    "stats": { "hp": 42, "atk": 9, "def": 4, "spd": 5 },
+    "rewards": {
+      "exp": 28,
+      "gold": 9,
+      "dropItems": [{ "itemId": "ITEM-002", "chance": 0.65 }, { "itemId": "ITEM-001", "chance": 0.12 }]
+    },
+    "specialAbilities": [
+      { "name": "野蠻重揮", "effect": "用沉重武器猛擊眼前的敵人。" }
+    ],
+    "tacticsAndBehavior": "仗著力量正面壓制對手，受傷後仍會繼續猛攻。"
+  },
+  {
+    "id": "MON-003",
+    "name": "格羅姆・裂牙",
+    "enName": "Grom Splitfang",
+    "alignment": "混亂邪惡",
+    "tier": "頭目 (Boss)",
+    "recommendedLevel": 2,
+    "isBoss": true,
+    "requiredQuestId": "QST-002",
+    "stats": { "hp": 78, "atk": 10, "def": 4, "spd": 8 },
+    "rewards": {
+      "exp": 65,
+      "gold": 30,
+      "dropItems": [{ "itemId": "ITEM-004", "chance": 1 }]
     },
     "specialAbilities": [
       {
-        "name": "偷襲",
-        "effect": "第一回合速度提升 50%"
+        "name": "裂地重擊",
+        "effect": "每第三回合砸擊地面。玩家以敏捷 DC 14 閃避；失敗時受到 1.5 倍攻擊傷害，若倖存則昏迷一回合。",
+        "combatAction": {
+          "triggerEveryRounds": 3,
+          "checkStat": "dex",
+          "dc": 14,
+          "damageMultiplier": 1.5,
+          "applyUnconsciousTurnsOnFailure": 1
+        }
       }
     ],
-    "tacticsAndBehavior": "性格膽小，血量低於 30% 時會嘗試逃跑。"
+    "tacticsAndBehavior": "巢穴酋長會觀察冒險者，再以裂地重擊打亂其節奏；不會因玩家生命低而取消攻擊。"
+  },
+  {
+    "id": "MON-004",
+    "name": "灰林狼",
+    "enName": "Ashwood Wolf",
+    "alignment": "絕對中立",
+    "tier": "普通 (Common)",
+    "recommendedLevel": 1,
+    "stats": { "hp": 30, "atk": 7, "def": 2, "spd": 11 },
+    "rewards": {
+      "exp": 18,
+      "gold": 3,
+      "dropItems": []
+    },
+    "specialAbilities": [
+      { "name": "迅捷撲咬", "effect": "利用速度發動突襲。" }
+    ],
+    "tacticsAndBehavior": "受傷後可能拉開距離；若沒有被挑釁，通常不會追入村莊。"
   }
 ]

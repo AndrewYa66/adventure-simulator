@@ -1,5 +1,5 @@
 import type { MapStatic, PlayerState } from '../types/game';
-import { getMapById } from '../data/staticData';
+import { canPlayerEnterMap, getMapById } from '../data/staticData';
 
 export type TravelIntentResolution =
   | { kind: 'resolved'; destination: MapStatic }
@@ -32,7 +32,7 @@ export function resolveExplicitTravelIntent(actionText: string, player: PlayerSt
   const currentMap = getMapById(player.currentMapId);
   const candidates = currentMap?.connectedMapIds
     .map((mapId) => getMapById(mapId))
-    .filter((map): map is MapStatic => !!map) ?? [];
+    .filter((map): map is MapStatic => !!map && canPlayerEnterMap(player, map)) ?? [];
   const namedMatches = candidates.filter((map) => [map.name, ...(map.aliases ?? [])]
     .some((label) => label && normalized.includes(label.toLocaleLowerCase())));
   let matches = namedMatches;

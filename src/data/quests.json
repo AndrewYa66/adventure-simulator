@@ -11,7 +11,7 @@
       "collectItems": [{ "itemId": "ITEM-002", "quantity": 1 }]
     },
     "rewards": {
-      "exp": 100,
+      "exp": 200,
       "gold": 50,
       "items": [
         {
@@ -21,8 +21,31 @@
       ]
     },
     "rewardLimits": {
-      "exp": { "min": 80, "max": 120 },
+      "exp": { "min": 180, "max": 220 },
       "gold": { "min": 40, "max": 60 },
+      "maxItemQuantity": 3
+    }
+  },
+  {
+    "id": "QST-002",
+    "title": "討伐哥布林酋長",
+    "questGiverId": "NPC-001",
+    "questGiver": "村長埃爾德",
+    "mapId": "MAP-001",
+    "prerequisiteQuestIds": ["QST-001"],
+    "objective": "深入哥布林巢穴，擊敗酋長並帶回徽記",
+    "requirements": {
+      "defeatMonsters": [{ "monsterId": "MON-003", "quantity": 1 }],
+      "collectItems": [{ "itemId": "ITEM-004", "quantity": 1 }]
+    },
+    "rewards": {
+      "exp": 250,
+      "gold": 150,
+      "items": [{ "itemId": "ITEM-001", "quantity": 3 }, { "itemId": "ITEM-003", "quantity": 2 }]
+    },
+    "rewardLimits": {
+      "exp": { "min": 220, "max": 280 },
+      "gold": { "min": 120, "max": 180 },
       "maxItemQuantity": 3
     }
   }

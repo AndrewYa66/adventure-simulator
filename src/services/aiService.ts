@@ -1,6 +1,6 @@
 import type { PlayerState, AIResponsePayload } from '../types/game';
 import type { AIModelSettings } from './aiModels';
-import { getMapById, getNpcById, getNpcCategoryById, getNpcStats, questsDatabase } from '../data/staticData';
+import { canPlayerEnterMap, getMapById, getNpcById, getNpcCategoryById, getNpcStats, questsDatabase } from '../data/staticData';
 import { canAcceptQuest } from '../utils/questRules';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from '../utils/travelIntent';
 
@@ -68,7 +68,7 @@ function parseAIResponse(value: unknown): AIResponsePayload | null {
   if (value.checkRequest !== undefined && value.checkRequest !== null) {
     const check = value.checkRequest;
     const outcomes = value.checkOutcomes;
-    if (!isRecord(check) || !['atk', 'def', 'spd'].includes(String(check.stat)) ||
+    if (!isRecord(check) || !['atk', 'def', 'spd', 'str', 'dex', 'con', 'int', 'wis', 'cha'].includes(String(check.stat)) ||
         !Number.isInteger(check.dc) || (check.dc as number) < 5 || (check.dc as number) > 25 ||
         typeof check.reason !== 'string' || !isRecord(outcomes) ||
         typeof outcomes.successText !== 'string' || typeof outcomes.failureText !== 'string') return null;
@@ -145,7 +145,9 @@ export async function sendPlayerAction(
   const currentMap = getMapById(playerState.currentMapId);
   const availableDestinations = currentMap?.connectedMapIds.flatMap((mapId) => {
     const map = getMapById(mapId);
-    return map ? [{ id: map.id, name: map.name, aliases: map.aliases ?? [], tags: map.locationTags ?? [] }] : [];
+    return map && canPlayerEnterMap(playerState, map)
+      ? [{ id: map.id, name: map.name, aliases: map.aliases ?? [], tags: map.locationTags ?? [] }]
+      : [];
   }) ?? [];
   const previousMap = playerState.previousMapId ? getMapById(playerState.previousMapId) : undefined;
   const presentNpcs = currentMap?.npcsPresent.flatMap((npcId) => {
@@ -172,6 +174,8 @@ export async function sendPlayerAction(
 你是一位中世紀奇幻 TRPG 的遊戲主持人 (GM)。
 當前玩家狀態：
 - 姓名: ${playerState.name} (Lv.${playerState.level})
+- 職業: ${playerState.classId} | 陣營: ${playerState.alignment}
+- 能力值：${JSON.stringify(playerState.abilities)}（檢定須選最相關欄位）
 - HP: ${playerState.hp} | MP: ${playerState.mp} | 金幣: ${playerState.gold}
 - 生命狀態: ${playerState.isDead ? '死亡；冒險已結束' : playerState.statusEffects.some((effect) => effect.id === 'unconscious') ? '昏迷；無法採取行動' : '存活'}
 - 當前地區: ${currentMap?.name ?? playerState.currentMapId} (${playerState.currentMapId})
@@ -195,11 +199,12 @@ export async function sendPlayerAction(
 - 任務只能從「當前可接取任務」中接受。玩家明確表示接取/接受某任務時，才在 stateChanges.questAcceptances 填入對應 ID；不可因詢問細節、委託描述或含糊回覆而接取。不可自行建立任務、改寫需求或獎勵。
 - 任務接取由遊戲端再次驗證所在地、任務給予者是否在場及任務是否已接取/完成；不可只在 storyText 宣稱已接取。
 - 玩家沒有劇情保護。合理危險、檢定失敗或敵方有效攻擊可以使 HP 降至 0；不得為避免死亡而竄改檢定結果、取消已成立的傷害或在 storyText 宣稱玩家倖存。HP 歸零就是死亡，不是昏迷；只有明確套用 unconscious 狀態才代表昏迷。
+- 非戰鬥行動若有風險且失敗會造成實質後果，依最相關能力提出 checkRequest（atk/def/spd 或 str/dex/con/int/wis/cha），在成功/失敗分支填入相應 HP/MP 變化。玩家明確提出自我傷害等會直接改變資源的行動時，必須依其明確數值回報變化，並照常套用 HP 歸零死亡規則。
 - 一般戰鬥由遊戲規則結算，不可敘事中自行宣告擊敗或扣除怪物。
 注意事項：
 1. 當給予或扣除玩家道具時，請使用 Item ID (例如: "ITEM-001" 小型生命藥水, "ITEM-002" 哥布林耳朵, "ITEM-101" 精鋼短劍, "ITEM-201" 冒險者皮甲)。
 2. 只有結果不確定且失敗會有實質影響時才要求檢定；一般對話、觀察或無風險行動不擲骰。
-3. 檢定使用 checkRequest {"stat":"atk|def|spd","dc":5至25,"reason":"理由"}。不可在 storyText 中預先宣告檢定成功或失敗。
+3. 檢定使用 checkRequest {"stat":"atk|def|spd|str|dex|con|int|wis|cha","dc":5至25,"reason":"理由"}。不可在 storyText 中預先宣告檢定成功或失敗。
 4. 有檢定時必須提供 checkOutcomes.successText 與 checkOutcomes.failureText。stateChanges 只會在檢定成功時套用；需要描述失敗時的代價可用 failureStateChanges。
 5. 只有成功擊敗怪物後才回報 defeatedMonsters；完成任務時必須確認結構化需求均已滿足。
 6. 你必須【嚴格】以格式正確的 JSON 格式回答：

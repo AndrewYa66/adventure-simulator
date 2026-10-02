@@ -24,6 +24,16 @@
     "description": "使用後恢復 15 點魔力。"
   },
   {
+    "id": "ITEM-004",
+    "name": "哥布林酋長徽記",
+    "type": "quest",
+    "usableInCombat": false,
+    "effect": {},
+    "buyPrice": 0,
+    "sellPrice": 10,
+    "description": "哥布林巢穴章節頭目的信物。"
+  },
+  {
     "id": "ITEM-002",
     "name": "哥布林耳朵",
     "type": "quest",
