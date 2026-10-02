@@ -128,7 +128,7 @@ export interface NpcWorldState {
 
 export interface TransactionRecord {
   id: string;
-  type: 'purchase' | 'sale' | 'service' | 'quest_reward' | 'npc_transfer';
+  type: 'purchase' | 'sale' | 'service' | 'quest_reward' | 'npc_transfer' | 'game_change';
   description: string;
   goldChange: number;
   timestamp: number;

@@ -134,6 +134,9 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
   let level = player.level;
   const trustedExpChange = source === 'game' ? changes.expChange ?? 0 : Math.min(0, changes.expChange ?? 0);
   const trustedGoldChange = source === 'game' ? changes.goldChange ?? 0 : Math.min(0, changes.goldChange ?? 0);
+  if (trustedGoldChange !== 0) {
+    recordTransaction('game_change', trustedGoldChange > 0 ? '遊戲金幣增加' : '遊戲金幣扣除', trustedGoldChange);
+  }
   const exp = Math.max(0, player.exp + trustedExpChange + questExp);
   let hp = Math.max(0, player.hp + (changes.hpChange ?? 0));
   let mp = Math.max(0, player.mp + (changes.mpChange ?? 0));

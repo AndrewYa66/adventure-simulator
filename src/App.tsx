@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ActionCheckResult, PlayerGrowthStatic, PlayerState, StoryMessage } from './types/game';
 import { loadGameSession, resetPlayerState, saveGameSession } from './utils/playerStorage';
 import { applyStateChanges } from './utils/applyStateChanges';
-import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getMonsterById, getPlayerResourceCaps, getQuestById, getShopById, getUnlockedSkillsByLevel } from './data/staticData';
+import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getMonsterById, getPlayerResourceCaps, getQuestById, getShopById, getUnlockedSkillsByLevel, itemsDatabase } from './data/staticData';
 import { getPlayerStatBreakdown, resolveActionCheck } from './utils/gameChecks';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from './utils/travelIntent';
 import { sendPlayerAction } from './services/aiService';
@@ -265,27 +265,27 @@ export default function App() {
     appendSystemMessage(`你與${monster?.name ?? '敵人'}拉開距離，戰鬥結束。`);
   };
 
-  const handleCombatAction = (skill?: NonNullable<PlayerGrowthStatic['unlockedSkill']>) => {
-    const combat = player.combat;
+  const handleCombatAction = (skill?: NonNullable<PlayerGrowthStatic['unlockedSkill']>, sourcePlayer: PlayerState = player) => {
+    const combat = sourcePlayer.combat;
     const monster = combat ? getMonsterById(combat.monsterId) : undefined;
-    if (!combat || !monster || player.isDead) return;
-    if (isPlayerUnconscious(player)) {
-      const recovered = { ...player, statusEffects: player.statusEffects.filter((effect) => effect.id !== 'unconscious'), combat: { ...combat } };
+    if (!combat || !monster || sourcePlayer.isDead) return;
+    if (isPlayerUnconscious(sourcePlayer)) {
+      const recovered = { ...sourcePlayer, statusEffects: sourcePlayer.statusEffects.filter((effect) => effect.id !== 'unconscious'), combat: { ...combat } };
       const enemyTurn = resolveEnemyTurn(recovered, combat, monster);
       updatePlayer(enemyTurn.player);
       appendSystemMessage(`你仍昏迷，失去本回合行動。\n${enemyTurn.text}`, [enemyTurn.check]);
       return;
     }
-    if (skill && player.mp < skill.costMp) return;
+    if (skill && sourcePlayer.mp < skill.costMp) return;
 
     const attackCheck = {
-      ...resolveActionCheck(player, 'atk', 10 + monster.stats.def),
+      ...resolveActionCheck(sourcePlayer, 'atk', 10 + monster.stats.def),
       stat: 'atk' as const,
       reason: `第 ${combat.round} 回合：${skill?.name ?? '攻擊'}${monster.name}`,
       label: '玩家攻擊檢定'
     };
     const checks: ActionCheckResult[] = [attackCheck];
-    const playerAttack = getPlayerStatBreakdown(player, 'atk').statValue;
+    const playerAttack = getPlayerStatBreakdown(sourcePlayer, 'atk').statValue;
     const skillMultiplier = skill?.effect.kind === 'damage_multiplier' ? skill.effect.multiplier : 1;
     const damage = attackCheck.success
       ? Math.max(1, Math.floor(playerAttack * skillMultiplier) - monster.stats.def)
@@ -296,7 +296,7 @@ export default function App() {
     const attackText = attackCheck.success
       ? `${skill?.name ?? '攻擊'}命中，對${monster.name}造成 ${damage} 點傷害。`
       : `${skill?.name ?? '攻擊'}未命中${monster.name}。`;
-    const actionPlayer = skill ? { ...player, mp: player.mp - skill.costMp } : player;
+    const actionPlayer = skill ? { ...sourcePlayer, mp: sourcePlayer.mp - skill.costMp } : sourcePlayer;
 
     if (monsterHp <= 0) {
       const dropItems = monster.rewards.dropItems.flatMap((drop) => {
@@ -305,7 +305,7 @@ export default function App() {
         globalThis.crypto.getRandomValues(roll);
         return roll[0] / 0x1_0000_0000 < drop.chance ? [{ itemId: drop.itemId, quantity: 1 }] : [];
       });
-      const questUpdates = player.activeQuests.filter((quest) => quest.status === 'in_progress')
+      const questUpdates = sourcePlayer.activeQuests.filter((quest) => quest.status === 'in_progress')
         .map((quest) => ({ questId: quest.questId, status: 'completed' as const }));
       const nextPlayer = applyStateChanges(actionPlayer, {
         storyText: '', suggestedActions: [],
@@ -318,7 +318,7 @@ export default function App() {
         }
       }, 'game');
       const completedQuests = nextPlayer.activeQuests.filter((quest) => quest.status === 'completed' &&
-        player.activeQuests.some((previous) => previous.questId === quest.questId && previous.status === 'in_progress'));
+        sourcePlayer.activeQuests.some((previous) => previous.questId === quest.questId && previous.status === 'in_progress'));
       const dropText = dropItems.length ? `取得掉落物：${dropItems.map((item) => `${getItemById(item.itemId)?.name ?? item.itemId} ×${item.quantity}`).join('、')}。` : '沒有掉落物。';
       const questText = completedQuests.map((quest) => `任務「${getQuestById(quest.questId)?.title ?? quest.questId}」完成，需求道具已交付並領取獎勵。`).join('\n');
       const victoryState = { ...nextPlayer };
@@ -389,6 +389,70 @@ export default function App() {
   };
 
   const handleSendAction = async (actionText: string) => {
+    const isQuestion = /(?:如何|怎麼|能否|可不可以|是否|請問|教我|詢問|不要|不想|無法|不能)/u.test(actionText);
+    const useVerb = /(?:使用|喝|飲用|服用|吃下|吃|use|consume)/iu.test(actionText);
+    const requestedItemMatches = useVerb && !isQuestion
+      ? itemsDatabase.filter((item) => item.type === 'consumable' && (actionText.includes(item.name) || actionText.includes(item.id)))
+      : [];
+    const ownedConsumables = player.inventory.flatMap((entry) => {
+      const item = itemsDatabase.find((candidate) => candidate.id === entry.itemId && candidate.type === 'consumable');
+      return item && entry.quantity > 0 ? [item] : [];
+    });
+    const requestedItem = requestedItemMatches[0] ?? (/(?:藥水|藥劑|potion)/iu.test(actionText) && ownedConsumables.length === 1 ? ownedConsumables[0] : undefined);
+    const genericPotionIntent = useVerb && !isQuestion && /(?:藥水|藥劑|potion)/iu.test(actionText) && requestedItemMatches.length === 0;
+    if (genericPotionIntent && !requestedItem) {
+      const userMessage: StoryMessage = { id: `${Date.now()}-user`, sender: 'user', text: actionText, timestamp: new Date().toLocaleTimeString() };
+      const prompt = ownedConsumables.length > 1
+        ? `請指定要使用的消耗品：${ownedConsumables.map((item) => item.name).join('、')}。`
+        : '背包中沒有可使用的藥水。';
+      setMessages((prev) => [...prev, userMessage, { id: `${Date.now()}-item`, sender: 'system', text: prompt, timestamp: new Date().toLocaleTimeString() }]);
+      return;
+    }
+    if (requestedItem) {
+      const userMessage: StoryMessage = { id: `${Date.now()}-user`, sender: 'user', text: actionText, timestamp: new Date().toLocaleTimeString() };
+      const owned = player.inventory.some((entry) => entry.itemId === requestedItem.id && entry.quantity > 0);
+      if (!owned) {
+        setMessages((prev) => [...prev, userMessage, { id: `${Date.now()}-item`, sender: 'system', text: `你沒有${requestedItem.name}，沒有使用道具。`, timestamp: new Date().toLocaleTimeString() }]);
+        return;
+      }
+      if (!canPlayerAct(player) || (player.combat && !requestedItem.usableInCombat)) {
+        setMessages((prev) => [...prev, userMessage, { id: `${Date.now()}-item`, sender: 'system', text: player.combat ? `${requestedItem.name}無法在戰鬥中使用。` : '角色目前無法採取行動。', timestamp: new Date().toLocaleTimeString() }]);
+        return;
+      }
+      setMessages((prev) => [...prev, userMessage]);
+      handleUseItem(requestedItem.id);
+      return;
+    }
+
+    const attackIntent = !isQuestion && /(?:攻擊|攻打|打倒|擊倒|砍向|砍|刺向|刺|揮擊|attack|strike|fight)/iu.test(actionText) && !/(?:攻擊自己|打自己|刺自己|砍自己)/u.test(actionText);
+    if (attackIntent && canPlayerAct(player)) {
+      const map = getMapById(player.currentMapId);
+      const available = (map?.monstersPresent ?? []).map((id) => getMonsterById(id)).filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+      const matched = available.filter((monster) => actionText.includes(monster.name) || actionText.includes(monster.id) || actionText.toLowerCase().includes(monster.enName.toLowerCase()));
+      const target = matched.length === 1 ? matched[0] : !player.combat && matched.length === 0 && available.length === 1 ? available[0] : undefined;
+      const userMessage: StoryMessage = { id: `${Date.now()}-user`, sender: 'user', text: actionText, timestamp: new Date().toLocaleTimeString() };
+      if (!player.combat && (!map || map.isSafeZone || (matched.length !== 1 && available.length !== 1))) {
+        const text = map?.isSafeZone ? '此地區是安全區，不能發起戰鬥。' : available.length === 0 ? '目前地區沒有可交戰的敵人。' : `請指定敵人：${available.map((monster) => monster.name).join('、')}。`;
+        setMessages((prev) => [...prev, userMessage, { id: `${Date.now()}-combat`, sender: 'system', text, timestamp: new Date().toLocaleTimeString() }]);
+        return;
+      }
+      if (!player.combat && target && target.requiredQuestId && !player.activeQuests.some((quest) => quest.questId === target.requiredQuestId && (quest.status === 'in_progress' || quest.status === 'completed'))) {
+        setMessages((prev) => [...prev, userMessage, { id: `${Date.now()}-combat`, sender: 'system', text: '目前尚未解鎖這場戰鬥。', timestamp: new Date().toLocaleTimeString() }]);
+        return;
+      }
+      if (player.combat && matched.length === 1 && matched[0].id !== player.combat.monsterId) {
+        setMessages((prev) => [...prev, userMessage, { id: `${Date.now()}-combat`, sender: 'system', text: `目前正在與${getMonsterById(player.combat!.monsterId)?.name ?? '敵人'}戰鬥，無法切換目標。`, timestamp: new Date().toLocaleTimeString() }]);
+        return;
+      }
+      setMessages((prev) => [...prev, userMessage]);
+      if (!player.combat && target) {
+        const combatPlayer: PlayerState = { ...player, combat: { monsterId: target.id, currentHp: target.stats.hp, round: 1 } };
+        appendSystemMessage(`你與${target.name}進入戰鬥！`);
+        handleCombatAction(undefined, combatPlayer);
+      } else if (player.combat) handleCombatAction();
+      return;
+    }
+
     if (player.combat || !canPlayerAct(player)) {
       appendSystemMessage(player.isDead ? '角色已死亡，無法繼續行動。請重設角色開始新的冒險。' : '角色目前昏迷，無法採取行動。');
       return;
