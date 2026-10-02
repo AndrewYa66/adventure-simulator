@@ -1,5 +1,5 @@
 import type { AIResponsePayload, PlayerState } from '../types/game';
-import { getItemById, getMapById, getMonsterById, getNpcById, getPlayerGrowthByLevel, getPlayerResourceCaps, getQuestById } from '../data/staticData';
+import { getItemById, getMapById, getMonsterById, getPlayerGrowthByLevel, getPlayerResourceCaps, getQuestById, getWorldUnitById } from '../data/staticData';
 import { acceptQuest } from './questRules';
 
 export function applyStateChanges(player: PlayerState, response: AIResponsePayload, source: 'ai' | 'game' = 'ai'): PlayerState {
@@ -25,9 +25,9 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
 
   if (source === 'ai') {
     for (const transfer of changes.npcItemTransfers ?? []) {
-      const npc = getNpcById(transfer.npcId);
+      const unit = getWorldUnitById(transfer.npcId);
       const state = npcStates[transfer.npcId];
-      if (!npc || npc.mapId !== player.currentMapId || !currentMap?.npcsPresent.includes(npc.id) ||
+      if (unit?.kind !== 'npc' || !unit.mapIds.includes(player.currentMapId) || !currentMap?.npcsPresent.includes(unit.id) ||
           !getItemById(transfer.itemId) || !Number.isInteger(transfer.quantity) || transfer.quantity < 1 || !state) continue;
       const stock = state.inventory.find((entry) => entry.itemId === transfer.itemId);
       if (!stock || stock.quantity < transfer.quantity) continue;
@@ -36,7 +36,7 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
       const owned = inventory.find((entry) => entry.itemId === transfer.itemId);
       if (owned) owned.quantity += transfer.quantity;
       else inventory.push({ itemId: transfer.itemId, quantity: transfer.quantity });
-      recordTransaction('npc_transfer', `從 ${npc.name} 取得 ${getItemById(transfer.itemId)?.name ?? transfer.itemId} ×${transfer.quantity}`);
+      recordTransaction('npc_transfer', `從 ${unit.name} 取得 ${getItemById(transfer.itemId)?.name ?? transfer.itemId} ×${transfer.quantity}`);
     }
   }
 
