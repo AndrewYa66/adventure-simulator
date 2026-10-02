@@ -34,6 +34,16 @@ function createRestoreNotice(player: PlayerState, savedAt: number, messageCount:
   };
 }
 
+function inferExplicitTravelDestination(actionText: string, player: PlayerState) {
+  const normalized = actionText.toLocaleLowerCase();
+  if (/(不想|不打算|不要|先不|暫時不|暂时不|還不|还不|能不能|可不可以|是否|要不要|如何|怎麼|怎么|路線|路线|多遠|多远|多久|在哪|哪裡|哪里|位置|告訴我|告诉我)/.test(normalized)) return undefined;
+  if (!/(前往|前去|走到|移動到|移动到|進入|进入|出發前往|出发前往|帶我去|带我去|我要去|我想去|我決定去|我决定去|去往|出發去|出发去)/.test(normalized)) return undefined;
+  const currentMap = getMapById(player.currentMapId);
+  return currentMap?.connectedMapIds
+    .map((mapId) => getMapById(mapId))
+    .find((map) => map && normalized.includes(map.name.toLocaleLowerCase()));
+}
+
 export default function App() {
   const [initialSession] = useState(loadGameSession);
   const [modelSettings, setModelSettings] = useState<AIModelSettings>(loadAIModelSettings);
@@ -265,7 +275,8 @@ export default function App() {
         updatePlayer(nextPlayer);
       }
 
-      const requestedDestinationId = aiResponse.travelRequest?.destinationMapId;
+      const explicitlyNamedDestination = inferExplicitTravelDestination(actionText, player);
+      const requestedDestinationId = explicitlyNamedDestination?.id ?? aiResponse.travelRequest?.destinationMapId;
       const travel = requestedDestinationId ? movePlayerTo(requestedDestinationId, nextPlayer) : null;
       if (travel) nextPlayer = travel.player;
 

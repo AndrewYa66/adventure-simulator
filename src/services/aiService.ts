@@ -83,7 +83,7 @@ function parseAIResponse(value: unknown): AIResponsePayload | null {
     if (changes.addItems !== undefined && !isItemChangeList(changes.addItems)) return false;
     if (changes.removeItems !== undefined && !isItemChangeList(changes.removeItems)) return false;
     if (changes.defeatedMonsters !== undefined && !isMonsterDefeatList(changes.defeatedMonsters)) return false;
-    if ('newLocationId' in changes) return false;
+    if (changes.newLocationId !== undefined && changes.newLocationId !== null && typeof changes.newLocationId !== 'string') return false;
     if (changes.setFlags !== undefined && (!isRecord(changes.setFlags) || !Object.values(changes.setFlags).every((flag) => typeof flag === 'boolean'))) return false;
     if (changes.questUpdates !== undefined && (!Array.isArray(changes.questUpdates) || !changes.questUpdates.every((quest) =>
       isRecord(quest) && typeof quest.questId === 'string' && quest.status === 'completed'
@@ -94,11 +94,17 @@ function parseAIResponse(value: unknown): AIResponsePayload | null {
   if (isRecord(value.stateChanges) && value.stateChanges.defeatedMonsters !== undefined &&
       (!isRecord(value.checkRequest) || value.checkRequest.stat !== 'atk')) return null;
   if (isRecord(value.failureStateChanges) &&
-      ['expChange', 'addItems', 'defeatedMonsters', 'questUpdates', 'setFlags'].some((field) => field in (value.failureStateChanges as Record<string, unknown>))) return null;
+      ['expChange', 'addItems', 'defeatedMonsters', 'questUpdates', 'newLocationId', 'setFlags'].some((field) => field in (value.failureStateChanges as Record<string, unknown>))) return null;
 
   const storyText = getReadableNarrative(value.storyText);
   if (storyText === FORMAT_FALLBACK) return null;
-  return { ...value, storyText } as unknown as AIResponsePayload;
+  const stateChanges = isRecord(value.stateChanges) ? { ...value.stateChanges } : value.stateChanges;
+  const legacyTravelId = isRecord(stateChanges) && typeof stateChanges.newLocationId === 'string'
+    ? stateChanges.newLocationId
+    : undefined;
+  if (isRecord(stateChanges)) delete stateChanges.newLocationId;
+  const travelRequest = value.travelRequest ?? (legacyTravelId ? { destinationMapId: legacyTravelId } : null);
+  return { ...value, storyText, stateChanges, travelRequest } as unknown as AIResponsePayload;
 }
 
 /**
