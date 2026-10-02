@@ -24,7 +24,7 @@
     "locationTags": ["forest", "wilderness"],
     "isSafeZone": false,
     "description": "常有哥布林出沒的森林道路。",
-    "connectedMapIds": ["MAP-001"],
+    "connectedMapIds": ["MAP-001","MAP-003"],
     "monstersPresent": ["MON-001", "MON-002", "MON-004"],
     "pointsOfInterest": ["廢棄驛站", "通往哥布林巢穴的山徑"],
     "npcsPresent": ["NPC-006"]
