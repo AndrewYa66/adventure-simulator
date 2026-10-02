@@ -97,6 +97,7 @@ export interface QuestStatic {
     gold: number;
     items?: { itemId: string; quantity: number }[];
   };
+  rewardLimits?: { exp: { min: number; max: number }; gold: { min: number; max: number }; maxItemQuantity: number };
 }
 
 
@@ -136,6 +137,7 @@ export interface PlayerState {
     status: 'in_progress' | 'completed';
     progress?: { defeatedMonsters: Record<string, number> };
   }[];
+  combat?: { monsterId: string; currentHp: number; round: number };
 }
 
 /** 對話視窗訊息 */
@@ -145,6 +147,7 @@ export interface StoryMessage {
   text: string;
   options?: string[];
   checkResult?: ActionCheckResult;
+  checkResults?: ActionCheckResult[];
   timestamp: string;
 }
 
@@ -159,6 +162,14 @@ export interface ActionCheckResult {
   total: number;
   dc: number;
   success: boolean;
+  label?: string;
+}
+
+export interface GameSession {
+  schemaVersion: 1;
+  savedAt: number;
+  player: PlayerState;
+  messages: StoryMessage[];
 }
 
 /** AI 結構化回應 (Gemini 回傳格式) */

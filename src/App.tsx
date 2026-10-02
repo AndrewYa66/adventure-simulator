@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ActionCheckResult, PlayerState, StoryMessage } from './types/game';
-import { loadPlayerState, resetPlayerState, savePlayerState } from './utils/playerStorage';
+import { loadGameSession, resetPlayerState, saveGameSession } from './utils/playerStorage';
 import { applyStateChanges } from './utils/applyStateChanges';
 import { getMapById, getQuestById } from './data/staticData';
 import { resolveActionCheck } from './utils/gameChecks';
@@ -12,6 +12,7 @@ import { StoryLog } from './components/StoryLog';
 import { ApiKeyModal } from './components/ApiKeyModal';
 
 export default function App() {
+  const [initialSession] = useState(loadGameSession);
   const [modelSettings, setModelSettings] = useState<AIModelSettings>(loadAIModelSettings);
   const [apiKeys, setApiKeys] = useState<Record<AIProvider, string>>(() => {
     try { return { gemini: localStorage.getItem('TRPG_GEMINI_KEY') || '', openai: '' }; }
@@ -21,9 +22,9 @@ export default function App() {
   const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [storageWarning, setStorageWarning] = useState(false);
-  const [player, setPlayer] = useState<PlayerState>(loadPlayerState);
+  const [player, setPlayer] = useState<PlayerState>(initialSession.player);
 
-  const [messages, setMessages] = useState<StoryMessage[]>([
+  const [messages, setMessages] = useState<StoryMessage[]>(initialSession.messages.length ? initialSession.messages : [
     {
       id: '1',
       sender: 'ai',
@@ -36,8 +37,11 @@ export default function App() {
 
   const updatePlayer = (nextPlayer: PlayerState) => {
     setPlayer(nextPlayer);
-    setStorageWarning(!savePlayerState(nextPlayer));
   };
+
+  useEffect(() => {
+    if (!loading && !saveGameSession(player, messages)) console.warn('遊戲快照保存失敗。');
+  }, [player, messages, loading]);
 
   const handleSaveAISettings = (settings: AIModelSettings, keys: Record<AIProvider, string>) => {
     setModelSettings(settings);

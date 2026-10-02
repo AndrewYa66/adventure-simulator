@@ -1,14 +1,15 @@
-import type { PlayerState } from '../types/game';
+import type { GameSession, PlayerState, StoryMessage } from '../types/game';
 import { getItemById, getMapById, getMonsterById, getPlayerGrowthByLevel, getQuestById } from '../data/staticData';
 import { createInitialPlayer } from './playerInit';
 
 const PLAYER_STORAGE_KEY = 'TRPG_PLAYER_STATE';
+const SESSION_STORAGE_KEY = 'TRPG_GAME_SESSION';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function normalizePlayerState(value: unknown): PlayerState | null {
+export function normalizePlayerState(value: unknown): PlayerState | null {
   if (!isRecord(value) || typeof value.name !== 'string' || !value.name.trim() ||
       !Number.isInteger(value.level) || (value.level as number) < 1 ||
       !Number.isFinite(value.exp) || (value.exp as number) < 0 ||
@@ -49,6 +50,15 @@ function normalizePlayerState(value: unknown): PlayerState | null {
     if (typeof id === 'string' && getItemById(id)) equipped[slot] = id;
   }
 
+  let combat: PlayerState['combat'];
+  if (value.combat !== undefined && value.combat !== null) {
+    if (!isRecord(value.combat) || typeof value.combat.monsterId !== 'string' || !getMonsterById(value.combat.monsterId) ||
+        !Number.isInteger(value.combat.currentHp) || (value.combat.currentHp as number) <= 0 ||
+        !Number.isInteger(value.combat.round) || (value.combat.round as number) < 1 ||
+        !getMapById(value.currentMapId)?.monstersPresent.includes(value.combat.monsterId)) return null;
+    combat = { monsterId: value.combat.monsterId, currentHp: value.combat.currentHp as number, round: value.combat.round as number };
+  }
+
   return {
     name: value.name.trim(),
     level: value.level as number,
@@ -61,8 +71,43 @@ function normalizePlayerState(value: unknown): PlayerState | null {
     equipped,
     storyFlags: value.storyFlags as Record<string, boolean>,
     defeatedMonsters,
-    activeQuests
+    activeQuests,
+    ...(combat ? { combat } : {})
   };
+}
+
+function isStoryMessage(value: unknown): value is StoryMessage {
+  return isRecord(value) && typeof value.id === 'string' &&
+    ['ai', 'user', 'system'].includes(String(value.sender)) && typeof value.text === 'string' &&
+    typeof value.timestamp === 'string' && (value.options === undefined ||
+      (Array.isArray(value.options) && value.options.every((option) => typeof option === 'string')));
+}
+
+export function loadGameSession(): Pick<GameSession, 'player' | 'messages'> {
+  try {
+    const saved = localStorage.getItem(SESSION_STORAGE_KEY);
+    if (saved) {
+      const value: unknown = JSON.parse(saved);
+      if (isRecord(value) && value.schemaVersion === 1 && Array.isArray(value.messages) &&
+          value.messages.every(isStoryMessage)) {
+        const player = normalizePlayerState(value.player);
+        if (player) return { player, messages: (value.messages as StoryMessage[]).slice(-100) };
+      }
+    }
+  } catch {
+    // Fall back to the last valid player-only save below.
+  }
+  return { player: loadPlayerState(), messages: [] };
+}
+
+export function saveGameSession(player: PlayerState, messages: StoryMessage[]): boolean {
+  try {
+    const snapshot: GameSession = { schemaVersion: 1, savedAt: Date.now(), player, messages: messages.slice(-100) };
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(snapshot));
+    return savePlayerState(player);
+  } catch {
+    return false;
+  }
 }
 
 export function loadPlayerState(): PlayerState {
@@ -88,6 +133,7 @@ export function resetPlayerState(): PlayerState {
   const player = createInitialPlayer();
   try {
     localStorage.removeItem(PLAYER_STORAGE_KEY);
+    localStorage.removeItem(SESSION_STORAGE_KEY);
     localStorage.setItem(PLAYER_STORAGE_KEY, JSON.stringify(player));
   } catch {
     // Keep the in-memory reset even when browser storage is unavailable.
