@@ -53,6 +53,7 @@ sendPlayerAction(
 {
   "storyText": "你察覺林間傳來一陣急促的腳步聲。",
   "suggestedActions": ["躲到樹後", "拔出武器戒備"],
+  "travelRequest": null,
   "checkRequest": {
     "stat": "spd",
     "dc": 12,
@@ -69,7 +70,7 @@ sendPlayerAction(
 
 有檢定時，`stat` 限 `atk`、`def`、`spd`，DC 限整數 5–25，且必須提供成功與失敗敘述。瀏覽器以 d20、角色成長數值及裝備加成計算結果；成功時套用 `stateChanges`，失敗時套用 `failureStateChanges`。失敗分支不能發放經驗、道具、任務完成或擊敗怪物紀錄。
 
-`stateChanges` 支援 HP/MP/EXP/金幣增減、道具增加/移除、新地圖、劇情旗標、怪物擊敗紀錄及任務完成回報。前端會檢查物品/怪物/地圖 ID、數量、地圖連通性；任務完成還必須滿足該任務的結構化擊敗與收集條件。
+`stateChanges` 支援 HP/MP/EXP/金幣增減、道具增加/移除、劇情旗標、怪物擊敗紀錄及任務完成回報。地圖移動使用獨立欄位 `travelRequest`，格式為 `{ "destinationMapId": "MAP-002" }`。只有玩家明確要求移動時才設定；模型收到的可移動地區清單會限制在當前地圖的相鄰地區。前端再次驗證地圖 ID、連通性及戰鬥狀態後，才更新 `currentMapId`。詢問地點、觀察或含糊的「去那裡看看」不會移動；不明確目的地應先追問。不能用 `stateChanges` 修改地圖。
 
 ## 設定保存
 

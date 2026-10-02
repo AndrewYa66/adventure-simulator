@@ -91,16 +91,23 @@ export default function App() {
     }]);
   };
 
-  const handleTravel = (mapId: string) => {
-    if (player.combat) return;
-    const currentMap = getMapById(player.currentMapId);
+  const movePlayerTo = (mapId: string, sourcePlayer: PlayerState = player) => {
+    if (sourcePlayer.combat) return null;
+    const currentMap = getMapById(sourcePlayer.currentMapId);
     const destination = getMapById(mapId);
-    if (!currentMap?.connectedMapIds.includes(mapId) || !destination) return;
-    updatePlayer({ ...player, currentMapId: destination.id });
+    if (!currentMap?.connectedMapIds.includes(mapId) || !destination) return null;
+    const nextPlayer = { ...sourcePlayer, currentMapId: destination.id };
+    updatePlayer(nextPlayer);
+    return { player: nextPlayer, destination };
+  };
+
+  const handleTravel = (mapId: string) => {
+    const travel = movePlayerTo(mapId);
+    if (!travel) return;
     setMessages((previous) => [...previous, {
       id: Date.now().toString(),
       sender: 'system',
-      text: `你已抵達${destination.name}。${destination.description}`,
+      text: `你已抵達${travel.destination.name}。${travel.destination.description}`,
       timestamp: new Date().toLocaleTimeString()
     }]);
   };
@@ -258,11 +265,19 @@ export default function App() {
         updatePlayer(nextPlayer);
       }
 
+      const requestedDestinationId = aiResponse.travelRequest?.destinationMapId;
+      const travel = requestedDestinationId ? movePlayerTo(requestedDestinationId, nextPlayer) : null;
+      if (travel) nextPlayer = travel.player;
+
       const previousMap = getMapById(player.currentMapId);
       const nextMap = getMapById(nextPlayer.currentMapId);
-      const locationNotice = previousMap && nextMap && previousMap.id !== nextMap.id
-        ? `\n\n📍 你已抵達${nextMap.name}。${nextMap.description}`
-        : '';
+      const locationNotice = travel
+        ? `\n\n📍 你已抵達${travel.destination.name}。${travel.destination.description}`
+        : requestedDestinationId
+          ? `\n\n⚠️ 目前無法前往「${getMapById(requestedDestinationId)?.name ?? requestedDestinationId}」，所在地區未變更。請選擇右側「鄰近地點」中的可前往區域。`
+          : previousMap && nextMap && previousMap.id !== nextMap.id
+            ? `\n\n⚠️ AI 敘事提及地區變更，但沒有有效的移動請求；所在地區維持${previousMap.name}。`
+            : '';
 
       setMessages((prev) => [
         ...prev,

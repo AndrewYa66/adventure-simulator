@@ -176,6 +176,7 @@ export interface GameSession {
 export interface AIResponsePayload {
   storyText: string;
   suggestedActions: string[];
+  travelRequest?: { destinationMapId: string } | null;
   checkRequest?: {
     stat: 'atk' | 'def' | 'spd';
     dc: number;
@@ -192,7 +193,6 @@ export interface AIResponsePayload {
     goldChange?: number;
     addItems?: { itemId: string; quantity: number }[];
     removeItems?: { itemId: string; quantity: number }[];
-    newLocationId?: string;
     setFlags?: Record<string, boolean>;
     questUpdates?: { questId: string; status: 'completed' }[];
     defeatedMonsters?: { monsterId: string; quantity: number }[];

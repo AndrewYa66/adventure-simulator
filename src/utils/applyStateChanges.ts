@@ -76,8 +76,6 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
     else inventory.push({ itemId: item.itemId, quantity: item.quantity });
   }
 
-  const map = changes.newLocationId ? getMapById(changes.newLocationId) : undefined;
-  const canMove = map && (map.id === player.currentMapId || getMapById(player.currentMapId)?.connectedMapIds.includes(map.id));
   let level = player.level;
   const trustedExpChange = source === 'game' ? changes.expChange ?? 0 : Math.min(0, changes.expChange ?? 0);
   const trustedGoldChange = source === 'game' ? changes.goldChange ?? 0 : Math.min(0, changes.goldChange ?? 0);
@@ -111,6 +109,6 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
     storyFlags: { ...player.storyFlags, ...(changes.setFlags ?? {}) },
     defeatedMonsters,
     activeQuests,
-    currentMapId: canMove ? map.id : player.currentMapId
+    currentMapId: player.currentMapId
   };
 }
