@@ -94,7 +94,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
             return (
               <li key={item.itemId} style={{ marginBottom: '4px' }}>
                 {staticItem?.name || item.itemId} x{item.quantity}
-                {staticItem?.type === 'consumable' && <button onClick={() => onUseItem(item.itemId)} disabled={player.hp <= 0} style={{ marginLeft: '6px', padding: '2px 5px', cursor: player.hp <= 0 ? 'not-allowed' : 'pointer' }}>使用</button>}
+                {staticItem?.type === 'consumable' && <button onClick={() => onUseItem(item.itemId)} disabled={player.hp <= 0 || (!!player.combat && !staticItem.usableInCombat)} style={{ marginLeft: '6px', padding: '2px 5px', cursor: player.hp <= 0 || (!!player.combat && !staticItem.usableInCombat) ? 'not-allowed' : 'pointer' }}>使用</button>}
                 {staticItem?.type === 'consumable' && <span style={{ display: 'block', color: '#888', fontSize: '11px' }}>{staticItem.description}</span>}
               </li>
             );

@@ -3,28 +3,31 @@
     "id": "ITEM-001",
     "name": "小型生命藥水",
     "type": "consumable",
+    "usableInCombat": true,
     "effect": {
       "hpRestore": 30
     },
     "buyPrice": 10,
     "sellPrice": 5,
-    "description": "使用後恢復 30 點生命值，可在戰鬥中使用。"
+    "description": "使用後恢復 30 點生命值。"
   },
   {
     "id": "ITEM-003",
     "name": "小型魔力藥水",
     "type": "consumable",
+    "usableInCombat": true,
     "effect": {
       "mpRestore": 15
     },
     "buyPrice": 12,
     "sellPrice": 6,
-    "description": "使用後恢復 15 點魔力，可在戰鬥中使用。"
+    "description": "使用後恢復 15 點魔力。"
   },
   {
     "id": "ITEM-002",
     "name": "哥布林耳朵",
     "type": "quest",
+    "usableInCombat": false,
     "effect": {},
     "buyPrice": 0,
     "sellPrice": 2,
@@ -34,6 +37,7 @@
     "id": "ITEM-101",
     "name": "精鋼短劍",
     "type": "weapon",
+    "usableInCombat": false,
     "effect": {
       "atkBonus": 5
     },
@@ -45,6 +49,7 @@
     "id": "ITEM-201",
     "name": "冒險者皮甲",
     "type": "armor",
+    "usableInCombat": false,
     "effect": {
       "defBonus": 3
     },

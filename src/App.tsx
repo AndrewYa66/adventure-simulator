@@ -241,7 +241,7 @@ export default function App() {
   const handleUseItem = (itemId: string) => {
     const item = getItemById(itemId);
     const inventoryEntry = player.inventory.find((entry) => entry.itemId === itemId);
-    if (!item || item.type !== 'consumable' || !inventoryEntry || inventoryEntry.quantity <= 0 || player.hp <= 0) return;
+    if (!item || item.type !== 'consumable' || !inventoryEntry || inventoryEntry.quantity <= 0 || player.hp <= 0 || (player.combat && !item.usableInCombat)) return;
     const growth = getPlayerGrowthByLevel(player.level);
     const hpRestore = Math.min(item.effect.hpRestore ?? 0, Math.max(0, (growth?.maxHp ?? player.hp) - player.hp));
     const mpRestore = Math.min(item.effect.mpRestore ?? 0, Math.max(0, (growth?.maxMp ?? player.mp) - player.mp));

@@ -7,6 +7,7 @@ export interface ItemStatic {
   id: string;             // 例如: "ITEM-001"
   name: string;           // 例如: "小型生命藥水"
   type: 'consumable' | 'weapon' | 'armor' | 'accessory' | 'quest';
+  usableInCombat: boolean;
   effect: {
     hpRestore?: number;
     mpRestore?: number;
