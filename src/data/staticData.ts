@@ -6,7 +6,8 @@ import type {
   NpcCategoryStatic,
   NpcStatic,
   PlayerGrowthStatic,
-  QuestStatic
+  QuestStatic,
+  ShopStatic
 } from '../types/game';
 
 import rawItems from './items.json';
@@ -17,6 +18,7 @@ import rawNpcCategories from './npc_categories.json';
 import rawNpcs from './npcs.json';
 import rawPlayerGrowth from './player_growth.json';
 import rawQuests from './quests.json';
+import rawShops from './shops.json';
 
 // 進行靜態型別轉型，確保導出的資料陣列完全符合 DTO 規範
 export const itemsDatabase: ItemStatic[] = rawItems as ItemStatic[];
@@ -27,6 +29,7 @@ export const npcCategoriesDatabase: NpcCategoryStatic[] = rawNpcCategories as Np
 export const npcsDatabase: NpcStatic[] = rawNpcs as NpcStatic[];
 export const playerGrowthDatabase: PlayerGrowthStatic[] = rawPlayerGrowth as PlayerGrowthStatic[];
 export const questsDatabase: QuestStatic[] = rawQuests as QuestStatic[];
+export const shopsDatabase: ShopStatic[] = rawShops as ShopStatic[];
 
 // ==========================================
 // 靜態資料查詢 Helper Functions
@@ -61,6 +64,12 @@ export const getNpcCategoryById = (id: string): NpcCategoryStatic | undefined =>
 
 export const getNpcById = (id: string): NpcStatic | undefined =>
   npcsDatabase.find((npc) => npc.id === id);
+
+export const getShopById = (id: string): ShopStatic | undefined =>
+  shopsDatabase.find((shop) => shop.id === id);
+
+export const getShopForNpc = (npc: NpcStatic): ShopStatic | undefined =>
+  npc.shopId ? getShopById(npc.shopId) : undefined;
 
 export const getNpcStats = (npc: NpcStatic) => {
   const baseStats = getNpcCategoryById(npc.categoryId)?.baseStats;

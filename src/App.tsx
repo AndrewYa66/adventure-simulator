@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ActionCheckResult, PlayerGrowthStatic, PlayerState, StoryMessage } from './types/game';
 import { loadGameSession, resetPlayerState, saveGameSession } from './utils/playerStorage';
 import { applyStateChanges } from './utils/applyStateChanges';
-import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getMonsterById, getPlayerResourceCaps, getQuestById, getUnlockedSkillsByLevel } from './data/staticData';
+import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getMonsterById, getPlayerResourceCaps, getQuestById, getShopById, getUnlockedSkillsByLevel } from './data/staticData';
 import { getPlayerStatBreakdown, resolveActionCheck } from './utils/gameChecks';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from './utils/travelIntent';
 import { sendPlayerAction } from './services/aiService';
@@ -15,6 +15,8 @@ import { StoryLog } from './components/StoryLog';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { CharacterSetup } from './components/CharacterSetup';
 import { createInitialPlayer } from './utils/playerInit';
+import { parseExplicitSelfDamage } from './utils/playerActionIntent';
+import { buyItem, sellItem } from './utils/tradeRules';
 import type { CharacterAlignment } from './types/game';
 
 function resolveEnemyTurn(player: PlayerState, combat: NonNullable<PlayerState['combat']>, monster: NonNullable<ReturnType<typeof getMonsterById>>) {
@@ -174,6 +176,42 @@ export default function App() {
     }]);
   };
 
+  const handleBuyItem = (shopId: string, itemId: string) => {
+    const shop = getShopById(shopId);
+    const item = getItemById(itemId);
+    if (!shop || !item) return;
+    const result = buyItem(player, shop, item, player.currentMapId);
+    if (!result.ok) {
+      appendSystemMessage(`交易未完成：${result.reason}`);
+      return;
+    }
+    updatePlayer(result.player);
+    appendSystemMessage(`向${shop.name}購買${item.name} ×${result.quantity}，支付 ${result.totalPrice} 金幣。`);
+  };
+
+  const handleSellItem = (shopId: string, itemId: string) => {
+    const shop = getShopById(shopId);
+    const item = getItemById(itemId);
+    if (!shop || !item) return;
+    const result = sellItem(player, shop, item, player.currentMapId);
+    if (!result.ok) {
+      appendSystemMessage(`交易未完成：${result.reason}`);
+      return;
+    }
+    updatePlayer(result.player);
+    appendSystemMessage(`向${shop.name}出售${item.name} ×${result.quantity}，取得 ${result.totalPrice} 金幣。`);
+  };
+
+  const handleEquipItem = (itemId: string) => {
+    const item = getItemById(itemId);
+    const owned = player.inventory.some((entry) => entry.itemId === itemId && entry.quantity > 0);
+    if (!item || !owned || !canPlayerAct(player) || player.combat) return;
+    const slot = item.type === 'weapon' ? 'weaponItemId' : item.type === 'armor' ? 'armorItemId' : item.type === 'accessory' ? 'accessoryItemId' : undefined;
+    if (!slot) return;
+    updatePlayer({ ...player, equipped: { ...player.equipped, [slot]: itemId } });
+    appendSystemMessage(`已裝備${item.name}。`);
+  };
+
   const appendSystemMessage = (text: string, checkResults?: ActionCheckResult[]) => {
     setMessages((previous) => [...previous, {
       id: `${Date.now()}-${Math.random()}`,
@@ -329,8 +367,19 @@ export default function App() {
 
     try {
       const historyTexts = messages.map((m) => `${m.sender === 'user' ? '玩家' : 'GM'}: ${m.text}`);
-      const aiResponse = await sendPlayerAction(modelSettings, apiKey, player, actionText, historyTexts);
+      let aiResponse = await sendPlayerAction(modelSettings, apiKey, player, actionText, historyTexts);
       let storyText = aiResponse.storyText;
+      const explicitSelfDamage = parseExplicitSelfDamage(actionText);
+      if (explicitSelfDamage !== undefined) {
+        const actualDamage = Math.min(player.hp, explicitSelfDamage);
+        aiResponse = {
+          ...aiResponse,
+          checkRequest: undefined,
+          checkOutcomes: undefined,
+          stateChanges: { ...aiResponse.stateChanges, hpChange: -actualDamage }
+        };
+        storyText += `\n\n🩸 你對自己造成 ${actualDamage} 點傷害。`;
+      }
       let resultToApply = aiResponse;
       let checkResult: ActionCheckResult | undefined;
       let nextPlayer = player;
@@ -427,7 +476,7 @@ export default function App() {
         inputDisabled={player.isDead || isPlayerUnconscious(player)}
         onTravel={handleTravel}
       />
-      {isSidebarOpen && <PlayerHUD player={player} onReset={handleResetPlayer} storageWarning={storageWarning} onTravel={handleTravel} onAcceptQuest={handleAcceptQuest} onStartCombat={handleStartCombat} onFleeCombat={handleFleeCombat} onAttack={handleAttack} onUseSkill={handleUseSkill} onUseItem={handleUseItem} />}
+      {isSidebarOpen && <PlayerHUD player={player} onReset={handleResetPlayer} storageWarning={storageWarning} onTravel={handleTravel} onAcceptQuest={handleAcceptQuest} onStartCombat={handleStartCombat} onFleeCombat={handleFleeCombat} onAttack={handleAttack} onUseSkill={handleUseSkill} onUseItem={handleUseItem} onBuyItem={handleBuyItem} onSellItem={handleSellItem} onEquipItem={handleEquipItem} />}
       {isKeyModalOpen && <ApiKeyModal
         isOpen={true}
         currentSettings={modelSettings}

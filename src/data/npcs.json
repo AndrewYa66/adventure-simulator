@@ -15,6 +15,7 @@
     "title": "鐵匠",
     "categoryId": "NPC-CAT-001",
     "mapId": "MAP-001",
+    "shopId": "SHOP-001",
     "stats": { "hp": 26, "atk": 5, "def": 3, "spd": 2 },
     "alignment": "絕對中立",
     "description": "在村中鍛造與修理冒險者裝備。"
@@ -35,6 +36,7 @@
     "title": "旅店老闆",
     "categoryId": "NPC-CAT-001",
     "mapId": "MAP-001",
+    "shopId": "SHOP-002",
     "alignment": "中立善良",
     "description": "經營微風旅館，常聽見旅人帶來的消息。"
   },

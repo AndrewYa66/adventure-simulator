@@ -107,7 +107,15 @@ export interface NpcStatic {
   mapId: string;
   stats?: Partial<{ hp: number; atk: number; def: number; spd: number }>;
   alignment?: CharacterAlignment;
+  shopId?: string;
   description: string;
+}
+
+export interface ShopStatic {
+  id: string;
+  name: string;
+  npcId: string;
+  items: { itemId: string; buyPrice?: number }[];
 }
 
 /** 地圖靜態資料 (來自 maps.json) */

@@ -1,6 +1,6 @@
 import React from 'react';
 import type { PlayerState } from '../types/game';
-import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getMonsterById, getNpcById, getNpcCategoryById, getNpcStats, getPlayerGrowthByLevel, getPlayerResourceCaps, getQuestById, getUnlockedSkillsByLevel, questsDatabase } from '../data/staticData';
+import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getMonsterById, getNpcById, getNpcCategoryById, getNpcStats, getPlayerGrowthByLevel, getPlayerResourceCaps, getQuestById, getShopForNpc, getUnlockedSkillsByLevel, questsDatabase } from '../data/staticData';
 import { getPlayerStatBreakdown, STAT_LABELS } from '../utils/gameChecks';
 import { canAcceptQuest } from '../utils/questRules';
 import { canPlayerAct, isPlayerUnconscious } from '../utils/playerStatus';
@@ -16,9 +16,12 @@ interface PlayerHUDProps {
   onAttack: () => void;
   onUseSkill: (skillId: string) => void;
   onUseItem: (itemId: string) => void;
+  onBuyItem: (shopId: string, itemId: string) => void;
+  onSellItem: (shopId: string, itemId: string) => void;
+  onEquipItem: (itemId: string) => void;
 }
 
-export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWarning, onTravel, onAcceptQuest, onStartCombat, onFleeCombat, onAttack, onUseSkill, onUseItem }) => {
+export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWarning, onTravel, onAcceptQuest, onStartCombat, onFleeCombat, onAttack, onUseSkill, onUseItem, onBuyItem, onSellItem, onEquipItem }) => {
   const growth = getPlayerGrowthByLevel(player.level);
   const { maxHp, maxMp } = getPlayerResourceCaps(player.level, player.classId);
   const maxExp = growth?.requiredExp || 100;
@@ -107,6 +110,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
               <li key={item.itemId} style={{ marginBottom: '4px' }}>
                 {staticItem?.name || item.itemId} x{item.quantity}
                 {staticItem?.type === 'consumable' && <button onClick={() => onUseItem(item.itemId)} disabled={!canPlayerAct(player) || (!!player.combat && !staticItem.usableInCombat)} style={{ marginLeft: '6px', padding: '2px 5px', cursor: !canPlayerAct(player) || (!!player.combat && !staticItem.usableInCombat) ? 'not-allowed' : 'pointer' }}>使用</button>}
+                {staticItem && ['weapon', 'armor', 'accessory'].includes(staticItem.type) && <button onClick={() => onEquipItem(item.itemId)} disabled={!canPlayerAct(player) || !!player.combat} style={{ marginLeft: '6px', padding: '2px 5px' }}>裝備</button>}
                 {staticItem?.type === 'consumable' && <span style={{ display: 'block', color: '#888', fontSize: '11px' }}>{staticItem.description}</span>}
               </li>
             );
@@ -135,6 +139,33 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
           return <div key={npc.id} style={{ marginBottom: '7px', fontSize: '12px' }}>
             <strong>{npc.name}・{npc.title}</strong>
             <div style={{ color: '#aaa' }}>類別：{getNpcCategoryById(npc.categoryId)?.name ?? npc.categoryId} · HP {stats.hp} · ATK {stats.atk} · DEF {stats.def} · SPD {stats.spd}</div>
+            {(() => {
+              const shop = getShopForNpc(npc);
+              if (!shop) return null;
+              const unavailable = !canPlayerAct(player) || !!player.combat;
+              return <div style={{ marginTop: '5px', padding: '6px', background: '#29251d', borderRadius: '4px' }}>
+                <strong>🪙 {shop.name} · 金幣 {player.gold}</strong>
+                {shop.items.map((listing) => {
+                  const item = getItemById(listing.itemId);
+                  if (!item) return null;
+                  const price = listing.buyPrice ?? item.buyPrice;
+                  return <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '4px', marginTop: '4px' }}>
+                    <span>{item.name} · {price} 金幣</span>
+                    <button disabled={unavailable || player.gold < price} onClick={() => onBuyItem(shop.id, item.id)}>購買</button>
+                  </div>;
+                })}
+                {player.inventory.filter((entry) => {
+                  const item = getItemById(entry.itemId);
+                  return item && item.type !== 'quest' && item.sellPrice > 0;
+                }).map((entry) => {
+                  const item = getItemById(entry.itemId)!;
+                  return <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '4px', marginTop: '4px' }}>
+                    <span>收購 {item.name} · {item.sellPrice} 金幣</span>
+                    <button disabled={unavailable} onClick={() => onSellItem(shop.id, item.id)}>出售</button>
+                  </div>;
+                })}
+              </div>;
+            })()}
           </div>;
         })}
         {!currentMap?.npcsPresent.length && <div style={{ color: '#888', fontSize: '12px' }}>目前沒有在場人物。</div>}
