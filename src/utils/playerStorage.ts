@@ -54,6 +54,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
   if (value.combat !== undefined && value.combat !== null) {
     if (!isRecord(value.combat) || typeof value.combat.monsterId !== 'string' || !getMonsterById(value.combat.monsterId) ||
         !Number.isInteger(value.combat.currentHp) || (value.combat.currentHp as number) <= 0 ||
+        (value.combat.currentHp as number) > (getMonsterById(value.combat.monsterId)?.stats.hp ?? 0) ||
         !Number.isInteger(value.combat.round) || (value.combat.round as number) < 1 ||
         !getMapById(value.currentMapId)?.monstersPresent.includes(value.combat.monsterId)) return null;
     combat = { monsterId: value.combat.monsterId, currentHp: value.combat.currentHp as number, round: value.combat.round as number };

@@ -9,9 +9,12 @@ interface PlayerHUDProps {
   storageWarning: boolean;
   onTravel: (mapId: string) => void;
   onAcceptQuest: (questId: string) => void;
+  onStartCombat: (monsterId: string) => void;
+  onFleeCombat: () => void;
+  onAttack: () => void;
 }
 
-export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWarning, onTravel, onAcceptQuest }) => {
+export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWarning, onTravel, onAcceptQuest, onStartCombat, onFleeCombat, onAttack }) => {
   const growth = getPlayerGrowthByLevel(player.level);
   const maxHp = growth?.maxHp || 100;
   const maxMp = growth?.maxMp || 30;
@@ -98,8 +101,25 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
         {(currentMap?.connectedMapIds ?? []).map((mapId) => {
           const destination = getMapById(mapId);
           if (!destination) return null;
-          return <button key={mapId} onClick={() => onTravel(mapId)} style={{ display: 'block', margin: '4px 0', padding: '5px 8px', background: '#303c30', color: '#dcedc8', border: '1px solid #546e45', borderRadius: '4px', cursor: 'pointer' }}>前往 {destination.name}</button>;
+          return <button key={mapId} disabled={!!player.combat} onClick={() => onTravel(mapId)} style={{ display: 'block', margin: '4px 0', padding: '5px 8px', background: '#303c30', color: '#dcedc8', border: '1px solid #546e45', borderRadius: '4px', cursor: player.combat ? 'not-allowed' : 'pointer', opacity: player.combat ? 0.5 : 1 }}>前往 {destination.name}</button>;
         })}
+      </div>
+
+      <div>
+        <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #444' }}>👹 遭遇</h4>
+        {player.combat ? (() => {
+          const monster = getMonsterById(player.combat.monsterId);
+          return <div>
+            <div style={{ marginBottom: '6px' }}>{monster?.name || player.combat.monsterId} HP {player.combat.currentHp}/{monster?.stats.hp}</div>
+            <div style={{ color: '#aaa', fontSize: '11px', marginBottom: '8px' }}>第 {player.combat.round} 回合</div>
+            <button onClick={onAttack} disabled={player.hp <= 0} style={{ marginRight: '6px', padding: '6px 10px', background: '#8e2424', color: 'white', border: '1px solid #b44', borderRadius: '4px', cursor: 'pointer' }}>攻擊</button>
+            <button onClick={onFleeCombat} style={{ padding: '6px 10px', cursor: 'pointer' }}>脫離戰鬥</button>
+          </div>;
+        })() : (currentMap?.isSafeZone ? <div style={{ color: '#aaa', fontSize: '12px' }}>安全地區沒有可挑戰的敵人。</div> : (currentMap?.monstersPresent ?? []).map((monsterId) => {
+          const monster = getMonsterById(monsterId);
+          if (!monster) return null;
+          return <button key={monsterId} onClick={() => onStartCombat(monsterId)} style={{ display: 'block', margin: '4px 0', padding: '5px 8px', background: '#4a2525', color: '#ffcdd2', border: '1px solid #844', borderRadius: '4px', cursor: 'pointer' }}>挑戰 {monster.name}</button>;
+        }))}
       </div>
 
       <div>

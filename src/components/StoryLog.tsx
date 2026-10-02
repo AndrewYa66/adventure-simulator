@@ -11,9 +11,10 @@ interface StoryLogProps {
   selectedModel: string;
   isSidebarOpen: boolean;
   onToggleSidebar: () => void;
+  combatActive: boolean;
 }
 
-export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAction, onOpenKeyModal, hasApiKey, selectedModel, isSidebarOpen, onToggleSidebar }) => {
+export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAction, onOpenKeyModal, hasApiKey, selectedModel, isSidebarOpen, onToggleSidebar, combatActive }) => {
   const [inputAction, setInputAction] = useState('');
 
   const handleSend = () => {
@@ -62,6 +63,7 @@ export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAct
             </div>
 
             {msg.checkResult && <CheckResultCard result={msg.checkResult} />}
+            {msg.checkResults?.map((result, index) => <CheckResultCard key={`${msg.id}-check-${index}`} result={result} />)}
 
             {/* 建議快捷按鈕 */}
             {msg.options && msg.options.length > 0 && (
@@ -69,7 +71,7 @@ export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAct
                 {msg.options.map((opt, idx) => (
                   <button
                     key={idx}
-                    disabled={loading}
+                    disabled={loading || combatActive}
                     onClick={() => onSendAction(opt)}
                     style={{ padding: '6px 12px', backgroundColor: '#3e2723', color: '#ffcc80', border: '1px solid #8d6e63', borderRadius: '4px', cursor: 'pointer' }}
                   >
@@ -85,16 +87,17 @@ export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAct
 
       {/* 輸入框 */}
       <div style={{ padding: '16px', backgroundColor: '#252525', display: 'flex', gap: '10px' }}>
+        {combatActive && <span style={{ color: '#ffcc80', alignSelf: 'center', fontSize: '12px' }}>戰鬥中請使用右側攻擊按鈕，確保每次攻防都有擲骰結算。</span>}
         <input
           type="text"
           value={inputAction}
           onChange={(e) => setInputAction(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSend()}
           placeholder="自由輸入你的行動（例如：拔出短劍朝哥布林砍去...）"
-          disabled={loading}
+          disabled={loading || combatActive}
           style={{ flex: 1, padding: '10px', borderRadius: '4px', border: '1px solid #444', backgroundColor: '#121212', color: '#fff' }}
         />
-        <button onClick={handleSend} disabled={loading} style={{ padding: '10px 20px', backgroundColor: '#388e3c', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
+        <button onClick={handleSend} disabled={loading || combatActive} style={{ padding: '10px 20px', backgroundColor: '#388e3c', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
           發送行動
         </button>
       </div>
@@ -114,7 +117,7 @@ const CheckResultCard: React.FC<{ result: ActionCheckResult }> = ({ result }) =>
     }}
   >
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '6px' }}>
-      <strong>🎲 {STAT_LABELS[result.stat]}檢定</strong>
+      <strong>🎲 {result.label ?? `${STAT_LABELS[result.stat]}檢定`}</strong>
       <strong style={{ color: result.success ? '#91e3a9' : '#ffaaaa' }}>{result.success ? '成功' : '失敗'}</strong>
     </div>
     <div style={{ color: '#ddd', marginBottom: '7px' }}>{result.reason}</div>
