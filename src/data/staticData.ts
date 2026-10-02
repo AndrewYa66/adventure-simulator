@@ -7,7 +7,8 @@ import type {
   NpcStatic,
   PlayerGrowthStatic,
   QuestStatic,
-  ShopStatic
+  ShopStatic,
+  WorldUnitStatic
 } from '../types/game';
 
 import rawItems from './items.json';
@@ -75,6 +76,40 @@ export const getNpcStats = (npc: NpcStatic) => {
   const baseStats = getNpcCategoryById(npc.categoryId)?.baseStats;
   if (!baseStats) return undefined;
   return { ...baseStats, ...npc.stats };
+};
+
+/** Shared lookup adapter. Legacy NPC/monster records and their IDs remain unchanged. */
+export const getWorldUnitById = (id: string): WorldUnitStatic | undefined => {
+  const npc = getNpcById(id);
+  const monster = getMonsterById(id);
+  if (Boolean(npc) === Boolean(monster)) return undefined;
+
+  if (npc) {
+    const stats = getNpcStats(npc);
+    if (!stats) return undefined;
+    return {
+      kind: 'npc', id: npc.id, name: npc.name, title: npc.title, categoryId: npc.categoryId,
+      alignment: npc.alignment, stats, mapIds: [npc.mapId], source: npc
+    };
+  }
+
+  if (!monster) return undefined;
+  const mapIds = mapsDatabase.filter((map) => map.monstersPresent.includes(monster.id)).map((map) => map.id);
+  return {
+    kind: 'monster', id: monster.id, name: monster.name, alignment: monster.alignment,
+    stats: monster.stats, mapIds, source: monster
+  };
+};
+
+/** Return the normalized units referenced by a map, preserving NPC and monster order. */
+export const getWorldUnitsAtMap = (mapId: string): WorldUnitStatic[] => {
+  const map = getMapById(mapId);
+  if (!map) return [];
+  return [...map.npcsPresent, ...map.monstersPresent]
+    .flatMap((unitId) => {
+      const unit = getWorldUnitById(unitId);
+      return unit ? [unit] : [];
+    });
 };
 
 export const getPlayerGrowthByLevel = (level: number): PlayerGrowthStatic | undefined => {

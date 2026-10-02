@@ -119,6 +119,23 @@ export interface NpcStatic extends UnitStaticBase {
   description: string;
 }
 
+/** 共用查詢層回傳的正規化單位視圖；source 保留原有種類專屬資料。 */
+export type WorldUnitStatic =
+  | (Omit<UnitStaticBase, 'stats'> & {
+    kind: 'npc';
+    title: string;
+    categoryId: string;
+    stats: UnitStatBlock;
+    mapIds: string[];
+    source: NpcStatic;
+  })
+  | (Omit<UnitStaticBase, 'stats'> & {
+    kind: 'monster';
+    stats: UnitStatBlock;
+    mapIds: string[];
+    source: MonsterStatic;
+  });
+
 export interface ShopStatic {
   id: string;
   name: string;
