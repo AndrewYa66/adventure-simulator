@@ -1,14 +1,14 @@
 import type { ItemStatic, PlayerState, ShopStatic } from '../types/game';
-import { getMapById, getNpcById, getPlayerResourceCaps } from '../data/staticData';
+import { getMapById, getPlayerResourceCaps, getWorldUnitById } from '../data/staticData';
 import { canPlayerAct } from './playerStatus';
 
 export type TradeResult = { ok: true; player: PlayerState; quantity: number; totalPrice: number } |
   { ok: false; reason: string };
 
 function canTrade(player: PlayerState, shop: ShopStatic, currentMapId: string): boolean {
-  const npc = getNpcById(shop.npcId);
-  return canPlayerAct(player) && !player.combat && !!npc && npc.shopId === shop.id && npc.mapId === currentMapId &&
-    !!getMapById(currentMapId)?.npcsPresent.includes(npc.id);
+  const unit = getWorldUnitById(shop.npcId);
+  return canPlayerAct(player) && !player.combat && unit?.kind === 'npc' && unit.source.shopId === shop.id &&
+    unit.mapIds.includes(currentMapId) && !!getMapById(currentMapId)?.npcsPresent.includes(unit.id);
 }
 
 function record(player: PlayerState, type: PlayerState['transactionHistory'][number]['type'], description: string, goldChange: number) {
