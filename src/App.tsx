@@ -39,6 +39,14 @@ type TravelIntentResolution =
   | { kind: 'ambiguous'; candidates: MapStatic[] }
   | { kind: 'none' };
 
+const destinationCategoryPhrases: Record<string, string[]> = {
+  village: ['村莊', '村庄', '村子', '村落', '回村', '返村'],
+  settlement: ['城鎮', '城镇', '城裡', '城里', '城內', '城内'],
+  forest: ['森林', '樹林', '树林', '林地', '回森林', '回林子'],
+  wilderness: ['野外', '荒野']
+};
+const returnPhrases = ['回到', '返回', '折返', '回村', '返村', '回森林', '回林子', '回去'];
+
 function resolveExplicitTravelIntent(actionText: string, player: PlayerState): TravelIntentResolution {
   const normalized = actionText.toLocaleLowerCase();
   if (/(不想|不打算|不要|先不|暫時不|暂时不|還不|还不|能不能|可不可以|是否|要不要|如何|怎麼|怎么|路線|路线|多遠|多远|多久|在哪|哪裡|哪里|位置|告訴我|告诉我)/.test(normalized) ||
@@ -53,19 +61,21 @@ function resolveExplicitTravelIntent(actionText: string, player: PlayerState): T
   const namedMatches = candidates.filter((map) => [map.name, ...(map.aliases ?? [])]
     .some((label) => label && normalized.includes(label.toLocaleLowerCase())));
   let matches = namedMatches;
+  const requestedTags = new Set<string>();
 
   if (matches.length === 0) {
-    const requestedTags = new Set<string>();
-    if (/(村莊|村庄|村子|村落)/.test(normalized)) requestedTags.add('village');
-    if (/(城鎮|城镇|城裡|城里|城內|城内)/.test(normalized)) requestedTags.add('settlement');
-    if (/(森林|樹林|树林|林地)/.test(normalized)) requestedTags.add('forest');
-    if (/(野外|荒野)/.test(normalized)) requestedTags.add('wilderness');
+    for (const [tag, phrases] of Object.entries(destinationCategoryPhrases)) {
+      if (phrases.some((phrase) => normalized.includes(phrase.toLocaleLowerCase()))) requestedTags.add(tag);
+    }
     matches = candidates.filter((map) => (map.locationTags ?? []).some((tag) => requestedTags.has(tag)));
   }
 
-  if (/(回到|返回|折返|回村|回森林|回去)/.test(normalized) && player.previousMapId) {
-    const previousDestination = matches.find((map) => map.id === player.previousMapId);
-    if (previousDestination) return { kind: 'resolved', destination: previousDestination };
+  const isReturning = returnPhrases.some((phrase) => normalized.includes(phrase));
+  if (isReturning && player.previousMapId) {
+    const previousDestination = candidates.find((map) => map.id === player.previousMapId);
+    const previousMatchesIntent = matches.some((map) => map.id === player.previousMapId) ||
+      (namedMatches.length === 0 && requestedTags.size === 0);
+    if (previousDestination && previousMatchesIntent) return { kind: 'resolved', destination: previousDestination };
   }
   if (matches.length === 1) return { kind: 'resolved', destination: matches[0] };
   if (matches.length > 1) return { kind: 'ambiguous', candidates: matches };
