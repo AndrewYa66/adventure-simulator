@@ -1,5 +1,5 @@
 import type { AIResponsePayload, PlayerState } from '../types/game';
-import { getItemById, getMapById, getMonsterById, getPlayerGrowthByLevel, getPlayerResourceCaps, getQuestById, getWorldUnitById } from '../data/staticData';
+import { getItemById, getMapById, getPlayerGrowthByLevel, getPlayerResourceCaps, getQuestById, getWorldUnitById } from '../data/staticData';
 import { acceptQuest } from './questRules';
 
 export function applyStateChanges(player: PlayerState, response: AIResponsePayload, source: 'ai' | 'game' = 'ai'): PlayerState {
@@ -64,7 +64,8 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
 
   for (const defeat of (source === 'game' ? changes.defeatedMonsters ?? [] : [])) {
     const currentMap = getMapById(player.currentMapId);
-    if (getMonsterById(defeat.monsterId) && currentMap?.monstersPresent.includes(defeat.monsterId) && Number.isInteger(defeat.quantity) && defeat.quantity > 0) {
+    const unit = getWorldUnitById(defeat.monsterId);
+    if (unit?.kind === 'monster' && currentMap?.monstersPresent.includes(unit.id) && Number.isInteger(defeat.quantity) && defeat.quantity > 0) {
       defeatedMonsters[defeat.monsterId] = (defeatedMonsters[defeat.monsterId] ?? 0) + defeat.quantity;
       for (const active of activeQuests) {
         if (active.status !== 'in_progress') continue;
