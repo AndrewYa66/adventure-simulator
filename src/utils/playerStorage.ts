@@ -5,6 +5,13 @@ import { createInitialPlayer } from './playerInit';
 const PLAYER_STORAGE_KEY = 'TRPG_PLAYER_STATE';
 const SESSION_STORAGE_KEY = 'TRPG_GAME_SESSION';
 
+export interface LoadedGameSession {
+  player: PlayerState;
+  messages: StoryMessage[];
+  resumed: boolean;
+  savedAt?: number;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -84,21 +91,21 @@ function isStoryMessage(value: unknown): value is StoryMessage {
       (Array.isArray(value.options) && value.options.every((option) => typeof option === 'string')));
 }
 
-export function loadGameSession(): Pick<GameSession, 'player' | 'messages'> {
+export function loadGameSession(): LoadedGameSession {
   try {
     const saved = localStorage.getItem(SESSION_STORAGE_KEY);
     if (saved) {
       const value: unknown = JSON.parse(saved);
-      if (isRecord(value) && value.schemaVersion === 1 && Array.isArray(value.messages) &&
+      if (isRecord(value) && value.schemaVersion === 1 && Number.isFinite(value.savedAt) && Array.isArray(value.messages) &&
           value.messages.every(isStoryMessage)) {
         const player = normalizePlayerState(value.player);
-        if (player) return { player, messages: (value.messages as StoryMessage[]).slice(-100) };
+        if (player) return { player, messages: (value.messages as StoryMessage[]).slice(-100), resumed: true, savedAt: value.savedAt as number };
       }
     }
   } catch {
     // Fall back to the last valid player-only save below.
   }
-  return { player: loadPlayerState(), messages: [] };
+  return { player: loadPlayerState(), messages: [], resumed: false };
 }
 
 export function saveGameSession(player: PlayerState, messages: StoryMessage[]): boolean {

@@ -54,7 +54,7 @@ export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAct
                 maxWidth: '80%',
                 padding: '12px 16px',
                 borderRadius: '8px',
-                backgroundColor: msg.sender === 'user' ? '#1565c0' : msg.sender === 'system' ? '#b71c1c' : '#2d2d2d',
+                backgroundColor: msg.sender === 'user' ? '#1565c0' : msg.id === 'session-restore-notice' ? '#263b48' : msg.sender === 'system' ? '#b71c1c' : '#2d2d2d',
                 whiteSpace: 'pre-wrap',
                 lineHeight: '1.5'
               }}

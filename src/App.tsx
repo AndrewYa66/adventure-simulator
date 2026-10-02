@@ -11,6 +11,29 @@ import { PlayerHUD } from './components/PlayerHUD';
 import { StoryLog } from './components/StoryLog';
 import { ApiKeyModal } from './components/ApiKeyModal';
 
+function createRestoreNotice(player: PlayerState, savedAt: number, messageCount: number): StoryMessage {
+  const map = getMapById(player.currentMapId);
+  const combatMonster = player.combat ? getMonsterById(player.combat.monsterId) : undefined;
+  const activeQuests = player.activeQuests.filter((quest) => quest.status === 'in_progress')
+    .map((quest) => getQuestById(quest.questId)?.title ?? quest.questId);
+  const inventory = player.inventory.map((entry) => `${getItemById(entry.itemId)?.name ?? entry.itemId} ×${entry.quantity}`);
+  const lines = [
+    `📦 遊戲快照已恢復（${new Date(savedAt).toLocaleString()}）`,
+    `地區：${map?.name ?? player.currentMapId}｜角色：${player.name} Lv.${player.level}｜HP ${player.hp}｜MP ${player.mp}｜金幣 ${player.gold}`,
+    `已恢復最近對話：${messageCount} 則`,
+    `進行中任務：${activeQuests.length ? activeQuests.join('、') : '無'}`,
+    `持有物：${inventory.length ? inventory.join('、') : '無'}`
+  ];
+  if (combatMonster && player.combat) lines.push(`戰鬥恢復：第 ${player.combat.round} 回合，${combatMonster.name} HP ${player.combat.currentHp}/${combatMonster.stats.hp}`);
+  else lines.push('戰鬥狀態：目前沒有進行中的戰鬥。');
+  return {
+    id: 'session-restore-notice',
+    sender: 'system',
+    text: lines.join('\n'),
+    timestamp: new Date(savedAt).toLocaleTimeString()
+  };
+}
+
 export default function App() {
   const [initialSession] = useState(loadGameSession);
   const [modelSettings, setModelSettings] = useState<AIModelSettings>(loadAIModelSettings);
@@ -24,7 +47,9 @@ export default function App() {
   const [storageWarning, setStorageWarning] = useState(false);
   const [player, setPlayer] = useState<PlayerState>(initialSession.player);
 
-  const [messages, setMessages] = useState<StoryMessage[]>(initialSession.messages.length ? initialSession.messages : [
+  const [messages, setMessages] = useState<StoryMessage[]>(initialSession.resumed
+    ? [createRestoreNotice(initialSession.player, initialSession.savedAt!, initialSession.messages.filter((message) => message.id !== 'session-restore-notice').length), ...initialSession.messages.filter((message) => message.id !== 'session-restore-notice')]
+    : initialSession.messages.length ? initialSession.messages : [
     {
       id: '1',
       sender: 'ai',
