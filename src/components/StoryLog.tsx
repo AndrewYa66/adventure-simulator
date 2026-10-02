@@ -9,9 +9,11 @@ interface StoryLogProps {
   onOpenKeyModal: () => void;
   hasApiKey: boolean;
   selectedModel: string;
+  isSidebarOpen: boolean;
+  onToggleSidebar: () => void;
 }
 
-export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAction, onOpenKeyModal, hasApiKey, selectedModel }) => {
+export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAction, onOpenKeyModal, hasApiKey, selectedModel, isSidebarOpen, onToggleSidebar }) => {
   const [inputAction, setInputAction] = useState('');
 
   const handleSend = () => {
@@ -28,12 +30,17 @@ export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAct
           <h2 style={{ margin: 0, fontSize: '18px' }}>⚔️ AI TRPG 冒險引擎</h2>
           <span style={{ color: '#aaa', fontSize: '12px' }}>目前模型：{selectedModel}</span>
         </div>
-        <button
-          onClick={onOpenKeyModal}
-          style={{ padding: '6px 12px', background: hasApiKey ? '#2e7d32' : '#c62828', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-        >
-          {hasApiKey ? '⚙️ 模型設定' : '⚠️ 設定 API Key'}
-        </button>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button onClick={onToggleSidebar} aria-expanded={isSidebarOpen} aria-controls="player-sidebar" style={{ padding: '6px 10px', background: '#424242', color: '#fff', border: '1px solid #666', borderRadius: '4px', cursor: 'pointer' }}>
+            {isSidebarOpen ? '隱藏選單' : '顯示選單'}
+          </button>
+          <button
+            onClick={onOpenKeyModal}
+            style={{ padding: '6px 12px', background: hasApiKey ? '#2e7d32' : '#c62828', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+          >
+            {hasApiKey ? '⚙️ 模型設定' : '⚠️ 設定 API Key'}
+          </button>
+        </div>
       </div>
 
       {/* 對話紀錄區 */}

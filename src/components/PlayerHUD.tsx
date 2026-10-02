@@ -27,7 +27,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
   }));
 
   return (
-    <div style={{ width: '300px', minHeight: 0, overflowY: 'auto', backgroundColor: '#212121', padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+    <aside id="player-sidebar" aria-label="玩家選單" style={{ width: '300px', minHeight: 0, overflowY: 'auto', backgroundColor: '#212121', padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
       <div>
         <h3 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #444', paddingBottom: '6px' }}>👤 角色狀態</h3>
         <p style={{ margin: '4px 0' }}><strong>姓名:</strong> {player.name}</p>
@@ -113,6 +113,6 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
           </div>;
         })}
       </div>
-    </div>
+    </aside>
   );
 };

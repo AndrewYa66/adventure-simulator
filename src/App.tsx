@@ -19,6 +19,7 @@ export default function App() {
   });
   const apiKey = apiKeys[modelSettings.provider];
   const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [storageWarning, setStorageWarning] = useState(false);
   const [player, setPlayer] = useState<PlayerState>(loadPlayerState);
 
@@ -163,8 +164,10 @@ export default function App() {
         onOpenKeyModal={() => setIsKeyModalOpen(true)}
         hasApiKey={!!apiKey}
         selectedModel={modelSettings.model}
+        isSidebarOpen={isSidebarOpen}
+        onToggleSidebar={() => setIsSidebarOpen((open) => !open)}
       />
-      <PlayerHUD player={player} onReset={handleResetPlayer} storageWarning={storageWarning} onTravel={handleTravel} onAcceptQuest={handleAcceptQuest} />
+      {isSidebarOpen && <PlayerHUD player={player} onReset={handleResetPlayer} storageWarning={storageWarning} onTravel={handleTravel} onAcceptQuest={handleAcceptQuest} />}
       {isKeyModalOpen && <ApiKeyModal
         isOpen={true}
         currentSettings={modelSettings}
