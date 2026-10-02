@@ -7,7 +7,7 @@ export type TradeResult = { ok: true; player: PlayerState; quantity: number; tot
 
 function canTrade(player: PlayerState, shop: ShopStatic, currentMapId: string): boolean {
   const unit = getWorldUnitById(shop.npcId);
-  return canPlayerAct(player) && !player.combat && unit?.kind === 'npc' && getWorldUnitDisposition(player, unit.id) !== 'hostile' && unit.source.shopId === shop.id &&
+  return canPlayerAct(player) && !player.combat && unit?.kind === 'npc' && !player.npcStates[unit.id]?.isDead && player.npcStates[unit.id]?.currentHp !== 0 && getWorldUnitDisposition(player, unit.id) !== 'hostile' && unit.source.shopId === shop.id &&
     unit.mapIds.includes(currentMapId) && !!getMapById(currentMapId)?.npcsPresent.includes(unit.id);
 }
 

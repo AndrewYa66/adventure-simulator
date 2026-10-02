@@ -14,7 +14,9 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
   const activeQuests = player.activeQuests.map((quest) => ({ ...quest }));
   const npcStates = Object.fromEntries(Object.entries(player.npcStates).map(([npcId, state]) => [npcId, {
     gold: state.gold,
-    inventory: state.inventory.map((item) => ({ ...item }))
+    inventory: state.inventory.map((item) => ({ ...item })),
+    currentHp: state.currentHp,
+    isDead: state.isDead
   }]));
   const transactionHistory = [...player.transactionHistory];
   const unitDispositionOverrides = { ...player.unitDispositionOverrides };
@@ -27,7 +29,8 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
   for (const change of changes.unitDispositionChanges ?? []) {
     const unit = getWorldUnitById(change.unitId);
     const isPresent = currentMap?.npcsPresent.includes(change.unitId) || currentMap?.monstersPresent.includes(change.unitId);
-    if (!unit || !isPresent || !['friendly', 'neutral', 'hostile'].includes(change.disposition)) continue;
+    const isAlive = unit?.kind !== 'npc' || (!player.npcStates[unit.id]?.isDead && player.npcStates[unit.id]?.currentHp !== 0);
+    if (!unit || !isPresent || !isAlive || !['friendly', 'neutral', 'hostile'].includes(change.disposition)) continue;
     unitDispositionOverrides[unit.id] = change.disposition;
   }
 
@@ -36,7 +39,8 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
       const unit = getWorldUnitById(transfer.npcId);
       const state = npcStates[transfer.npcId];
       if (unit?.kind !== 'npc' || !unit.mapIds.includes(player.currentMapId) || !currentMap?.npcsPresent.includes(unit.id) ||
-          !getItemById(transfer.itemId) || !Number.isInteger(transfer.quantity) || transfer.quantity < 1 || !state) continue;
+          getWorldUnitDisposition({ unitDispositionOverrides }, unit.id) === 'hostile' || !getItemById(transfer.itemId) ||
+          !Number.isInteger(transfer.quantity) || transfer.quantity < 1 || !state || state.isDead || state.currentHp === 0) continue;
       const stock = state.inventory.find((entry) => entry.itemId === transfer.itemId);
       if (!stock || stock.quantity < transfer.quantity) continue;
       stock.quantity -= transfer.quantity;
@@ -88,7 +92,7 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
     const active = activeQuests.find((entry) => entry.questId === update.questId && entry.status === 'in_progress');
     const quest = getQuestById(update.questId);
     const giver = quest ? getWorldUnitById(quest.questGiverId) : undefined;
-    if (!active || !quest || giver?.kind !== 'npc' || getWorldUnitDisposition({ unitDispositionOverrides }, giver.id) === 'hostile' ||
+    if (!active || !quest || giver?.kind !== 'npc' || npcStates[giver.id]?.isDead || npcStates[giver.id]?.currentHp === 0 || getWorldUnitDisposition({ unitDispositionOverrides }, giver.id) === 'hostile' ||
         quest.mapId !== player.currentMapId || !currentMap?.npcsPresent.includes(quest.questGiverId)) continue;
     const defeatsMet = (quest.requirements.defeatMonsters ?? []).every((requirement) =>
       (active.progress?.defeatedMonsters[requirement.monsterId] ?? 0) >= requirement.quantity

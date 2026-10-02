@@ -10,7 +10,7 @@ export function canAcceptQuest(player: PlayerState, quest: QuestStatic): boolean
 
   const map = getMapById(player.currentMapId);
   const giver = getWorldUnitById(quest.questGiverId);
-  return !!map && giver?.kind === 'npc' && getWorldUnitDisposition(player, giver.id) !== 'hostile' &&
+  return !!map && giver?.kind === 'npc' && !player.npcStates[giver.id]?.isDead && player.npcStates[giver.id]?.currentHp !== 0 && getWorldUnitDisposition(player, giver.id) !== 'hostile' &&
     giver.mapIds.includes(map.id) && map.npcsPresent.includes(giver.id);
 }
 
@@ -19,7 +19,7 @@ export function canTurnInQuest(player: PlayerState, quest: QuestStatic): boolean
   const map = getMapById(player.currentMapId);
   const giver = getWorldUnitById(quest.questGiverId);
   if (!active || !map || giver?.kind !== 'npc' || map.id !== quest.mapId ||
-      getWorldUnitDisposition(player, giver.id) === 'hostile' || !giver.mapIds.includes(map.id) || !map.npcsPresent.includes(giver.id)) return false;
+      player.npcStates[giver.id]?.isDead || player.npcStates[giver.id]?.currentHp === 0 || getWorldUnitDisposition(player, giver.id) === 'hostile' || !giver.mapIds.includes(map.id) || !map.npcsPresent.includes(giver.id)) return false;
   const defeatsMet = (quest.requirements.defeatMonsters ?? []).every((requirement) =>
     (active.progress?.defeatedMonsters[requirement.monsterId] ?? 0) >= requirement.quantity
   );

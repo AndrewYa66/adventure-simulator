@@ -149,6 +149,8 @@ export interface ShopStatic {
 export interface NpcWorldState {
   gold: number;
   inventory: { itemId: string; quantity: number }[];
+  currentHp?: number;
+  isDead?: boolean;
 }
 
 export interface TransactionRecord {
@@ -237,7 +239,9 @@ export interface PlayerState {
   // 劇情進度與旗標，防止 AI 遺忘劇情進度
   storyFlags: Record<string, boolean>; // 例如: { "FLAG_TUTORIAL_DONE": true }
   defeatedMonsters: Record<string, number>;
+  /** @deprecated 讀取舊存檔用；新流程使用 encounteredUnitId。 */
   encounteredMonsterId?: string;
+  encounteredUnitId?: string;
   unitDispositionOverrides: Record<string, UnitDisposition>;
   
   // 當前進行中的任務
@@ -246,7 +250,8 @@ export interface PlayerState {
     status: 'in_progress' | 'completed';
     progress?: { defeatedMonsters: Record<string, number> };
   }[];
-  combat?: { monsterId: string; currentHp: number; round: number };
+  /** 戰鬥目標通用化；怪物仍以專屬資料決定掉落與特殊招式。 */
+  combat?: { unitId: string; currentHp: number; round: number };
 }
 
 /** 對話視窗訊息 */

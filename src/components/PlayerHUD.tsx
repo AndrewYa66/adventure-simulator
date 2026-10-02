@@ -11,7 +11,7 @@ interface PlayerHUDProps {
   storageWarning: boolean;
   onTravel: (mapId: string) => void;
   onAcceptQuest: (questId: string) => void;
-  onStartCombat: (monsterId: string) => void;
+  onStartCombat: (unitId: string) => void;
   onFleeCombat: () => void;
   onAttack: () => void;
   onUseSkill: (skillId: string) => void;
@@ -145,14 +145,17 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
           const npc = unit.source;
           const stats = unit.stats;
           const disposition = getWorldUnitDisposition(player, unit.id);
+          const npcState = player.npcStates[npc.id];
           const dispositionLabel = disposition === 'friendly' ? '友善' : disposition === 'hostile' ? '敵對' : '中立';
           return <div key={npc.id} style={{ marginBottom: '7px', fontSize: '12px' }}>
             <strong>{npc.name}・{npc.title}</strong>
-            <div style={{ color: '#aaa' }}>類別：{getNpcCategoryById(npc.categoryId)?.name ?? npc.categoryId} · 關係：{dispositionLabel} · HP {stats.hp} · ATK {stats.atk} · DEF {stats.def} · SPD {stats.spd}</div>
-            <div style={{ color: '#888' }}>持有：金幣 {player.npcStates[npc.id]?.gold ?? 0} · {(player.npcStates[npc.id]?.inventory ?? []).map((entry) => `${getItemById(entry.itemId)?.name ?? entry.itemId} ×${entry.quantity}`).join('、') || '無物品'}</div>
+            <div style={{ color: '#aaa' }}>類別：{getNpcCategoryById(npc.categoryId)?.name ?? npc.categoryId} · 關係：{dispositionLabel} · HP {npcState?.currentHp ?? stats.hp}/{stats.hp} · ATK {stats.atk} · DEF {stats.def} · SPD {stats.spd}{npcState?.isDead ? ' · 已死亡' : ''}</div>
+            {!npcState?.isDead && disposition === 'hostile' && <button onClick={() => onStartCombat(npc.id)} disabled={!canPlayerAct(player) || !!player.combat} style={{ margin: '4px 0', padding: '4px 7px' }}>挑戰 {npc.name}</button>}
+            {!npcState?.isDead && <div style={{ color: '#888' }}>持有：金幣 {npcState?.gold ?? 0} · {(npcState?.inventory ?? []).map((entry) => `${getItemById(entry.itemId)?.name ?? entry.itemId} ×${entry.quantity}`).join('、') || '無物品'}</div>}
             {(() => {
               const shop = getShopForNpc(npc);
               if (!shop) return null;
+              if (npcState?.isDead) return null;
               const unavailable = !canPlayerAct(player) || !!player.combat || disposition === 'hostile';
               return <div style={{ marginTop: '5px', padding: '6px', background: '#29251d', borderRadius: '4px' }}>
                 <strong>🪙 {shop.name} · 金幣 {player.gold}</strong>
@@ -190,17 +193,16 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
       <div>
         <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #444' }}>👹 遭遇</h4>
         {player.combat ? (() => {
-          const unit = getWorldUnitById(player.combat.monsterId);
-          const monster = unit?.kind === 'monster' ? unit : undefined;
+          const unit = getWorldUnitById(player.combat.unitId);
           return <div>
-            <div style={{ marginBottom: '6px' }}>{monster?.name || player.combat.monsterId} HP {player.combat.currentHp}/{monster?.stats.hp}</div>
+            <div style={{ marginBottom: '6px' }}>{unit?.name || player.combat.unitId} HP {player.combat.currentHp}/{unit?.stats.hp}</div>
             <div style={{ color: '#aaa', fontSize: '11px', marginBottom: '8px' }}>第 {player.combat.round} 回合</div>
             <button onClick={onAttack} disabled={player.isDead} style={{ marginRight: '6px', padding: '6px 10px', background: '#8e2424', color: 'white', border: '1px solid #b44', borderRadius: '4px', cursor: player.isDead ? 'not-allowed' : 'pointer' }}>{isPlayerUnconscious(player) ? '昏迷中（跳過回合）' : '攻擊'}</button>
             {unlockedSkills.filter((skill) => skill.effect.kind === 'damage_multiplier').map((skill) => <button key={skill.id} onClick={() => onUseSkill(skill.id)} disabled={!canPlayerAct(player) || player.mp < skill.costMp} title={skill.description} style={{ marginRight: '6px', padding: '6px 10px', cursor: player.mp < skill.costMp || !canPlayerAct(player) ? 'not-allowed' : 'pointer' }}>{skill.name}（MP {skill.costMp}）</button>)}
             <button onClick={onFleeCombat} disabled={!canPlayerAct(player)} style={{ padding: '6px 10px', cursor: canPlayerAct(player) ? 'pointer' : 'not-allowed' }}>脫離戰鬥</button>
           </div>;
         })() : (() => {
-          const unit = player.encounteredMonsterId ? getWorldUnitById(player.encounteredMonsterId) : undefined;
+          const unit = player.encounteredUnitId ? getWorldUnitById(player.encounteredUnitId) : undefined;
           const monster = unit?.kind === 'monster' ? unit : undefined;
           const disposition = monster ? getWorldUnitDisposition(player, monster.id) : undefined;
           const dispositionLabel = disposition === 'friendly' ? '友善' : disposition === 'hostile' ? '敵對' : '中立';

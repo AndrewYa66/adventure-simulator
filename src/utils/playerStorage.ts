@@ -75,21 +75,38 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
 
   let combat: PlayerState['combat'];
   if (value.combat !== undefined && value.combat !== null) {
-    if (!isRecord(value.combat) || typeof value.combat.monsterId !== 'string' || !getMonsterById(value.combat.monsterId) ||
+    const combatUnitId = isRecord(value.combat) && typeof value.combat.unitId === 'string'
+      ? value.combat.unitId
+      : isRecord(value.combat) && typeof value.combat.monsterId === 'string' ? value.combat.monsterId : undefined;
+    const combatUnit = combatUnitId ? getWorldUnitById(combatUnitId) : undefined;
+    const combatUnitIsPresent = combatUnit?.kind === 'npc'
+      ? getMapById(value.currentMapId)?.npcsPresent.includes(combatUnitId!)
+      : !!combatUnit && getMapById(value.currentMapId)?.monstersPresent.includes(combatUnitId!);
+    const savedCombatNpcState = combatUnit?.kind === 'npc' && isRecord(value.npcStates) && isRecord(value.npcStates[combatUnitId!])
+      ? value.npcStates[combatUnitId!] as Record<string, unknown> : undefined;
+    if (!isRecord(value.combat) || !combatUnitId || !combatUnit || !combatUnitIsPresent ||
         !Number.isInteger(value.combat.currentHp) || (value.combat.currentHp as number) <= 0 ||
-        (value.combat.currentHp as number) > (getMonsterById(value.combat.monsterId)?.stats.hp ?? 0) ||
+        (value.combat.currentHp as number) > combatUnit.stats.hp ||
         !Number.isInteger(value.combat.round) || (value.combat.round as number) < 1 ||
-        !getMapById(value.currentMapId)?.monstersPresent.includes(value.combat.monsterId)) return null;
-    combat = { monsterId: value.combat.monsterId, currentHp: value.combat.currentHp as number, round: value.combat.round as number };
+        (savedCombatNpcState?.isDead === true || savedCombatNpcState?.currentHp === 0)) return null;
+    combat = { unitId: combatUnitId, currentHp: value.combat.currentHp as number, round: value.combat.round as number };
   }
   const previousMapId = typeof value.previousMapId === 'string' &&
     getMapById(value.currentMapId)?.connectedMapIds.includes(value.previousMapId)
     ? value.previousMapId
     : undefined;
-  const encounteredMonsterId = typeof value.encounteredMonsterId === 'string' &&
-    getMapById(value.currentMapId)?.monstersPresent.includes(value.encounteredMonsterId) &&
-    getMonsterById(value.encounteredMonsterId)
-    ? value.encounteredMonsterId
+  const savedEncounteredUnitId = typeof value.encounteredUnitId === 'string'
+    ? value.encounteredUnitId
+    : typeof value.encounteredMonsterId === 'string' ? value.encounteredMonsterId : undefined;
+  const encounteredUnit = typeof savedEncounteredUnitId === 'string' ? getWorldUnitById(savedEncounteredUnitId) : undefined;
+  const encounteredUnitIsPresent = encounteredUnit?.kind === 'npc'
+    ? getMapById(value.currentMapId)?.npcsPresent.includes(savedEncounteredUnitId!)
+    : !!encounteredUnit && getMapById(value.currentMapId)?.monstersPresent.includes(savedEncounteredUnitId!);
+  const savedEncounteredNpcState = encounteredUnit?.kind === 'npc' && isRecord(value.npcStates) && isRecord(value.npcStates[savedEncounteredUnitId!])
+    ? value.npcStates[savedEncounteredUnitId!] as Record<string, unknown> : undefined;
+  const encounteredUnitId = typeof savedEncounteredUnitId === 'string' && encounteredUnit && encounteredUnitIsPresent &&
+    savedEncounteredNpcState?.isDead !== true && savedEncounteredNpcState?.currentHp !== 0
+    ? savedEncounteredUnitId
     : undefined;
   const hp = Math.max(0, value.hp as number);
   const statusEffects = Array.isArray(value.statusEffects)
@@ -102,9 +119,12 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
   const savedNpcStates = isRecord(value.npcStates) ? value.npcStates : {};
   const npcStates = Object.fromEntries(npcsDatabase.map((npc) => {
     const savedState = savedNpcStates[npc.id];
+    const maxHp = getWorldUnitById(npc.id)?.stats.hp ?? 1;
     if (!isRecord(savedState)) return [npc.id, {
       gold: npc.startingGold ?? 0,
-      inventory: (npc.startingInventory ?? []).flatMap((entry) => getItemById(entry.itemId) && entry.quantity > 0 ? [{ ...entry }] : [])
+      inventory: (npc.startingInventory ?? []).flatMap((entry) => getItemById(entry.itemId) && entry.quantity > 0 ? [{ ...entry }] : []),
+      currentHp: maxHp,
+      isDead: false
     }];
     const savedInventory = Array.isArray(savedState.inventory) ? savedState.inventory.flatMap((entry) =>
       isRecord(entry) && typeof entry.itemId === 'string' && getItemById(entry.itemId) &&
@@ -113,7 +133,10 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
         : []) : [];
     return [npc.id, {
       gold: Number.isSafeInteger(savedState.gold) && (savedState.gold as number) >= 0 ? savedState.gold as number : 0,
-      inventory: savedInventory
+      inventory: savedInventory,
+      currentHp: Number.isInteger(savedState.currentHp) && (savedState.currentHp as number) >= 0 && (savedState.currentHp as number) <= maxHp
+        ? savedState.currentHp as number : maxHp,
+      isDead: savedState.isDead === true || savedState.currentHp === 0
     }];
   }));
   const transactionHistory = Array.isArray(value.transactionHistory) ? value.transactionHistory.flatMap((record) =>
@@ -154,7 +177,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     defeatedMonsters,
     unitDispositionOverrides,
     activeQuests,
-    ...(encounteredMonsterId && !isDead ? { encounteredMonsterId } : {}),
+    ...(encounteredUnitId && !isDead ? { encounteredUnitId } : {}),
     ...(combat && !isDead ? { combat } : {})
   };
 }

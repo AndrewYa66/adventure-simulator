@@ -1,5 +1,5 @@
 import type { CharacterAlignment, PlayerState } from '../types/game';
-import { getCharacterClassById, getPlayerResourceCaps, npcsDatabase } from '../data/staticData';
+import { getCharacterClassById, getPlayerResourceCaps, getWorldUnitById, npcsDatabase } from '../data/staticData';
 
 /** 建立預設新玩家存檔 */
 export const createInitialPlayer = (
@@ -26,7 +26,9 @@ export const createInitialPlayer = (
     gold: 50,
     npcStates: Object.fromEntries(npcsDatabase.map((npc) => [npc.id, {
       gold: npc.startingGold ?? 0,
-      inventory: (npc.startingInventory ?? []).map((entry) => ({ ...entry }))
+      inventory: (npc.startingInventory ?? []).map((entry) => ({ ...entry })),
+      currentHp: getWorldUnitById(npc.id)?.stats.hp ?? 1,
+      isDead: false
     }])),
     transactionHistory: [],
     currentMapId: 'MAP-001',

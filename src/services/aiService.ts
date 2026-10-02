@@ -171,6 +171,8 @@ export async function sendPlayerAction(
     stats: unit.stats,
     alignment: unit.alignment,
     disposition: getWorldUnitDisposition(playerState, unit.id),
+    isDead: playerState.npcStates[unit.id]?.isDead ?? playerState.npcStates[unit.id]?.currentHp === 0,
+    currentHp: playerState.npcStates[unit.id]?.currentHp ?? unit.stats.hp,
     holdings: playerState.npcStates[unit.id] ?? { gold: unit.source.startingGold ?? 0, inventory: unit.source.startingInventory ?? [] },
     description: unit.source.description
   }] : []);
@@ -182,7 +184,7 @@ export async function sendPlayerAction(
     (!unit.source.requiredQuestId || playerState.activeQuests.some((quest) =>
       quest.questId === unit.source.requiredQuestId && quest.status === 'in_progress'
     )) ? [{ id: unit.id, name: unit.name, disposition: getWorldUnitDisposition(playerState, unit.id) }] : []);
-  const encounteredUnit = playerState.encounteredMonsterId ? getWorldUnitById(playerState.encounteredMonsterId) : undefined;
+  const encounteredUnit = playerState.encounteredUnitId ? getWorldUnitById(playerState.encounteredUnitId) : undefined;
 
   if (!cleanApiKey) {
     throw new Error('所選模型的 API Key 尚未設定。請開啟模型設定。');
@@ -199,6 +201,7 @@ export async function sendPlayerAction(
 - 當前地區: ${currentMap?.name ?? playerState.currentMapId} (${playerState.currentMapId})
 - 可前往的相鄰地區（只可選這些 ID）: ${JSON.stringify(availableDestinations)}
 - 當前地區在場 NPC 及數值: ${JSON.stringify(presentNpcs)}
+- NPC isDead 為 true 或 currentHp 為 0 時代表角色已死亡，不可當成存活人物交談、提供任務、交易或持有可取得物品。
 - NPC 持有物與金幣即為世界實際庫存，不能憑空贈送或生成；只能在持有量足夠且玩家明確取得時回報 npcItemTransfers。
 - 陣營傾向描述價值觀；對玩家的目前關係是友善/中立/敵對，依單位預設關係及已記錄世界事件判定。不可由 NPC/魔物種類或九大陣營推斷關係。
 - 只有目前關係為敵對的單位才會作為敵人主動攻擊；友善或中立單位即使是魔物也不可無故描述為敵人或發動戰鬥。玩家明確攻擊友善/中立單位時，遊戲會記錄挑釁造成的敵對關係。
@@ -206,7 +209,7 @@ export async function sendPlayerAction(
 - 當前可交付任務（需玩家回到任務給予者所在位置且需求齊備）: ${JSON.stringify(turnInQuests)}
 - 上一個地區: ${previousMap ? `${previousMap.name} (${previousMap.id})，分類 ${JSON.stringify(previousMap.locationTags ?? [])}` : '無'}
 - 當前戰鬥: ${playerState.combat ? JSON.stringify(playerState.combat) : '無'}
-- 目前已遭遇敵人: ${encounteredUnit?.kind === 'monster' ? encounteredUnit.name : playerState.encounteredMonsterId ?? '無'}
+- 目前已遭遇單位: ${encounteredUnit?.name ?? '無'}
 - 本地區可遭遇敵人（只可選這些 ID）: ${JSON.stringify(encounterCandidates)}
 - 背包物品 ID 列表: ${JSON.stringify(playerState.inventory)}
 - 世界靜態物品清單（只可使用這些 ID/名稱）: ${JSON.stringify(itemsDatabase.map((item) => ({ id: item.id, name: item.name, type: item.type })))}
@@ -275,7 +278,9 @@ export async function sendPlayerAction(
 
   const isOpenAI = settings.provider === 'openai';
   const availableDestinationIds = availableDestinations.map((destination) => destination.id);
-  const presentNpcIds = presentNpcs.map((npc) => npc.id);
+  const presentNpcIds = presentNpcs.filter((npc) => !npc.isDead && npc.disposition !== 'hostile').map((npc) => npc.id);
+  const dispositionUnitIds = currentUnits.filter((unit) => unit.kind !== 'npc' ||
+    (!playerState.npcStates[unit.id]?.isDead && playerState.npcStates[unit.id]?.currentHp !== 0)).map((unit) => unit.id);
   const knownItemIds = itemsDatabase.map((item) => item.id);
   const jsonResponseSchema = {
     type: 'object',
@@ -328,7 +333,7 @@ export async function sendPlayerAction(
             items: {
               type: 'object',
               properties: {
-                unitId: { type: 'string', enum: currentUnits.length ? currentUnits.map((unit) => unit.id) : ['__NO_CURRENT_UNIT__'] },
+                unitId: { type: 'string', enum: dispositionUnitIds.length ? dispositionUnitIds : ['__NO_CURRENT_UNIT__'] },
                 disposition: { type: 'string', enum: ['friendly', 'neutral', 'hostile'] }
               },
               required: ['unitId', 'disposition'],
