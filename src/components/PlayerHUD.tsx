@@ -3,6 +3,7 @@ import type { PlayerState } from '../types/game';
 import { getItemById, getMapById, getMonsterById, getNpcById, getNpcCategoryById, getNpcStats, getPlayerGrowthByLevel, getUnlockedSkillsByLevel, questsDatabase } from '../data/staticData';
 import { getPlayerStatBreakdown, STAT_LABELS } from '../utils/gameChecks';
 import { canAcceptQuest } from '../utils/questRules';
+import { canPlayerAct, isPlayerUnconscious } from '../utils/playerStatus';
 
 interface PlayerHUDProps {
   player: PlayerState;
@@ -38,6 +39,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
       <div>
         <h3 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #444', paddingBottom: '6px' }}>👤 角色狀態</h3>
         <p style={{ margin: '4px 0' }}><strong>姓名:</strong> {player.name}</p>
+        {(player.isDead || isPlayerUnconscious(player)) && <p role="status" style={{ margin: '4px 0', color: '#ff8a80', fontWeight: 'bold' }}>{player.isDead ? '☠️ 已死亡' : '💫 昏迷中'}</p>}
         <p style={{ margin: '4px 0' }}><strong>等級:</strong> Lv.{player.level} ({player.exp}/{maxExp} EXP)</p>
         <p style={{ margin: '4px 0' }}><strong>💰 金幣:</strong> {player.gold} Gold</p>
         <p style={{ margin: '4px 0' }}><strong>📍 位置:</strong> {currentMap?.name || player.currentMapId}</p>
@@ -94,7 +96,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
             return (
               <li key={item.itemId} style={{ marginBottom: '4px' }}>
                 {staticItem?.name || item.itemId} x{item.quantity}
-                {staticItem?.type === 'consumable' && <button onClick={() => onUseItem(item.itemId)} disabled={player.hp <= 0 || (!!player.combat && !staticItem.usableInCombat)} style={{ marginLeft: '6px', padding: '2px 5px', cursor: player.hp <= 0 || (!!player.combat && !staticItem.usableInCombat) ? 'not-allowed' : 'pointer' }}>使用</button>}
+                {staticItem?.type === 'consumable' && <button onClick={() => onUseItem(item.itemId)} disabled={!canPlayerAct(player) || (!!player.combat && !staticItem.usableInCombat)} style={{ marginLeft: '6px', padding: '2px 5px', cursor: !canPlayerAct(player) || (!!player.combat && !staticItem.usableInCombat) ? 'not-allowed' : 'pointer' }}>使用</button>}
                 {staticItem?.type === 'consumable' && <span style={{ display: 'block', color: '#888', fontSize: '11px' }}>{staticItem.description}</span>}
               </li>
             );
@@ -132,9 +134,9 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
           return <div>
             <div style={{ marginBottom: '6px' }}>{monster?.name || player.combat.monsterId} HP {player.combat.currentHp}/{monster?.stats.hp}</div>
             <div style={{ color: '#aaa', fontSize: '11px', marginBottom: '8px' }}>第 {player.combat.round} 回合</div>
-            <button onClick={onAttack} disabled={player.hp <= 0} style={{ marginRight: '6px', padding: '6px 10px', background: '#8e2424', color: 'white', border: '1px solid #b44', borderRadius: '4px', cursor: 'pointer' }}>攻擊</button>
-            {unlockedSkills.map((skill) => <button key={skill.id} onClick={() => onUseSkill(skill.id)} disabled={player.hp <= 0 || player.mp < skill.costMp} title={skill.description} style={{ marginRight: '6px', padding: '6px 10px', cursor: player.mp < skill.costMp || player.hp <= 0 ? 'not-allowed' : 'pointer' }}>{skill.name}（MP {skill.costMp}）</button>)}
-            <button onClick={onFleeCombat} style={{ padding: '6px 10px', cursor: 'pointer' }}>脫離戰鬥</button>
+            <button onClick={onAttack} disabled={!canPlayerAct(player)} style={{ marginRight: '6px', padding: '6px 10px', background: '#8e2424', color: 'white', border: '1px solid #b44', borderRadius: '4px', cursor: 'pointer' }}>攻擊</button>
+            {unlockedSkills.map((skill) => <button key={skill.id} onClick={() => onUseSkill(skill.id)} disabled={!canPlayerAct(player) || player.mp < skill.costMp} title={skill.description} style={{ marginRight: '6px', padding: '6px 10px', cursor: player.mp < skill.costMp || !canPlayerAct(player) ? 'not-allowed' : 'pointer' }}>{skill.name}（MP {skill.costMp}）</button>)}
+            <button onClick={onFleeCombat} disabled={!canPlayerAct(player)} style={{ padding: '6px 10px', cursor: canPlayerAct(player) ? 'pointer' : 'not-allowed' }}>脫離戰鬥</button>
           </div>;
         })() : (currentMap?.isSafeZone ? <div style={{ color: '#aaa', fontSize: '12px' }}>安全地區沒有可挑戰的敵人。</div> : (currentMap?.monstersPresent ?? []).map((monsterId) => {
           const monster = getMonsterById(monsterId);

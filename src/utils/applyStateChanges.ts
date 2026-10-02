@@ -108,6 +108,7 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
 
   return {
     ...player,
+    isDead: player.isDead || hp <= 0,
     level,
     exp,
     hp,

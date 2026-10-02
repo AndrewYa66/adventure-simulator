@@ -133,6 +133,8 @@ export interface QuestStatic {
 /** 玩家動態存檔狀態 (寫入 LocalStorage) */
 export interface PlayerState {
   name: string;
+  isDead: boolean;
+  statusEffects: { id: 'unconscious'; remainingTurns: number }[];
   level: number;
   exp: number;
   hp: number;

@@ -7,6 +7,7 @@ import { getPlayerStatBreakdown, resolveActionCheck } from './utils/gameChecks';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from './utils/travelIntent';
 import { sendPlayerAction } from './services/aiService';
 import { acceptQuest } from './utils/questRules';
+import { canPlayerAct, isPlayerUnconscious } from './utils/playerStatus';
 import type { AIProvider } from './services/aiModels';
 import { loadAIModelSettings, saveAIModelSettings, type AIModelSettings } from './services/aiModels';
 import { PlayerHUD } from './components/PlayerHUD';
@@ -94,7 +95,7 @@ export default function App() {
   };
 
   const movePlayerTo = (mapId: string, sourcePlayer: PlayerState = player) => {
-    if (sourcePlayer.combat) return null;
+    if (sourcePlayer.combat || !canPlayerAct(sourcePlayer)) return null;
     const currentMap = getMapById(sourcePlayer.currentMapId);
     const destination = getMapById(mapId);
     if (!currentMap?.connectedMapIds.includes(mapId) || !destination) return null;
@@ -141,13 +142,13 @@ export default function App() {
   const handleStartCombat = (monsterId: string) => {
     const map = getMapById(player.currentMapId);
     const monster = getMonsterById(monsterId);
-    if (player.combat || !map || map.isSafeZone || !map.monstersPresent.includes(monsterId) || !monster) return;
+    if (player.combat || !canPlayerAct(player) || !map || map.isSafeZone || !map.monstersPresent.includes(monsterId) || !monster) return;
     updatePlayer({ ...player, combat: { monsterId, currentHp: monster.stats.hp, round: 1 } });
     appendSystemMessage(`你與${monster.name}進入戰鬥！攻擊、已解鎖技能及消耗品各自消耗一個行動回合；敵人存活時會反擊並進行閃避檢定。`);
   };
 
   const handleFleeCombat = () => {
-    if (!player.combat) return;
+    if (!player.combat || !canPlayerAct(player)) return;
     const monster = getMonsterById(player.combat.monsterId);
     const outOfCombat = { ...player };
     delete outOfCombat.combat;
@@ -158,7 +159,7 @@ export default function App() {
   const handleCombatAction = (skill?: NonNullable<PlayerGrowthStatic['unlockedSkill']>) => {
     const combat = player.combat;
     const monster = combat ? getMonsterById(combat.monsterId) : undefined;
-    if (!combat || !monster || player.hp <= 0) return;
+    if (!combat || !monster || !canPlayerAct(player)) return;
     if (skill && player.mp < skill.costMp) return;
 
     const attackCheck = {
@@ -223,25 +224,26 @@ export default function App() {
     updatePlayer({
       ...actionPlayer,
       hp,
+      isDead: hp <= 0,
       ...(stillFighting ? { combat: { ...combat, currentHp: monsterHp, round: combat.round + 1 } } : { combat: undefined })
     });
     appendSystemMessage(`${attackText}\n${dodgeCheck.success
       ? `你成功閃避${monster.name}的反擊。`
-      : `${monster.name}反擊命中，你受到 ${receivedDamage} 點傷害。`}${stillFighting ? `\n第 ${combat.round + 1} 回合開始。` : '\n你失去戰鬥能力，敵人停止追擊。'}`, checks);
+      : `${monster.name}反擊命中，你受到 ${receivedDamage} 點傷害。`}${stillFighting ? `\n第 ${combat.round + 1} 回合開始。` : '\n☠️ HP 歸零，你已死亡。'}`, checks);
   };
 
   const handleAttack = () => handleCombatAction();
 
   const handleUseSkill = (skillId: string) => {
     const skill = getUnlockedSkillsByLevel(player.level).find((entry) => entry.id === skillId);
-    if (!skill || !player.combat || player.mp < skill.costMp) return;
+    if (!skill || !player.combat || !canPlayerAct(player) || player.mp < skill.costMp) return;
     handleCombatAction(skill);
   };
 
   const handleUseItem = (itemId: string) => {
     const item = getItemById(itemId);
     const inventoryEntry = player.inventory.find((entry) => entry.itemId === itemId);
-    if (!item || item.type !== 'consumable' || !inventoryEntry || inventoryEntry.quantity <= 0 || player.hp <= 0 || (player.combat && !item.usableInCombat)) return;
+    if (!item || item.type !== 'consumable' || !inventoryEntry || inventoryEntry.quantity <= 0 || !canPlayerAct(player) || (player.combat && !item.usableInCombat)) return;
     const growth = getPlayerGrowthByLevel(player.level);
     const hpRestore = Math.min(item.effect.hpRestore ?? 0, Math.max(0, (growth?.maxHp ?? player.hp) - player.hp));
     const mpRestore = Math.min(item.effect.mpRestore ?? 0, Math.max(0, (growth?.maxMp ?? player.mp) - player.mp));
@@ -275,15 +277,19 @@ export default function App() {
     updatePlayer({
       ...next,
       hp,
+      isDead: hp <= 0,
       ...(stillFighting ? { combat: { ...player.combat, round: player.combat.round + 1 } } : { combat: undefined })
     });
     appendSystemMessage(`使用${item.name}，${details}。\n${dodgeCheck.success
       ? `你成功閃避${monster.name}的反擊。`
-      : `${monster.name}反擊命中，你受到 ${receivedDamage} 點傷害。`}${stillFighting ? `\n第 ${player.combat.round + 1} 回合開始。` : '\n你失去戰鬥能力，敵人停止追擊。'}`, [dodgeCheck]);
+      : `${monster.name}反擊命中，你受到 ${receivedDamage} 點傷害。`}${stillFighting ? `\n第 ${player.combat.round + 1} 回合開始。` : '\n☠️ HP 歸零，你已死亡。'}`, [dodgeCheck]);
   };
 
   const handleSendAction = async (actionText: string) => {
-    if (player.combat) return;
+    if (player.combat || !canPlayerAct(player)) {
+      appendSystemMessage(player.isDead ? '角色已死亡，無法繼續行動。請重設角色開始新的冒險。' : '角色目前昏迷，無法採取行動。');
+      return;
+    }
     if (!apiKey) {
       setIsKeyModalOpen(true);
       return;
@@ -322,6 +328,9 @@ export default function App() {
         nextPlayer = applyStateChanges(player, resultToApply);
         updatePlayer(nextPlayer);
       }
+      const deathNotice = !player.isDead && nextPlayer.isDead
+        ? '\n\n☠️ 你的生命值降至 0，角色死亡。這段冒險已結束。'
+        : '';
       const acceptedQuests = nextPlayer.activeQuests.filter((entry) => entry.status === 'in_progress' &&
         !player.activeQuests.some((previous) => previous.questId === entry.questId));
       const questNotice = acceptedQuests.length
@@ -356,7 +365,7 @@ export default function App() {
         {
           id: (Date.now() + 1).toString(),
           sender: 'ai',
-          text: `${storyText}${questNotice}${locationNotice}`,
+          text: `${storyText}${questNotice}${locationNotice}${deathNotice}`,
           options: aiResponse.suggestedActions,
           travelOptions: textTravelIntent.kind === 'ambiguous'
             ? textTravelIntent.candidates.map((candidate) => ({ mapId: candidate.id, name: candidate.name }))
@@ -393,6 +402,7 @@ export default function App() {
         isSidebarOpen={isSidebarOpen}
         onToggleSidebar={() => setIsSidebarOpen((open) => !open)}
         combatActive={!!player.combat}
+        inputDisabled={player.isDead || isPlayerUnconscious(player)}
         onTravel={handleTravel}
       />
       {isSidebarOpen && <PlayerHUD player={player} onReset={handleResetPlayer} storageWarning={storageWarning} onTravel={handleTravel} onAcceptQuest={handleAcceptQuest} onStartCombat={handleStartCombat} onFleeCombat={handleFleeCombat} onAttack={handleAttack} onUseSkill={handleUseSkill} onUseItem={handleUseItem} />}

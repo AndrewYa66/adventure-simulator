@@ -8,6 +8,8 @@ export const createInitialPlayer = (playerName: string = '亞瑟'): PlayerState 
 
   return {
     name: playerName,
+    isDead: false,
+    statusEffects: [],
     level: 1,
     exp: 0,
     hp: lv1Stats?.maxHp ?? 100,

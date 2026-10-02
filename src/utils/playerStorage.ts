@@ -70,12 +70,22 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     getMapById(value.currentMapId)?.connectedMapIds.includes(value.previousMapId)
     ? value.previousMapId
     : undefined;
+  const hp = Math.max(0, value.hp as number);
+  const statusEffects = Array.isArray(value.statusEffects)
+    ? value.statusEffects.flatMap((effect) => isRecord(effect) && effect.id === 'unconscious' &&
+      Number.isInteger(effect.remainingTurns) && (effect.remainingTurns as number) > 0
+      ? [{ id: 'unconscious' as const, remainingTurns: effect.remainingTurns as number }]
+      : [])
+    : [];
+  const isDead = value.isDead === true || hp === 0;
 
   return {
     name: value.name.trim(),
+    isDead,
+    statusEffects,
     level: value.level as number,
     exp: value.exp as number,
-    hp: Math.max(0, value.hp as number),
+    hp,
     mp: Math.max(0, value.mp as number),
     gold: value.gold as number,
     currentMapId: value.currentMapId,
@@ -85,7 +95,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     storyFlags: value.storyFlags as Record<string, boolean>,
     defeatedMonsters,
     activeQuests,
-    ...(combat ? { combat } : {})
+    ...(combat && !isDead ? { combat } : {})
   };
 }
 

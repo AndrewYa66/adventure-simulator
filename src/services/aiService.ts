@@ -173,6 +173,7 @@ export async function sendPlayerAction(
 當前玩家狀態：
 - 姓名: ${playerState.name} (Lv.${playerState.level})
 - HP: ${playerState.hp} | MP: ${playerState.mp} | 金幣: ${playerState.gold}
+- 生命狀態: ${playerState.isDead ? '死亡；冒險已結束' : playerState.statusEffects.some((effect) => effect.id === 'unconscious') ? '昏迷；無法採取行動' : '存活'}
 - 當前地區: ${currentMap?.name ?? playerState.currentMapId} (${playerState.currentMapId})
 - 可前往的相鄰地區（只可選這些 ID）: ${JSON.stringify(availableDestinations)}
 - 當前地區在場 NPC 及數值: ${JSON.stringify(presentNpcs)}
@@ -193,6 +194,7 @@ export async function sendPlayerAction(
 - 不要透過 stateChanges 修改地區；實際移動由遊戲驗證 travelRequest 後套用。不可前往清單以外的地區。
 - 任務只能從「當前可接取任務」中接受。玩家明確表示接取/接受某任務時，才在 stateChanges.questAcceptances 填入對應 ID；不可因詢問細節、委託描述或含糊回覆而接取。不可自行建立任務、改寫需求或獎勵。
 - 任務接取由遊戲端再次驗證所在地、任務給予者是否在場及任務是否已接取/完成；不可只在 storyText 宣稱已接取。
+- 玩家沒有劇情保護。合理危險、檢定失敗或敵方有效攻擊可以使 HP 降至 0；不得為避免死亡而竄改檢定結果、取消已成立的傷害或在 storyText 宣稱玩家倖存。HP 歸零就是死亡，不是昏迷；只有明確套用 unconscious 狀態才代表昏迷。
 - 一般戰鬥由遊戲規則結算，不可敘事中自行宣告擊敗或扣除怪物。
 注意事項：
 1. 當給予或扣除玩家道具時，請使用 Item ID (例如: "ITEM-001" 小型生命藥水, "ITEM-002" 哥布林耳朵, "ITEM-101" 精鋼短劍, "ITEM-201" 冒險者皮甲)。

@@ -12,10 +12,11 @@ interface StoryLogProps {
   isSidebarOpen: boolean;
   onToggleSidebar: () => void;
   combatActive: boolean;
+  inputDisabled: boolean;
   onTravel: (mapId: string) => void;
 }
 
-export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAction, onOpenKeyModal, hasApiKey, selectedModel, isSidebarOpen, onToggleSidebar, combatActive, onTravel }) => {
+export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAction, onOpenKeyModal, hasApiKey, selectedModel, isSidebarOpen, onToggleSidebar, combatActive, inputDisabled, onTravel }) => {
   const [inputAction, setInputAction] = useState('');
 
   const handleSend = () => {
@@ -80,7 +81,7 @@ export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAct
                 {msg.options.map((opt, idx) => (
                   <button
                     key={idx}
-                    disabled={loading || combatActive}
+                    disabled={loading || combatActive || inputDisabled}
                     onClick={() => onSendAction(opt)}
                     style={{ padding: '6px 12px', backgroundColor: '#3e2723', color: '#ffcc80', border: '1px solid #8d6e63', borderRadius: '4px', cursor: 'pointer' }}
                   >
@@ -103,10 +104,10 @@ export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAct
           onChange={(e) => setInputAction(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSend()}
           placeholder="自由輸入你的行動（例如：拔出短劍朝哥布林砍去...）"
-          disabled={loading || combatActive}
+          disabled={loading || combatActive || inputDisabled}
           style={{ flex: 1, padding: '10px', borderRadius: '4px', border: '1px solid #444', backgroundColor: '#121212', color: '#fff' }}
         />
-        <button onClick={handleSend} disabled={loading || combatActive} style={{ padding: '10px 20px', backgroundColor: '#388e3c', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
+        <button onClick={handleSend} disabled={loading || combatActive || inputDisabled} style={{ padding: '10px 20px', backgroundColor: '#388e3c', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
           發送行動
         </button>
       </div>
