@@ -1,6 +1,6 @@
 import React from 'react';
 import type { PlayerState } from '../types/game';
-import { getItemById, getMapById, getPlayerGrowthByLevel, questsDatabase } from '../data/staticData';
+import { getItemById, getMapById, getMonsterById, getPlayerGrowthByLevel, questsDatabase } from '../data/staticData';
 import { getPlayerStatBreakdown, STAT_LABELS } from '../utils/gameChecks';
 
 interface PlayerHUDProps {
@@ -105,10 +105,25 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
       <div>
         <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #444' }}>📜 任務</h4>
         {questsDatabase.map((quest) => {
-          const status = player.activeQuests.find((active) => active.questId === quest.id)?.status;
+          const active = player.activeQuests.find((entry) => entry.questId === quest.id);
+          const status = active?.status;
+          const inventoryCount = (itemId: string) => player.inventory.find((item) => item.itemId === itemId)?.quantity ?? 0;
           return <div key={quest.id} style={{ marginBottom: '8px', fontSize: '12px' }}>
             <strong>{quest.title}</strong>
             <div>{status === 'completed' ? '已完成' : status === 'in_progress' ? '進行中' : quest.objective}</div>
+            {status && <div style={{ marginTop: '4px', color: '#bbb' }}>
+              {(quest.requirements.defeatMonsters ?? []).map((requirement) => {
+                const count = active?.progress?.defeatedMonsters[requirement.monsterId] ?? 0;
+                return <div key={requirement.monsterId}>擊敗 {getMonsterById(requirement.monsterId)?.name || requirement.monsterId}: {Math.min(count, requirement.quantity)}/{requirement.quantity}</div>;
+              })}
+              {(quest.requirements.collectItems ?? []).map((requirement) => {
+                const item = getItemById(requirement.itemId);
+                const count = inventoryCount(requirement.itemId);
+                return <div key={requirement.itemId} style={{ color: status === 'completed' ? '#81c784' : count >= requirement.quantity ? '#81c784' : '#ffcc80' }}>
+                  {status === 'completed' ? '已交付' : count >= requirement.quantity ? '可交付' : '尚缺'} {item?.name || requirement.itemId}: {Math.min(count, requirement.quantity)}/{requirement.quantity}
+                </div>;
+              })}
+            </div>}
             {!status && <button onClick={() => onAcceptQuest(quest.id)} style={{ marginTop: '4px', padding: '4px 7px', cursor: 'pointer' }}>接取任務</button>}
           </div>;
         })}

@@ -17,6 +17,11 @@
           "quantity": 2
         }
       ]
+    },
+    "rewardLimits": {
+      "exp": { "min": 80, "max": 120 },
+      "gold": { "min": 40, "max": 60 },
+      "maxItemQuantity": 3
     }
   }
 ]

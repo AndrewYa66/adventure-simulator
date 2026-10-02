@@ -1,7 +1,7 @@
 import type { AIResponsePayload, PlayerState } from '../types/game';
 import { getItemById, getMapById, getMonsterById, getPlayerGrowthByLevel, getQuestById } from '../data/staticData';
 
-export function applyStateChanges(player: PlayerState, response: AIResponsePayload): PlayerState {
+export function applyStateChanges(player: PlayerState, response: AIResponsePayload, source: 'ai' | 'game' = 'ai'): PlayerState {
   const changes = response.stateChanges;
   if (!changes) return player;
 
@@ -12,14 +12,14 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
   const rewardItems: { itemId: string; quantity: number }[] = [];
   const activeQuests = player.activeQuests.map((quest) => ({ ...quest }));
 
-  for (const item of changes.addItems ?? []) {
+  for (const item of (source === 'game' ? changes.addItems ?? [] : [])) {
     if (!getItemById(item.itemId) || !Number.isInteger(item.quantity) || item.quantity <= 0) continue;
     const existing = inventory.find((entry) => entry.itemId === item.itemId);
     if (existing) existing.quantity += item.quantity;
     else inventory.push({ itemId: item.itemId, quantity: item.quantity });
   }
 
-  for (const item of changes.removeItems ?? []) {
+  for (const item of (source === 'game' ? changes.removeItems ?? [] : [])) {
     if (!getItemById(item.itemId) || !Number.isInteger(item.quantity) || item.quantity <= 0) continue;
     const existing = inventory.find((entry) => entry.itemId === item.itemId);
     if (!existing) continue;
@@ -27,7 +27,7 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
     if (existing.quantity <= 0) inventory.splice(inventory.indexOf(existing), 1);
   }
 
-  for (const defeat of changes.defeatedMonsters ?? []) {
+  for (const defeat of (source === 'game' ? changes.defeatedMonsters ?? [] : [])) {
     const currentMap = getMapById(player.currentMapId);
     if (getMonsterById(defeat.monsterId) && currentMap?.monstersPresent.includes(defeat.monsterId) && Number.isInteger(defeat.quantity) && defeat.quantity > 0) {
       defeatedMonsters[defeat.monsterId] = (defeatedMonsters[defeat.monsterId] ?? 0) + defeat.quantity;
@@ -52,9 +52,15 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
     );
     if (!defeatsMet || !itemsMet) continue;
     active.status = 'completed';
-    questExp += quest.rewards.exp;
-    questGold += quest.rewards.gold;
-    rewardItems.push(...(quest.rewards.items ?? []));
+    const limits = quest.rewardLimits;
+    const bounded = (amount: number, range?: { min: number; max: number }) =>
+      range ? Math.max(range.min, Math.min(range.max, amount)) : amount;
+    questExp += bounded(quest.rewards.exp, limits?.exp);
+    questGold += bounded(quest.rewards.gold, limits?.gold);
+    rewardItems.push(...(quest.rewards.items ?? []).map((item) => ({
+      ...item,
+      quantity: Math.min(item.quantity, limits?.maxItemQuantity ?? item.quantity)
+    })));
     for (const requirement of quest.requirements.collectItems ?? []) {
       const collected = inventory.find((item) => item.itemId === requirement.itemId);
       if (!collected) continue;
@@ -73,7 +79,9 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
   const map = changes.newLocationId ? getMapById(changes.newLocationId) : undefined;
   const canMove = map && (map.id === player.currentMapId || getMapById(player.currentMapId)?.connectedMapIds.includes(map.id));
   let level = player.level;
-  const exp = Math.max(0, player.exp + (changes.expChange ?? 0) + questExp);
+  const trustedExpChange = source === 'game' ? changes.expChange ?? 0 : Math.min(0, changes.expChange ?? 0);
+  const trustedGoldChange = source === 'game' ? changes.goldChange ?? 0 : Math.min(0, changes.goldChange ?? 0);
+  const exp = Math.max(0, player.exp + trustedExpChange + questExp);
   let hp = Math.max(0, player.hp + (changes.hpChange ?? 0));
   let mp = Math.max(0, player.mp + (changes.mpChange ?? 0));
   let growth = getPlayerGrowthByLevel(level);
@@ -98,7 +106,7 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
     exp,
     hp,
     mp,
-    gold: Math.max(0, player.gold + (changes.goldChange ?? 0) + questGold),
+    gold: Math.max(0, player.gold + trustedGoldChange + questGold),
     inventory,
     storyFlags: { ...player.storyFlags, ...(changes.setFlags ?? {}) },
     defeatedMonsters,
