@@ -34,6 +34,7 @@ export const createInitialPlayer = (
     equipped: { ...characterClass.startingEquipment },
     storyFlags: {},
     defeatedMonsters: {},
+    unitDispositionOverrides: {},
     activeQuests: []
   };
 };

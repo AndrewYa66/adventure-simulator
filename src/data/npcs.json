@@ -5,6 +5,7 @@
     "title": "村長",
     "categoryId": "NPC-CAT-001",
     "mapId": "MAP-001",
+    "defaultDisposition": "friendly",
     "startingGold": 200,
     "startingInventory": [{ "itemId": "ITEM-001", "quantity": 5 }, { "itemId": "ITEM-003", "quantity": 2 }],
     "stats": { "hp": 24, "atk": 3, "def": 2, "spd": 2 },
@@ -18,6 +19,7 @@
     "categoryId": "NPC-CAT-001",
     "mapId": "MAP-001",
     "shopId": "SHOP-001",
+    "defaultDisposition": "friendly",
     "startingGold": 150,
     "startingInventory": [{ "itemId": "ITEM-101", "quantity": 2 }, { "itemId": "ITEM-201", "quantity": 2 }],
     "stats": { "hp": 26, "atk": 5, "def": 3, "spd": 2 },
@@ -30,6 +32,7 @@
     "title": "農婦",
     "categoryId": "NPC-CAT-001",
     "mapId": "MAP-001",
+    "defaultDisposition": "friendly",
     "stats": { "hp": 19, "atk": 2, "def": 1, "spd": 3 },
     "alignment": "中立善良",
     "description": "在村外耕作，熟悉附近田地與道路。"
@@ -41,6 +44,7 @@
     "categoryId": "NPC-CAT-001",
     "mapId": "MAP-001",
     "shopId": "SHOP-002",
+    "defaultDisposition": "friendly",
     "startingGold": 100,
     "startingInventory": [{ "itemId": "ITEM-001", "quantity": 10 }, { "itemId": "ITEM-003", "quantity": 8 }],
     "alignment": "中立善良",
@@ -52,6 +56,7 @@
     "title": "巡守隊長",
     "categoryId": "NPC-CAT-002",
     "mapId": "MAP-001",
+    "defaultDisposition": "friendly",
     "stats": { "hp": 45, "atk": 9, "def": 6, "spd": 5 },
     "alignment": "守序中立",
     "description": "負責守護村莊與訓練巡守隊。"
@@ -62,6 +67,7 @@
     "title": "林地獵人",
     "categoryId": "NPC-CAT-003",
     "mapId": "MAP-002",
+    "defaultDisposition": "friendly",
     "alignment": "守序善良",
     "description": "熟悉綠林古道，追蹤到哥布林巢穴附近的足跡。"
   }

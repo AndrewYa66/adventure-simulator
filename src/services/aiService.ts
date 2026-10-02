@@ -1,6 +1,6 @@
 import type { PlayerState, AIResponsePayload } from '../types/game';
 import type { AIModelSettings } from './aiModels';
-import { canPlayerEnterMap, getItemById, getMapById, getNpcCategoryById, getWorldUnitById, getWorldUnitsAtMap, itemsDatabase, questsDatabase } from '../data/staticData';
+import { canPlayerEnterMap, getItemById, getMapById, getNpcCategoryById, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, questsDatabase } from '../data/staticData';
 import { canAcceptQuest, canTurnInQuest } from '../utils/questRules';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from '../utils/travelIntent';
 
@@ -58,6 +58,11 @@ const isMonsterDefeatList = (value: unknown): boolean =>
     isRecord(entry) && typeof entry.monsterId === 'string' && entry.quantity === 1
   );
 
+const isUnitDispositionChangeList = (value: unknown): boolean =>
+  Array.isArray(value) && value.every((entry) =>
+    isRecord(entry) && typeof entry.unitId === 'string' && ['friendly', 'neutral', 'hostile'].includes(String(entry.disposition))
+  );
+
 function parseAIResponse(value: unknown): AIResponsePayload | null {
   if (!isRecord(value) || typeof value.storyText !== 'string' || !Array.isArray(value.suggestedActions) ||
       !value.suggestedActions.every((action) => typeof action === 'string')) return null;
@@ -91,6 +96,7 @@ function parseAIResponse(value: unknown): AIResponsePayload | null {
       !!getItemById(transfer.itemId) && Number.isInteger(transfer.quantity) && (transfer.quantity as number) > 0 && (transfer.quantity as number) <= 99
     ))) return false;
     if (changes.defeatedMonsters !== undefined && !isMonsterDefeatList(changes.defeatedMonsters)) return false;
+    if (changes.unitDispositionChanges !== undefined && !isUnitDispositionChangeList(changes.unitDispositionChanges)) return false;
     if (changes.newLocationId !== undefined && changes.newLocationId !== null && typeof changes.newLocationId !== 'string') return false;
     if (changes.setFlags !== undefined && (!isRecord(changes.setFlags) || !Object.values(changes.setFlags).every((flag) => typeof flag === 'boolean'))) return false;
     if (changes.questUpdates !== undefined && (!Array.isArray(changes.questUpdates) || !changes.questUpdates.every((quest) =>
@@ -106,7 +112,7 @@ function parseAIResponse(value: unknown): AIResponsePayload | null {
   if (isRecord(value.stateChanges) && value.stateChanges.defeatedMonsters !== undefined &&
       (!isRecord(value.checkRequest) || value.checkRequest.stat !== 'atk')) return null;
   if (isRecord(value.failureStateChanges) &&
-      ['expChange', 'addItems', 'npcItemTransfers', 'defeatedMonsters', 'questUpdates', 'questAcceptances', 'newLocationId', 'setFlags'].some((field) => field in (value.failureStateChanges as Record<string, unknown>))) return null;
+      ['expChange', 'addItems', 'npcItemTransfers', 'defeatedMonsters', 'unitDispositionChanges', 'questUpdates', 'questAcceptances', 'newLocationId', 'setFlags'].some((field) => field in (value.failureStateChanges as Record<string, unknown>))) return null;
 
   const storyText = getReadableNarrative(value.storyText);
   if (storyText === FORMAT_FALLBACK) return null;
@@ -164,6 +170,7 @@ export async function sendPlayerAction(
     category: getNpcCategoryById(unit.categoryId)?.name ?? unit.categoryId,
     stats: unit.stats,
     alignment: unit.alignment,
+    disposition: getWorldUnitDisposition(playerState, unit.id),
     holdings: playerState.npcStates[unit.id] ?? { gold: unit.source.startingGold ?? 0, inventory: unit.source.startingInventory ?? [] },
     description: unit.source.description
   }] : []);
@@ -174,7 +181,7 @@ export async function sendPlayerAction(
   const encounterCandidates = currentUnits.flatMap((unit) => unit.kind === 'monster' &&
     (!unit.source.requiredQuestId || playerState.activeQuests.some((quest) =>
       quest.questId === unit.source.requiredQuestId && quest.status === 'in_progress'
-    )) ? [{ id: unit.id, name: unit.name }] : []);
+    )) ? [{ id: unit.id, name: unit.name, disposition: getWorldUnitDisposition(playerState, unit.id) }] : []);
   const encounteredUnit = playerState.encounteredMonsterId ? getWorldUnitById(playerState.encounteredMonsterId) : undefined;
 
   if (!cleanApiKey) {
@@ -193,6 +200,8 @@ export async function sendPlayerAction(
 - 可前往的相鄰地區（只可選這些 ID）: ${JSON.stringify(availableDestinations)}
 - 當前地區在場 NPC 及數值: ${JSON.stringify(presentNpcs)}
 - NPC 持有物與金幣即為世界實際庫存，不能憑空贈送或生成；只能在持有量足夠且玩家明確取得時回報 npcItemTransfers。
+- 陣營傾向描述價值觀；對玩家的目前關係是友善/中立/敵對，依單位預設關係及已記錄世界事件判定。不可由 NPC/魔物種類或九大陣營推斷關係。
+- 只有目前關係為敵對的單位才會作為敵人主動攻擊；友善或中立單位即使是魔物也不可無故描述為敵人或發動戰鬥。玩家明確攻擊友善/中立單位時，遊戲會記錄挑釁造成的敵對關係。
 - 當前可接取任務（僅可接取這些 ID）: ${JSON.stringify(availableQuests)}
 - 當前可交付任務（需玩家回到任務給予者所在位置且需求齊備）: ${JSON.stringify(turnInQuests)}
 - 上一個地區: ${previousMap ? `${previousMap.name} (${previousMap.id})，分類 ${JSON.stringify(previousMap.locationTags ?? [])}` : '無'}
@@ -221,6 +230,7 @@ export async function sendPlayerAction(
 - 非戰鬥行動若有風險且失敗會造成實質後果，依最相關能力提出 checkRequest（atk/def/spd 或 str/dex/con/int/wis/cha），在成功/失敗分支填入相應 HP/MP 變化。玩家明確提出自我傷害等會直接改變資源的行動時，必須依其明確數值回報變化，並照常套用 HP 歸零死亡規則。
 - 若玩家有自傷意圖但沒有說明傷害數值，先詢問數值，不要猜測或只用文字敘述扣血。
 - 一般戰鬥由遊戲規則結算，不可敘事中自行宣告擊敗或扣除怪物。
+- 只有玩家行動或明確世界事件確實改變了當前地區單位對玩家的關係時，才在 stateChanges.unitDispositionChanges 回報單位 ID 與 friendly/neutral/hostile；純對話、陣營傾向或臆測不能改變關係。單位關係變更須與 storyText 敘事一致。
 - 每次回應都必須包含 encounterRequest；若玩家尚未實際看見或接觸敵人，設為 null。只有探索、搜索或情境中確實遇見敵人時，才指定本地區可遭遇清單中的 monsterId，並在敘事中描述遭遇。不可只因怪物存在於地圖資料，就宣稱玩家已遭遇；不可遭遇未列出的敵人。
 - 玩家在對話中明確要求攻擊目前地區的敵人時，不可假裝攻擊已命中、敵人已受傷或已被擊敗；戰鬥與獎勵由遊戲端確定性規則處理，若無法由遊戲端執行，只能說明尚未發起戰鬥。
 - 不可在敘事中宣稱玩家已使用消耗品、恢復 HP/MP 或已取得金幣/經驗/掉落物，除非對應狀態變更已由遊戲端結算。
@@ -251,7 +261,8 @@ export async function sendPlayerAction(
     "setFlags": {"MET_VILLAGE_CHIEF": true},
     "questUpdates": [{"questId": "QST-001", "status": "completed"}],
     "questAcceptances": [],
-    "npcItemTransfers": []
+    "npcItemTransfers": [],
+    "unitDispositionChanges": []
   },
   "failureStateChanges": null
 }
@@ -309,6 +320,18 @@ export async function sendPlayerAction(
                 quantity: { type: 'integer', minimum: 1, maximum: 99 }
               },
               required: ['npcId', 'itemId', 'quantity'],
+              additionalProperties: false
+            }
+          },
+          unitDispositionChanges: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                unitId: { type: 'string', enum: currentUnits.length ? currentUnits.map((unit) => unit.id) : ['__NO_CURRENT_UNIT__'] },
+                disposition: { type: 'string', enum: ['friendly', 'neutral', 'hostile'] }
+              },
+              required: ['unitId', 'disposition'],
               additionalProperties: false
             }
           }

@@ -1,6 +1,6 @@
 import React from 'react';
 import type { PlayerState } from '../types/game';
-import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getNpcCategoryById, getPlayerGrowthByLevel, getPlayerResourceCaps, getQuestById, getShopForNpc, getUnlockedSkillsByLevel, getWorldUnitById, getWorldUnitsAtMap, questsDatabase } from '../data/staticData';
+import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getNpcCategoryById, getPlayerGrowthByLevel, getPlayerResourceCaps, getQuestById, getShopForNpc, getUnlockedSkillsByLevel, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, questsDatabase } from '../data/staticData';
 import { getPlayerStatBreakdown, STAT_LABELS } from '../utils/gameChecks';
 import { canAcceptQuest, canTurnInQuest } from '../utils/questRules';
 import { canPlayerAct, isPlayerUnconscious } from '../utils/playerStatus';
@@ -144,14 +144,16 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
         {presentNpcs.map((unit) => {
           const npc = unit.source;
           const stats = unit.stats;
+          const disposition = getWorldUnitDisposition(player, unit.id);
+          const dispositionLabel = disposition === 'friendly' ? '友善' : disposition === 'hostile' ? '敵對' : '中立';
           return <div key={npc.id} style={{ marginBottom: '7px', fontSize: '12px' }}>
             <strong>{npc.name}・{npc.title}</strong>
-            <div style={{ color: '#aaa' }}>類別：{getNpcCategoryById(npc.categoryId)?.name ?? npc.categoryId} · HP {stats.hp} · ATK {stats.atk} · DEF {stats.def} · SPD {stats.spd}</div>
+            <div style={{ color: '#aaa' }}>類別：{getNpcCategoryById(npc.categoryId)?.name ?? npc.categoryId} · 關係：{dispositionLabel} · HP {stats.hp} · ATK {stats.atk} · DEF {stats.def} · SPD {stats.spd}</div>
             <div style={{ color: '#888' }}>持有：金幣 {player.npcStates[npc.id]?.gold ?? 0} · {(player.npcStates[npc.id]?.inventory ?? []).map((entry) => `${getItemById(entry.itemId)?.name ?? entry.itemId} ×${entry.quantity}`).join('、') || '無物品'}</div>
             {(() => {
               const shop = getShopForNpc(npc);
               if (!shop) return null;
-              const unavailable = !canPlayerAct(player) || !!player.combat;
+              const unavailable = !canPlayerAct(player) || !!player.combat || disposition === 'hostile';
               return <div style={{ marginTop: '5px', padding: '6px', background: '#29251d', borderRadius: '4px' }}>
                 <strong>🪙 {shop.name} · 金幣 {player.gold}</strong>
                 {shop.items.map((listing) => {
@@ -200,10 +202,12 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
         })() : (() => {
           const unit = player.encounteredMonsterId ? getWorldUnitById(player.encounteredMonsterId) : undefined;
           const monster = unit?.kind === 'monster' ? unit : undefined;
+          const disposition = monster ? getWorldUnitDisposition(player, monster.id) : undefined;
+          const dispositionLabel = disposition === 'friendly' ? '友善' : disposition === 'hostile' ? '敵對' : '中立';
           return monster && currentMap?.monstersPresent.includes(monster.id)
             ? <div>
-              <div style={{ color: '#ffcc80', fontSize: '12px', marginBottom: '5px' }}>已遭遇</div>
-              <button onClick={() => onStartCombat(monster.id)} disabled={!canPlayerAct(player)} style={{ display: 'block', margin: '4px 0', padding: '5px 8px', background: '#4a2525', color: '#ffcdd2', border: '1px solid #844', borderRadius: '4px', cursor: canPlayerAct(player) ? 'pointer' : 'not-allowed' }}>挑戰 {monster.name}</button>
+              <div style={{ color: '#ffcc80', fontSize: '12px', marginBottom: '5px' }}>已遭遇：{monster.name}（{dispositionLabel}）</div>
+              {disposition === 'hostile' && <button onClick={() => onStartCombat(monster.id)} disabled={!canPlayerAct(player)} style={{ display: 'block', margin: '4px 0', padding: '5px 8px', background: '#4a2525', color: '#ffcdd2', border: '1px solid #844', borderRadius: '4px', cursor: canPlayerAct(player) ? 'pointer' : 'not-allowed' }}>挑戰 {monster.name}</button>}
             </div>
             : <div style={{ color: '#aaa', fontSize: '12px' }}>{currentMap?.isSafeZone ? '安全地區沒有敵人。' : '尚未遭遇敵人；探索或搜索周遭以觸發遭遇。'}</div>;
         })()}
@@ -236,7 +240,9 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
             </div>}
             {!status && (canAcceptQuest(player, quest)
               ? <button onClick={() => onAcceptQuest(quest.id)} style={{ marginTop: '4px', padding: '4px 7px', cursor: 'pointer' }}>接取任務</button>
-              : <div style={{ marginTop: '4px', color: '#888' }}>需在 {getMapById(quest.mapId)?.name ?? quest.mapId} 找到 {quest.questGiver}</div>)}
+              : getWorldUnitDisposition(player, quest.questGiverId) === 'hostile'
+                ? <div style={{ marginTop: '4px', color: '#ef9a9a' }}>任務給予者目前敵對，無法接取</div>
+                : <div style={{ marginTop: '4px', color: '#888' }}>需在 {getMapById(quest.mapId)?.name ?? quest.mapId} 找到 {quest.questGiver}</div>)}
             {status === 'in_progress' && canTurnInQuest(player, quest) && <button onClick={() => onTurnInQuest(quest.id)} style={{ marginTop: '4px', padding: '4px 7px' }}>向 {quest.questGiver} 交付</button>}
           </div>;
         })}

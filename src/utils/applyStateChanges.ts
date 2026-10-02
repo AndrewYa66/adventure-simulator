@@ -1,5 +1,5 @@
 import type { AIResponsePayload, PlayerState } from '../types/game';
-import { getItemById, getMapById, getPlayerGrowthByLevel, getPlayerResourceCaps, getQuestById, getWorldUnitById } from '../data/staticData';
+import { getItemById, getMapById, getPlayerGrowthByLevel, getPlayerResourceCaps, getQuestById, getWorldUnitById, getWorldUnitDisposition } from '../data/staticData';
 import { acceptQuest } from './questRules';
 
 export function applyStateChanges(player: PlayerState, response: AIResponsePayload, source: 'ai' | 'game' = 'ai'): PlayerState {
@@ -17,11 +17,19 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
     inventory: state.inventory.map((item) => ({ ...item }))
   }]));
   const transactionHistory = [...player.transactionHistory];
+  const unitDispositionOverrides = { ...player.unitDispositionOverrides };
   const recordTransaction = (type: PlayerState['transactionHistory'][number]['type'], description: string, goldChange = 0) => {
     transactionHistory.unshift({ id: `${Date.now()}-${Math.random()}`, type, description, goldChange, timestamp: Date.now() });
     if (transactionHistory.length > 100) transactionHistory.length = 100;
   };
   const currentMap = getMapById(player.currentMapId);
+
+  for (const change of changes.unitDispositionChanges ?? []) {
+    const unit = getWorldUnitById(change.unitId);
+    const isPresent = currentMap?.npcsPresent.includes(change.unitId) || currentMap?.monstersPresent.includes(change.unitId);
+    if (!unit || !isPresent || !['friendly', 'neutral', 'hostile'].includes(change.disposition)) continue;
+    unitDispositionOverrides[unit.id] = change.disposition;
+  }
 
   if (source === 'ai') {
     for (const transfer of changes.npcItemTransfers ?? []) {
@@ -43,7 +51,7 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
   for (const questId of changes.questAcceptances ?? []) {
     const quest = getQuestById(questId);
     if (!quest) continue;
-    const accepted = acceptQuest({ ...player, activeQuests }, quest);
+    const accepted = acceptQuest({ ...player, activeQuests, unitDispositionOverrides }, quest);
     if (accepted) activeQuests.push(accepted.activeQuests[accepted.activeQuests.length - 1]);
   }
 
@@ -79,7 +87,9 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
   for (const update of changes.questUpdates ?? []) {
     const active = activeQuests.find((entry) => entry.questId === update.questId && entry.status === 'in_progress');
     const quest = getQuestById(update.questId);
-    if (!active || !quest || quest.mapId !== player.currentMapId || !currentMap?.npcsPresent.includes(quest.questGiverId)) continue;
+    const giver = quest ? getWorldUnitById(quest.questGiverId) : undefined;
+    if (!active || !quest || giver?.kind !== 'npc' || getWorldUnitDisposition({ unitDispositionOverrides }, giver.id) === 'hostile' ||
+        quest.mapId !== player.currentMapId || !currentMap?.npcsPresent.includes(quest.questGiverId)) continue;
     const defeatsMet = (quest.requirements.defeatMonsters ?? []).every((requirement) =>
       (active.progress?.defeatedMonsters[requirement.monsterId] ?? 0) >= requirement.quantity
     );
@@ -170,6 +180,7 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
     gold: Math.max(0, player.gold + trustedGoldChange + questGold),
     npcStates,
     transactionHistory,
+    unitDispositionOverrides,
     inventory,
     storyFlags: { ...player.storyFlags, ...(changes.setFlags ?? {}) },
     defeatedMonsters,

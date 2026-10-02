@@ -42,6 +42,7 @@ export interface PlayerGrowthStatic {
 }
 
 export type CharacterAlignment = '守序善良' | '中立善良' | '混亂善良' | '守序中立' | '絕對中立' | '混亂中立' | '守序邪惡' | '中立邪惡' | '混亂邪惡';
+export type UnitDisposition = 'friendly' | 'neutral' | 'hostile';
 
 /** NPC 與魔物共用的靜態單位欄位；玩家動態資料及單位專屬規則會在後續階段遷移。 */
 export interface UnitStaticBase {
@@ -50,6 +51,7 @@ export interface UnitStaticBase {
   title?: string;
   categoryId?: string;
   alignment?: CharacterAlignment;
+  defaultDisposition: UnitDisposition;
   stats?: Partial<UnitStatBlock>;
 }
 
@@ -236,6 +238,7 @@ export interface PlayerState {
   storyFlags: Record<string, boolean>; // 例如: { "FLAG_TUTORIAL_DONE": true }
   defeatedMonsters: Record<string, number>;
   encounteredMonsterId?: string;
+  unitDispositionOverrides: Record<string, UnitDisposition>;
   
   // 當前進行中的任務
   activeQuests: {
@@ -306,6 +309,7 @@ export interface AIResponsePayload {
     questAcceptances?: string[];
     npcItemTransfers?: { npcId: string; itemId: string; quantity: number }[];
     defeatedMonsters?: { monsterId: string; quantity: number }[];
+    unitDispositionChanges?: { unitId: string; disposition: UnitDisposition }[];
   };
   failureStateChanges?: AIResponsePayload['stateChanges'];
 }

@@ -1,5 +1,5 @@
 import type { PlayerState, QuestStatic } from '../types/game';
-import { getMapById, getWorldUnitById } from '../data/staticData';
+import { getMapById, getWorldUnitById, getWorldUnitDisposition } from '../data/staticData';
 
 export function canAcceptQuest(player: PlayerState, quest: QuestStatic): boolean {
   if (player.activeQuests.some((entry) => entry.questId === quest.id)) return false;
@@ -10,7 +10,8 @@ export function canAcceptQuest(player: PlayerState, quest: QuestStatic): boolean
 
   const map = getMapById(player.currentMapId);
   const giver = getWorldUnitById(quest.questGiverId);
-  return !!map && giver?.kind === 'npc' && giver.mapIds.includes(map.id) && map.npcsPresent.includes(giver.id);
+  return !!map && giver?.kind === 'npc' && getWorldUnitDisposition(player, giver.id) !== 'hostile' &&
+    giver.mapIds.includes(map.id) && map.npcsPresent.includes(giver.id);
 }
 
 export function canTurnInQuest(player: PlayerState, quest: QuestStatic): boolean {
@@ -18,7 +19,7 @@ export function canTurnInQuest(player: PlayerState, quest: QuestStatic): boolean
   const map = getMapById(player.currentMapId);
   const giver = getWorldUnitById(quest.questGiverId);
   if (!active || !map || giver?.kind !== 'npc' || map.id !== quest.mapId ||
-      !giver.mapIds.includes(map.id) || !map.npcsPresent.includes(giver.id)) return false;
+      getWorldUnitDisposition(player, giver.id) === 'hostile' || !giver.mapIds.includes(map.id) || !map.npcsPresent.includes(giver.id)) return false;
   const defeatsMet = (quest.requirements.defeatMonsters ?? []).every((requirement) =>
     (active.progress?.defeatedMonsters[requirement.monsterId] ?? 0) >= requirement.quantity
   );

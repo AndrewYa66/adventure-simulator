@@ -8,6 +8,7 @@ import type {
   PlayerGrowthStatic,
   QuestStatic,
   ShopStatic,
+  UnitDisposition,
   WorldUnitStatic
 } from '../types/game';
 
@@ -89,14 +90,14 @@ export const getWorldUnitById = (id: string): WorldUnitStatic | undefined => {
     if (!stats) return undefined;
     return {
       kind: 'npc', id: npc.id, name: npc.name, title: npc.title, categoryId: npc.categoryId,
-      alignment: npc.alignment, stats, mapIds: [npc.mapId], source: npc
+      alignment: npc.alignment, defaultDisposition: npc.defaultDisposition, stats, mapIds: [npc.mapId], source: npc
     };
   }
 
   if (!monster) return undefined;
   const mapIds = mapsDatabase.filter((map) => map.monstersPresent.includes(monster.id)).map((map) => map.id);
   return {
-    kind: 'monster', id: monster.id, name: monster.name, alignment: monster.alignment,
+    kind: 'monster', id: monster.id, name: monster.name, alignment: monster.alignment, defaultDisposition: monster.defaultDisposition,
     stats: monster.stats, mapIds, source: monster
   };
 };
@@ -110,6 +111,15 @@ export const getWorldUnitsAtMap = (mapId: string): WorldUnitStatic[] => {
       const unit = getWorldUnitById(unitId);
       return unit ? [unit] : [];
     });
+};
+
+/** Alignment expresses values; disposition is the unit's current relation to this player. */
+export const getWorldUnitDisposition = (
+  player: Pick<import('../types/game').PlayerState, 'unitDispositionOverrides'>,
+  unitId: string
+): UnitDisposition | undefined => {
+  const unit = getWorldUnitById(unitId);
+  return unit ? player.unitDispositionOverrides[unitId] ?? unit.defaultDisposition : undefined;
 };
 
 export const getPlayerGrowthByLevel = (level: number): PlayerGrowthStatic | undefined => {
@@ -157,6 +167,7 @@ export function validateWorldUnitData(): string[] {
     if (seenIds.has(unit.id)) issues.push(`單位 ID 重複：${unit.id}`);
     seenIds.add(unit.id);
     if (unit.alignment !== undefined && !validAlignments.has(unit.alignment)) issues.push(`${unit.id}: 無效陣營 ${unit.alignment}`);
+    if (!['friendly', 'neutral', 'hostile'].includes(unit.defaultDisposition)) issues.push(`${unit.id}: 無效預設關係 ${unit.defaultDisposition}`);
   }
 
   const seenCategoryIds = new Set<string>();

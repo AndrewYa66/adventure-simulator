@@ -1,5 +1,5 @@
 import type { GameSession, PlayerState, StoryMessage } from '../types/game';
-import { getCharacterClassById, getItemById, getMapById, getMonsterById, getPlayerResourceCaps, getQuestById, npcsDatabase } from '../data/staticData';
+import { getCharacterClassById, getItemById, getMapById, getMonsterById, getPlayerResourceCaps, getQuestById, getWorldUnitById, npcsDatabase } from '../data/staticData';
 import { createInitialPlayer } from './playerInit';
 
 const PLAYER_STORAGE_KEY = 'TRPG_PLAYER_STATE';
@@ -57,6 +57,14 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
   if (value.defeatedMonsters !== undefined && !isRecord(value.defeatedMonsters)) return null;
   for (const [monsterId, count] of Object.entries(value.defeatedMonsters ?? {})) {
     if (getMonsterById(monsterId) && Number.isInteger(count) && (count as number) >= 0) defeatedMonsters[monsterId] = count as number;
+  }
+  const unitDispositionOverrides: PlayerState['unitDispositionOverrides'] = {};
+  if (isRecord(value.unitDispositionOverrides)) {
+    for (const [unitId, disposition] of Object.entries(value.unitDispositionOverrides)) {
+      if (getWorldUnitById(unitId) && ['friendly', 'neutral', 'hostile'].includes(String(disposition))) {
+        unitDispositionOverrides[unitId] = disposition as PlayerState['unitDispositionOverrides'][string];
+      }
+    }
   }
 
   const equipped: PlayerState['equipped'] = {};
@@ -144,6 +152,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     equipped,
     storyFlags: value.storyFlags as Record<string, boolean>,
     defeatedMonsters,
+    unitDispositionOverrides,
     activeQuests,
     ...(encounteredMonsterId && !isDead ? { encounteredMonsterId } : {}),
     ...(combat && !isDead ? { combat } : {})

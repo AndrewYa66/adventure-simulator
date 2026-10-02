@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ActionCheckResult, PlayerGrowthStatic, PlayerState, StoryMessage } from './types/game';
 import { loadGameSession, resetPlayerState, saveGameSession } from './utils/playerStorage';
 import { applyStateChanges } from './utils/applyStateChanges';
-import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getQuestById, getShopById, getUnlockedSkillsByLevel, getWorldUnitById, getWorldUnitsAtMap, itemsDatabase } from './data/staticData';
+import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getQuestById, getShopById, getUnlockedSkillsByLevel, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase } from './data/staticData';
 import { getPlayerStatBreakdown, resolveActionCheck } from './utils/gameChecks';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from './utils/travelIntent';
 import { sendPlayerAction } from './services/aiService';
@@ -257,7 +257,7 @@ export default function App() {
   const handleStartCombat = (monsterId: string) => {
     const map = getMapById(player.currentMapId);
     const monster = getMonsterStatic(monsterId);
-    if (player.combat || !canPlayerAct(player) || !map || map.isSafeZone || player.encounteredMonsterId !== monsterId || !map.monstersPresent.includes(monsterId) || !monster ||
+    if (player.combat || !canPlayerAct(player) || !map || map.isSafeZone || player.encounteredMonsterId !== monsterId || getWorldUnitDisposition(player, monsterId) !== 'hostile' || !map.monstersPresent.includes(monsterId) || !monster ||
         (monster.requiredQuestId && !player.activeQuests.some((quest) => quest.questId === monster.requiredQuestId && quest.status === 'in_progress'))) return;
     updatePlayer({ ...player, combat: { monsterId, currentHp: monster.stats.hp, round: 1 } });
     appendSystemMessage(`你與${monster.name}進入戰鬥！攻擊、已解鎖技能及消耗品各自消耗一個行動回合；敵人存活時會反擊並進行閃避檢定。`);
@@ -457,8 +457,13 @@ export default function App() {
       }
       setMessages((prev) => [...prev, userMessage]);
       if (!player.combat && target) {
-        const combatPlayer: PlayerState = { ...player, combat: { monsterId: target.id, currentHp: target.stats.hp, round: 1 } };
-        appendSystemMessage(`你與已遭遇的${target.name}進入戰鬥！`);
+        const provokedPlayer = getWorldUnitDisposition(player, target.id) === 'hostile'
+          ? player
+          : applyStateChanges(player, {
+            storyText: '', suggestedActions: [], stateChanges: { unitDispositionChanges: [{ unitId: target.id, disposition: 'hostile' }] }
+          }, 'game');
+        const combatPlayer: PlayerState = { ...provokedPlayer, combat: { monsterId: target.id, currentHp: target.stats.hp, round: 1 } };
+        appendSystemMessage(`你${provokedPlayer === player ? '與' : '激怒並與'}已遭遇的${target.name}進入戰鬥！`);
         handleCombatAction(undefined, combatPlayer);
       } else if (player.combat) handleCombatAction();
       return;
@@ -607,6 +612,14 @@ export default function App() {
           ...(successfulNpcTransfers.length < requestedNpcTransfers ? ['NPC 不在場或持有物不足，未能取得敘事中提及的全部物品。'] : [])
         ].join('\n')}`
         : '';
+      const relationLabels = { friendly: '友善', neutral: '中立', hostile: '敵對' } as const;
+      const appliedRelationChanges = (resultToApply.stateChanges?.unitDispositionChanges ?? []).filter((change) =>
+        nextPlayer.unitDispositionOverrides[change.unitId] === change.disposition &&
+        getWorldUnitDisposition(player, change.unitId) !== change.disposition
+      );
+      const unitDispositionNotice = appliedRelationChanges.length
+        ? `\n\n🤝 關係變化：${appliedRelationChanges.map((change) => `${getWorldUnitById(change.unitId)?.name ?? change.unitId} 對你的態度變為${relationLabels[change.disposition]}。`).join('')}`
+        : '';
 
       const textTravelIntent = resolveExplicitTravelIntent(actionText, player);
       const requestedDestinationId = textTravelIntent.kind === 'resolved'
@@ -637,7 +650,7 @@ export default function App() {
         {
           id: (Date.now() + 1).toString(),
           sender: 'ai',
-          text: `${storyText}${questNotice}${questCompletionNotice}${npcTransferNotice}${encounterNotice}${locationNotice}${deathNotice}`,
+          text: `${storyText}${questNotice}${questCompletionNotice}${npcTransferNotice}${unitDispositionNotice}${encounterNotice}${locationNotice}${deathNotice}`,
           options: aiResponse.suggestedActions,
           travelOptions: textTravelIntent.kind === 'ambiguous'
             ? textTravelIntent.candidates.map((candidate) => ({ mapId: candidate.id, name: candidate.name }))
