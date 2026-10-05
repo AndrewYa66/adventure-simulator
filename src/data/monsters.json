@@ -7,6 +7,7 @@
     "defaultDisposition": "hostile",
     "tier": "普通 (Common)",
     "speciesId": "goblin",
+    "factionId": "FAC-008",
     "classId": "scout",
     "level": 1,
     "rewards": {
@@ -26,6 +27,7 @@
     "defaultDisposition": "hostile",
     "tier": "普通 (Common)",
     "speciesId": "goblin",
+    "factionId": "FAC-008",
     "classId": "warrior",
     "level": 2,
     "statAdjustments": { "spd": -4 },
@@ -46,6 +48,7 @@
     "defaultDisposition": "hostile",
     "tier": "頭目 (Boss)",
     "speciesId": "goblin",
+    "factionId": "FAC-008",
     "classId": "chieftain",
     "level": 2,
     "isBoss": true,

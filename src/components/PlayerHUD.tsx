@@ -1,11 +1,13 @@
 import React from 'react';
 import type { PlayerState } from '../types/game';
-import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, describeUnitBuild, getLevelBenchmark, getSpeciesById, getPlayerResourceCaps, getQuestById, getShopForNpc, getUnlockedSkills, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, questsDatabase } from '../data/staticData';
+import { canPlayerEnterMap, factionData, factionsDatabase, getCharacterClassById, getFactionById, getFactionRelation, getFactionReputation, getItemById, getMapById, describeUnitBuild, getLevelBenchmark, getReputationTier, getSpeciesById, getPlayerResourceCaps, getQuestById, getShopForNpc, getUnlockedSkills, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, questsDatabase } from '../data/staticData';
 import { getPlayerStatBreakdown, STAT_LABELS } from '../utils/gameChecks';
-import { canAcceptQuest, canTurnInQuest } from '../utils/questRules';
+import { canAcceptQuest, canTurnInQuest, getQuestGiverName } from '../utils/questRules';
 import { canPlayerAct, isPlayerUnconscious } from '../utils/playerStatus';
 import { getCombatTarget } from '../utils/combatState';
 import { formatGameTime } from '../utils/gameTime';
+
+const RELATION_LABELS = { war: '交戰', hostile: '敵對', tense: '緊張', neutral: '中立', friendly: '友好', alliance: '同盟' } as const;
 
 interface PlayerHUDProps {
   player: PlayerState;
@@ -157,7 +159,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
           const npcState = player.unitInstances[npc.id];
           const dispositionLabel = disposition === 'friendly' ? '友善' : disposition === 'hostile' ? '敵對' : '中立';
           return <div key={npc.id} style={{ marginBottom: '7px', fontSize: '12px' }}>
-            <strong>{npc.name}・{npc.title}</strong>
+            <strong>{npc.name}・{npc.title}</strong>{unit.factionId && <span style={{ color: '#9fa8da', marginLeft: '6px' }}>［{getFactionById(unit.factionId)?.name ?? unit.factionId}］</span>}
             <div style={{ color: '#aaa' }}>{describeUnitBuild(unit)} · 關係：{dispositionLabel} · HP {npcState?.currentHp ?? stats.hp}/{stats.hp} · ATK {stats.atk} · DEF {stats.def} · SPD {stats.spd}{npcState?.isDead ? ' · 已死亡' : ''}</div>
             {!npcState?.isDead && disposition === 'hostile' && <button onClick={() => onStartCombat(npc.id)} disabled={!canPlayerAct(player) || !!player.combat} style={{ margin: '4px 0', padding: '4px 7px' }}>挑戰 {npc.name}</button>}
             {!npcState?.isDead && <div style={{ color: '#888' }}>持有：金幣 {npcState?.gold ?? 0} · {(npcState?.inventory ?? []).map((entry) => `${getItemById(entry.itemId)?.name ?? entry.itemId} ×${entry.quantity}`).join('、') || '無物品'}</div>}
@@ -234,6 +236,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
           return <div key={quest.id} style={{ marginBottom: '8px', fontSize: '12px' }}>
             <strong>{quest.title}</strong>
             <div style={status === 'failed' ? { color: '#ef9a9a' } : undefined}>{status === 'completed' ? '已完成' : status === 'in_progress' ? '進行中' : status === 'failed' ? '已失敗（委託人已死亡）' : quest.objective}</div>
+            {status === 'in_progress' && active?.giverUnitId && <div style={{ color: '#ffcc80' }}>原委託人已身亡，改由 {getQuestGiverName(player, quest)} 接手</div>}
             {status && <div style={{ marginTop: '4px', color: '#bbb' }}>
               {(quest.requirements.defeatMonsters ?? []).map((requirement) => {
                 const count = active?.progress?.defeatedMonsters[requirement.monsterId] ?? 0;
@@ -256,10 +259,38 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
               : getWorldUnitDisposition(player, quest.questGiverId) === 'hostile'
                 ? <div style={{ marginTop: '4px', color: '#ef9a9a' }}>任務給予者目前敵對，無法接取</div>
                 : <div style={{ marginTop: '4px', color: '#888' }}>需在 {getMapById(quest.mapId)?.name ?? quest.mapId} 找到 {quest.questGiver}</div>)}
-            {status === 'in_progress' && canTurnInQuest(player, quest) && <button onClick={() => onTurnInQuest(quest.id)} style={{ marginTop: '4px', padding: '4px 7px' }}>向 {quest.questGiver} 交付</button>}
+            {status === 'in_progress' && canTurnInQuest(player, quest) && <button onClick={() => onTurnInQuest(quest.id)} style={{ marginTop: '4px', padding: '4px 7px' }}>向 {getQuestGiverName(player, quest)} 交付</button>}
           </div>;
         })}
       </div>
+
+      <details>
+        <summary style={{ cursor: 'pointer', fontWeight: 'bold' }}>🏳️ 勢力聲望</summary>
+        <div style={{ color: '#888', fontSize: '11px', margin: '4px 0' }}>聲望只會因勢力得知的事件而改變；敵視時成員會敵對你。</div>
+        {factionsDatabase.map((faction) => {
+          const reputation = getFactionReputation(player, faction.id);
+          const tier = getReputationTier(reputation);
+          const changed = reputation !== faction.initialReputation;
+          return <div key={faction.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', fontSize: '12px', padding: '2px 0' }}>
+            <span title={faction.summary}>{faction.name}</span>
+            <span style={{ color: tier.disposition === 'hostile' ? '#ef9a9a' : tier.disposition === 'friendly' ? '#a5d6a7' : '#ccc' }}>
+              {tier.name} {reputation}{changed ? <span style={{ color: '#888' }}>（初始 {faction.initialReputation}）</span> : null}
+            </span>
+          </div>;
+        })}
+        {(() => {
+          // 勢力間關係：只列出非中立或有附加關係的組合。
+          const pairs = factionsDatabase.flatMap((a, index) => factionsDatabase.slice(index + 1).map((b) => ({ a, b, relation: getFactionRelation(player.world, a.id, b.id) })))
+            .filter(({ relation }) => relation.status !== 'neutral' || relation.tags.length);
+          if (!pairs.length) return null;
+          return <details style={{ marginTop: '6px' }}>
+            <summary style={{ cursor: 'pointer', fontSize: '12px' }}>勢力間關係（{pairs.length}）</summary>
+            {pairs.map(({ a, b, relation }) => <div key={`${a.id}|${b.id}`} style={{ color: '#bbb', fontSize: '11px', marginTop: '3px' }}>
+              {a.name} ⇄ {b.name}：{RELATION_LABELS[relation.status]}{relation.tags.length ? `（${relation.tags.map((tag) => factionData.relationTags.find((entry) => entry.id === tag)?.name ?? tag).join('、')}）` : ''}
+            </div>)}
+          </details>;
+        })()}
+      </details>
 
       <details>
         <summary style={{ cursor: 'pointer', fontWeight: 'bold' }}>🌍 世界紀錄（{player.world.events.length} 件）</summary>

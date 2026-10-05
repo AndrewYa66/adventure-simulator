@@ -3,6 +3,9 @@ import type {
   ItemStatic,
   CharacterClassStatic,
   EventStatic,
+  FactionDataStatic,
+  FactionRelationStatus,
+  FactionStatic,
   LevelBenchmarkStatic,
   MapStatic,
   MonsterStatic,
@@ -10,6 +13,7 @@ import type {
   UnitInstance,
   PlayerState,
   QuestStatic,
+  ReputationTierStatic,
   ScenarioStatic,
   ShopStatic,
   SkillStatic,
@@ -18,6 +22,7 @@ import type {
   UnitDisposition,
   UnitStatBlock,
   WorldModifier,
+  WorldRuntimeState,
   WorldUnitStatic
 } from '../types/game';
 import { computeExpReward, computeUnitAbilities, computeUnitStats, isValidSpeciesClassCombo, UNIT_STAT_KEYS } from '../utils/unitGrowth';
@@ -35,6 +40,7 @@ import rawSkills from './skills.json';
 import rawSpecies from './species.json';
 import rawScenario from './scenario.json';
 import rawEvents from './events.json';
+import rawFactions from './factions.json';
 
 // 進行靜態型別轉型，確保導出的資料陣列完全符合 DTO 規範
 export const itemsDatabase: ItemStatic[] = rawItems as ItemStatic[];
@@ -49,6 +55,8 @@ export const skillsDatabase: SkillStatic[] = rawSkills as SkillStatic[];
 export const speciesDatabase: SpeciesStatic[] = rawSpecies as SpeciesStatic[];
 export const scenario: ScenarioStatic = rawScenario as ScenarioStatic;
 export const eventsDatabase: EventStatic[] = rawEvents as EventStatic[];
+export const factionData: FactionDataStatic = rawFactions as FactionDataStatic;
+export const factionsDatabase: FactionStatic[] = factionData.factions;
 
 /** 玩家的穩定單位 ID；NPC/魔物資料不得使用此 ID。 */
 export const PLAYER_UNIT_ID = 'PLAYER-001';
@@ -170,7 +178,8 @@ export const getShopForNpc = (npc: NpcStatic): ShopStatic | undefined =>
 
 const toUnitBase = (unit: NpcStatic | MonsterStatic) => ({
   id: unit.id, name: unit.name, title: unit.title, alignment: unit.alignment, defaultDisposition: unit.defaultDisposition,
-  speciesId: unit.speciesId, classId: unit.classId, level: unit.level, statAdjustments: unit.statAdjustments
+  speciesId: unit.speciesId, classId: unit.classId, level: unit.level, statAdjustments: unit.statAdjustments,
+  factionId: unit.factionId, occupation: unit.occupation, dormantUntilOccupation: unit.dormantUntilOccupation
 });
 
 /** 所有 NPC/魔物單位樣板（UnitTemplate）。 */
@@ -178,7 +187,7 @@ export const unitTemplatesDatabase = (): (NpcStatic | MonsterStatic)[] => [...np
 
 /** 單位查詢的世界狀態來源；可直接傳入 PlayerState（執行期合併狀態）。 */
 export interface UnitWorldSource {
-  unitInstances?: Record<string, Pick<UnitInstance, 'level'>>;
+  unitInstances?: Record<string, Pick<UnitInstance, 'level' | 'isDormant'>>;
   world?: { modifiers: WorldModifier[] };
   gameTimeMinutes?: number;
 }
@@ -223,41 +232,96 @@ export const describeUnitBuild = (build: UnitBuild): string => {
   return `${className ? `${speciesName}・${className}` : speciesName} Lv.${build.level}`;
 };
 
-/** 單位實例預設值（取自樣板）；新存檔建立與存檔中缺少的單位共用。 */
-export const createDefaultUnitInstance = (template: NpcStatic | MonsterStatic): UnitInstance => {
+/**
+ * 單位實例預設值（取自樣板）；新存檔建立與存檔中缺少的單位共用。
+ * 潛伏單位（dormantUntilOccupation）預設為潛伏狀態，經由「他方佔領」出現時以 awake 建立。
+ */
+export const createDefaultUnitInstance = (template: NpcStatic | MonsterStatic, options: { awake?: boolean } = {}): UnitInstance => {
   const npc = 'mapId' in template ? template : undefined;
+  const dormant = template.dormantUntilOccupation === true && !options.awake;
   return {
     level: template.level,
     exp: getBaseExpForLevel(template.level),
     gold: npc?.startingGold ?? 0,
     inventory: (npc?.startingInventory ?? []).flatMap((entry) =>
       getItemById(entry.itemId) && Number.isInteger(entry.quantity) && entry.quantity > 0 ? [{ ...entry }] : []),
-    currentHp: getWorldUnitById(template.id)?.stats.hp ?? 1,
-    isDead: false
+    currentHp: dormant ? 0 : getWorldUnitById(template.id)?.stats.hp ?? 1,
+    isDead: dormant,
+    ...(dormant ? { isDormant: true } : {})
   };
 };
 
 export const createDefaultUnitInstances = (): Record<string, UnitInstance> =>
   Object.fromEntries(unitTemplatesDatabase().map((template) => [template.id, createDefaultUnitInstance(template)]));
 
-/** Return the normalized units referenced by a map, preserving NPC and monster order. */
+/** Return the normalized units referenced by a map, preserving NPC and monster order. 潛伏中的單位不在場，不列出。 */
 export const getWorldUnitsAtMap = (mapId: string, source?: UnitWorldSource): WorldUnitStatic[] => {
   const map = getMapById(mapId);
   if (!map) return [];
   return [...map.npcsPresent, ...map.monstersPresent]
     .flatMap((unitId) => {
+      if (source?.unitInstances?.[unitId]?.isDormant) return [];
       const unit = getWorldUnitById(unitId, source);
       return unit ? [unit] : [];
     });
 };
 
-/** Alignment expresses values; disposition is the unit's current relation to this player. */
+// ==========================================
+// 勢力（O38）
+// ==========================================
+
+export const getFactionById = (id: string): FactionStatic | undefined =>
+  factionsDatabase.find((faction) => faction.id === id);
+
+/** 聲望等級，依最低值由低到高排序。 */
+export const reputationTiers: ReputationTierStatic[] = [...factionData.reputation.tiers].sort((a, b) => a.min - b.min);
+
+export const clampReputation = (value: number): number =>
+  Math.max(factionData.reputation.min, Math.min(factionData.reputation.max, Math.round(value)));
+
+export const getReputationTier = (value: number): ReputationTierStatic =>
+  [...reputationTiers].reverse().find((tier) => value >= tier.min) ?? reputationTiers[0];
+
+export const getReputationTierIndex = (tierId: string): number => reputationTiers.findIndex((tier) => tier.id === tierId);
+
+/** 各勢力的初始聲望；新角色使用。 */
+export const createInitialReputation = (): Record<string, number> =>
+  Object.fromEntries(factionsDatabase.map((faction) => [faction.id, clampReputation(faction.initialReputation)]));
+
+/** 玩家對勢力的聲望；存檔沒有記錄時使用勢力初始值。 */
+export const getFactionReputation = (player: Pick<PlayerState, 'factionReputation'>, factionId: string): number =>
+  player.factionReputation[factionId] ?? getFactionById(factionId)?.initialReputation ?? 0;
+
+export const getUnitFactionId = (unitId: string): string | undefined =>
+  (getNpcById(unitId) ?? getMonsterById(unitId))?.factionId;
+
+/** 勢力關係的存檔鍵：兩個勢力 ID 排序後以「|」相連。 */
+export const factionRelationKey = (a: string, b: string): string => [a, b].sort().join('|');
+
+/** 兩勢力目前的關係：世界狀態中的變更優先，其次是 factions.json 初始值，未列出則為中立。 */
+export const getFactionRelation = (
+  world: Pick<WorldRuntimeState, 'factionRelations'> | undefined,
+  a: string,
+  b: string
+): { status: FactionRelationStatus; tags: string[] } => {
+  const changed = world?.factionRelations[factionRelationKey(a, b)];
+  if (changed) return changed;
+  const initial = factionData.relations.find((relation) => factionRelationKey(...relation.factionIds) === factionRelationKey(a, b));
+  return initial ? { status: initial.status, tags: [...(initial.tags ?? [])] } : { status: 'neutral', tags: [] };
+};
+
+/**
+ * Alignment expresses values; disposition is the unit's current relation to this player.
+ * 判定順序：個人關係覆寫 → 所屬勢力聲望等級（只有最低/最高等級強制敵對/友善）→ 單位預設關係。
+ */
 export const getWorldUnitDisposition = (
-  player: Pick<PlayerState, 'unitDispositionOverrides'>,
+  player: Pick<PlayerState, 'unitDispositionOverrides' | 'factionReputation'>,
   unitId: string
 ): UnitDisposition | undefined => {
   const unit = getWorldUnitById(unitId);
-  return unit ? player.unitDispositionOverrides[unitId] ?? unit.defaultDisposition : undefined;
+  if (!unit) return undefined;
+  const factionDisposition = unit.factionId ? getReputationTier(getFactionReputation(player, unit.factionId)).disposition : undefined;
+  return player.unitDispositionOverrides[unitId] ?? factionDisposition ?? unit.defaultDisposition;
 };
 
 export const getEventById = (id: string): EventStatic | undefined =>
@@ -429,7 +493,24 @@ export function validateEventData(): string[] {
     seen.add(event.id);
     if (!event.title?.trim() || !event.summary?.trim()) issues.push(`${label}: 缺少標題或描述`);
     if (!['auto', 'aiProposal'].includes(event.trigger)) issues.push(`${label}: 無效觸發方式 ${event.trigger}`);
-    if (!['witnesses', 'region', 'world'].includes(event.knownBy)) issues.push(`${label}: 無效傳播範圍 ${event.knownBy}`);
+    if (!['witnesses', 'faction', 'region', 'world'].includes(event.knownBy)) issues.push(`${label}: 無效傳播範圍 ${event.knownBy}`);
+    if (event.knownBy === 'faction' && !event.knownByFactions?.length) issues.push(`${label}: 傳播範圍為同勢力時須列出 knownByFactions`);
+    for (const factionId of event.knownByFactions ?? []) {
+      if (!getFactionById(factionId)) issues.push(`${label}: 找不到傳播勢力 ${factionId}`);
+    }
+    validateFactionConditions(label, event.requires ?? {}, issues);
+    for (const change of event.effects?.reputation ?? []) {
+      if (!getFactionById(change.factionId)) issues.push(`${label}: 找不到聲望勢力 ${change.factionId}`);
+      if (!Number.isInteger(change.change) || change.change === 0) issues.push(`${label}: 聲望變化須為非零整數`);
+    }
+    for (const change of event.effects?.factionRelations ?? []) {
+      validateFactionPair(label, change.factionIds, issues);
+      if (change.status !== undefined && !FACTION_RELATION_STATUSES.includes(change.status)) issues.push(`${label}: 無效的勢力關係 ${change.status}`);
+      for (const tag of [...(change.addTags ?? []), ...(change.removeTags ?? [])]) {
+        if (!factionData.relationTags.some((entry) => entry.id === tag)) issues.push(`${label}: 找不到附加關係 ${tag}`);
+      }
+      if (change.status === undefined && !change.addTags?.length && !change.removeTags?.length) issues.push(`${label}: 勢力關係變化沒有任何內容`);
+    }
     if (event.trigger === 'auto' && !event.requires?.flags?.length && !event.requires?.unitsDead?.length && !event.requires?.unitsAlive?.length) {
       issues.push(`${label}: 自動事件至少需要一個旗標或單位條件，避免開局即觸發`);
     }
@@ -466,5 +547,113 @@ export function validateEventData(): string[] {
   return issues;
 }
 
+/** 勢力關係狀態，由敵到友。 */
+export const FACTION_RELATION_STATUSES: FactionRelationStatus[] = ['war', 'hostile', 'tense', 'neutral', 'friendly', 'alliance'];
+
+function validateFactionPair(label: string, factionIds: unknown, issues: string[]) {
+  if (!Array.isArray(factionIds) || factionIds.length !== 2 || factionIds[0] === factionIds[1]) {
+    issues.push(`${label}: 勢力組合須為兩個不同的勢力`);
+    return;
+  }
+  for (const factionId of factionIds) {
+    if (!getFactionById(String(factionId))) issues.push(`${label}: 找不到勢力 ${factionId}`);
+  }
+}
+
+/** 驗證勢力條件；事件、日後的劇情片段與任務範本共用。 */
+export function validateFactionConditions(label: string, conditions: { reputation?: { factionId: string; minTier?: string; maxTier?: string }[]; factionRelations?: { factionIds: [string, string]; status: FactionRelationStatus[] }[] }, issues: string[]) {
+  for (const condition of conditions.reputation ?? []) {
+    if (!getFactionById(condition.factionId)) issues.push(`${label}: 聲望條件找不到勢力 ${condition.factionId}`);
+    const min = condition.minTier === undefined ? 0 : getReputationTierIndex(condition.minTier);
+    const max = condition.maxTier === undefined ? reputationTiers.length - 1 : getReputationTierIndex(condition.maxTier);
+    if (min < 0 || max < 0) issues.push(`${label}: 聲望條件的等級不存在`);
+    else if (min > max) issues.push(`${label}: 聲望條件的最低等級高於最高等級`);
+    if (condition.minTier === undefined && condition.maxTier === undefined) issues.push(`${label}: 聲望條件至少需要 minTier 或 maxTier`);
+  }
+  for (const condition of conditions.factionRelations ?? []) {
+    validateFactionPair(label, condition.factionIds, issues);
+    if (!Array.isArray(condition.status) || !condition.status.length || condition.status.some((status) => !FACTION_RELATION_STATUSES.includes(status))) {
+      issues.push(`${label}: 勢力關係條件的狀態無效`);
+    }
+  }
+}
+
+/** 驗證勢力資料：聲望等級、規則、勢力、初始關係、單位所屬與「他方佔領」設定，以及劇本的接續規則。 */
+export function validateFactionData(): string[] {
+  const issues: string[] = [];
+  const { min, max, tiers, rules } = factionData.reputation;
+  if (!Number.isInteger(min) || !Number.isInteger(max) || min >= max) issues.push('聲望範圍 min/max 無效');
+  const tierIds = new Set<string>();
+  for (const tier of tiers) {
+    if (!tier.id?.trim() || !tier.name?.trim()) issues.push('聲望等級缺少 ID 或名稱');
+    if (tierIds.has(tier.id)) issues.push(`聲望等級 ID 重複：${tier.id}`);
+    tierIds.add(tier.id);
+    if (!Number.isInteger(tier.min) || tier.min < min || tier.min > max) issues.push(`聲望等級 ${tier.id}: min 須為範圍內的整數`);
+    if (tier.disposition !== undefined && !['hostile', 'friendly'].includes(tier.disposition)) issues.push(`聲望等級 ${tier.id}: disposition 只能是 hostile 或 friendly`);
+  }
+  if (reputationTiers[0]?.min !== min) issues.push('最低聲望等級的 min 必須等於聲望下限');
+  if (new Set(tiers.map((tier) => tier.min)).size !== tiers.length) issues.push('聲望等級的 min 不可重複');
+  // 只有最低的連續等級可強制敵對、最高的連續等級可強制友善，確保聲望提高時態度不會反而變差。
+  const firstNonHostile = reputationTiers.findIndex((tier) => tier.disposition !== 'hostile');
+  const lastNonFriendly = reputationTiers.map((tier) => tier.disposition !== 'friendly').lastIndexOf(true);
+  reputationTiers.forEach((tier, index) => {
+    if (tier.disposition === 'hostile' && firstNonHostile !== -1 && index > firstNonHostile) issues.push(`聲望等級 ${tier.id}: 只有最低的連續等級可設為 hostile`);
+    if (tier.disposition === 'friendly' && index < lastNonFriendly) issues.push(`聲望等級 ${tier.id}: 只有最高的連續等級可設為 friendly`);
+  });
+  for (const key of ['memberKilled', 'memberAttacked', 'questCompleted', 'enemyMemberKilled'] as const) {
+    if (!Number.isInteger(rules?.[key])) issues.push(`聲望規則 ${key} 須為整數`);
+  }
+
+  const factionIds = new Set<string>();
+  for (const faction of factionsDatabase) {
+    if (!/^FAC-\d{3,}$/.test(faction.id)) issues.push(`勢力 ${faction.id}: ID 格式應為 FAC-xxx`);
+    if (factionIds.has(faction.id)) issues.push(`勢力 ID 重複：${faction.id}`);
+    factionIds.add(faction.id);
+    if (!faction.name?.trim() || !faction.summary?.trim()) issues.push(`勢力 ${faction.id}: 缺少名稱或簡介`);
+    if (!Number.isInteger(faction.initialReputation) || faction.initialReputation < min || faction.initialReputation > max) issues.push(`勢力 ${faction.id}: 初始聲望須為範圍內的整數`);
+  }
+  const seenPairs = new Set<string>();
+  for (const relation of factionData.relations) {
+    const label = `勢力關係 ${relation.factionIds?.join('–')}`;
+    validateFactionPair(label, relation.factionIds, issues);
+    if (Array.isArray(relation.factionIds) && relation.factionIds.length === 2) {
+      const key = factionRelationKey(...relation.factionIds);
+      if (seenPairs.has(key)) issues.push(`${label}: 重複定義`);
+      seenPairs.add(key);
+    }
+    if (!FACTION_RELATION_STATUSES.includes(relation.status)) issues.push(`${label}: 無效的關係 ${relation.status}`);
+    for (const tag of relation.tags ?? []) {
+      if (!factionData.relationTags.some((entry) => entry.id === tag)) issues.push(`${label}: 找不到附加關係 ${tag}`);
+    }
+  }
+  if (new Set(factionData.relationTags.map((tag) => tag.id)).size !== factionData.relationTags.length) issues.push('附加關係 ID 重複');
+
+  for (const unit of unitTemplatesDatabase()) {
+    if (unit.factionId !== undefined && !getFactionById(unit.factionId)) issues.push(`${unit.id}: 找不到所屬勢力 ${unit.factionId}`);
+    if (unit.occupation) {
+      const occupier = unitTemplatesDatabase().find((entry) => entry.id === unit.occupation!.byUnitId);
+      const sharedMap = mapsDatabase.some((map) => [...map.npcsPresent, ...map.monstersPresent].includes(unit.id) &&
+        [...map.npcsPresent, ...map.monstersPresent].includes(unit.occupation!.byUnitId));
+      if (!occupier) issues.push(`${unit.id}: 找不到佔領單位 ${unit.occupation.byUnitId}`);
+      else if (!occupier.dormantUntilOccupation) issues.push(`${unit.id}: 佔領單位 ${occupier.id} 必須設定 dormantUntilOccupation`);
+      if (occupier && !sharedMap) issues.push(`${unit.id}: 佔領單位 ${unit.occupation.byUnitId} 必須出現在同一張地圖`);
+      if (!Number.isInteger(unit.occupation.afterDays) || unit.occupation.afterDays <= 0) issues.push(`${unit.id}: 佔領天數須為正整數`);
+      if (unit.dormantUntilOccupation) issues.push(`${unit.id}: 潛伏單位本身不可再設定佔領`);
+    }
+    if (unit.dormantUntilOccupation && !unitTemplatesDatabase().some((entry) => entry.occupation?.byUnitId === unit.id)) {
+      issues.push(`${unit.id}: 潛伏單位沒有任何單位會讓它出現`);
+    }
+    if (unit.dormantUntilOccupation && questsDatabase.some((quest) => quest.questGiverId === unit.id)) issues.push(`${unit.id}: 潛伏單位不可擔任任務給予者`);
+  }
+
+  if (typeof scenario.rules?.npcKillGrantsExp !== 'boolean') issues.push(`劇本 ${scenario.id}: rules.npcKillGrantsExp 須為布林值`);
+  if (scenario.succession) {
+    const ratio = scenario.succession.reputationInheritRatio;
+    if (!scenario.succession.relatedLabel?.trim()) issues.push(`劇本 ${scenario.id}: succession.relatedLabel 不可為空`);
+    if (!(Number.isFinite(ratio) && ratio > 0 && ratio <= 1)) issues.push(`劇本 ${scenario.id}: succession.reputationInheritRatio 須介於 0（不含）與 1 之間`);
+  }
+  return issues;
+}
+
 /** 全部靜態資料驗證；建置前由 scripts/validate-data.mjs 執行，有錯誤即中止建置。 */
-export const validateGameData = (): string[] => [...validateGrowthData(), ...validateWorldUnitData(), ...validateEventData()];
+export const validateGameData = (): string[] => [...validateGrowthData(), ...validateWorldUnitData(), ...validateEventData(), ...validateFactionData()];

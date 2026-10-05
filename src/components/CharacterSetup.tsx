@@ -7,12 +7,15 @@ const alignments: CharacterAlignment[] = [
 ];
 
 interface CharacterSetupProps {
-  onCreate: (name: string, classId: string, alignment: CharacterAlignment) => void;
+  onCreate: (name: string, classId: string, alignment: CharacterAlignment, relatedToPrevious: boolean) => void;
+  /** 在同一世界接續新角色且劇本允許關聯時提供：勾選後部分繼承前角色的勢力聲望。 */
+  relatedOptionLabel?: string;
   /** 提供時顯示「取消」（在同一世界接續新角色時可返回）。 */
   onCancel?: () => void;
 }
 
-export function CharacterSetup({ onCreate, onCancel }: CharacterSetupProps) {
+export function CharacterSetup({ onCreate, onCancel, relatedOptionLabel }: CharacterSetupProps) {
+  const [relatedToPrevious, setRelatedToPrevious] = useState(false);
   const [name, setName] = useState(scenario.defaultPlayer.name);
   const [classId, setClassId] = useState(scenario.defaultPlayer.classId);
   const [alignment, setAlignment] = useState<CharacterAlignment>(scenario.defaultPlayer.alignment);
@@ -24,7 +27,7 @@ export function CharacterSetup({ onCreate, onCancel }: CharacterSetupProps) {
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (name.trim()) onCreate(name.trim(), characterClass.id, alignment);
+    if (name.trim()) onCreate(name.trim(), characterClass.id, alignment, !!relatedOptionLabel && relatedToPrevious);
   };
 
   return <div role="dialog" aria-modal="true" aria-labelledby="character-setup-title" style={{ position: 'fixed', inset: 0, zIndex: 20, display: 'grid', placeItems: 'center', background: '#000c', padding: '20px' }}>
@@ -43,6 +46,10 @@ export function CharacterSetup({ onCreate, onCancel }: CharacterSetupProps) {
           {alignments.map((entry) => <option key={entry}>{entry}</option>)}
         </select>
       </label>
+      {relatedOptionLabel && <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', marginBottom: '14px', color: '#ddd' }}>
+        <input type="checkbox" checked={relatedToPrevious} onChange={(event) => setRelatedToPrevious(event.target.checked)} style={{ marginTop: '3px' }} />
+        <span>{relatedOptionLabel}<span style={{ display: 'block', color: '#999', fontSize: '12px' }}>不勾選時，各勢力對新角色的聲望從初始值開始。</span></span>
+      </label>}
       <p style={{ color: '#bbb' }}>{characterClass.description}</p>
       <h3>能力值</h3>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', fontSize: '13px' }}>

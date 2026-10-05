@@ -1,6 +1,6 @@
 import type { CharacterAlignment, PlayerState } from '../types/game';
 import { createWorldState } from './worldEvents';
-import { createDefaultUnitInstances, getCharacterClassById, getPlayerResourceCaps, getUnitAbilities, PLAYER_UNIT_ID, scenario } from '../data/staticData';
+import { createDefaultUnitInstances, createInitialReputation, getCharacterClassById, getPlayerResourceCaps, getUnitAbilities, PLAYER_UNIT_ID, scenario } from '../data/staticData';
 
 /** 建立預設新玩家存檔；種族、能力值與資源上限與 NPC/魔物共用種族 × 職階公式。 */
 export const createInitialPlayer = (
@@ -39,6 +39,7 @@ export const createInitialPlayer = (
     storyFlags: {},
     defeatedMonsters: {},
     unitDispositionOverrides: {},
+    factionReputation: createInitialReputation(),
     activeQuests: [],
     world: createWorldState()
   };

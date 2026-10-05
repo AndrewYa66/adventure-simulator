@@ -1,7 +1,8 @@
 import type { PlayerState, AIResponsePayload, CharacterHistoryEntry } from '../types/game';
 import type { AIModelSettings } from './aiModels';
-import { canPlayerEnterMap, describeUnitBuild, getItemById, getMapById, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, questsDatabase, scenario } from '../data/staticData';
-import { canAcceptQuest, canTurnInQuest } from '../utils/questRules';
+import { canPlayerEnterMap, describeUnitBuild, getFactionById, getItemById, getMapById, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, questsDatabase, scenario } from '../data/staticData';
+import { canAcceptQuest, canTurnInQuest, getQuestGiverName } from '../utils/questRules';
+import { getFactionContextForAI } from '../utils/factions';
 import { getAvailableServices } from '../utils/tradeRules';
 import { getPlayerWorldUnit } from '../utils/worldUnits';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from '../utils/travelIntent';
@@ -235,6 +236,7 @@ export async function sendPlayerAction(
     build: describeUnitBuild(unit),
     stats: unit.stats,
     alignment: unit.alignment,
+    ...(unit.factionId ? { faction: getFactionById(unit.factionId)?.name ?? unit.factionId } : {}),
     disposition: getWorldUnitDisposition(playerState, unit.id),
     isDead: playerState.unitInstances[unit.id]?.isDead ?? playerState.unitInstances[unit.id]?.currentHp === 0,
     currentHp: playerState.unitInstances[unit.id]?.currentHp ?? unit.stats.hp,
@@ -244,7 +246,8 @@ export async function sendPlayerAction(
   const availableQuests = questsDatabase.filter((quest) => canAcceptQuest(playerState, quest))
     .map((quest) => ({ id: quest.id, title: quest.title, giver: quest.questGiver, objective: quest.objective }));
   const turnInQuests = questsDatabase.filter((quest) => canTurnInQuest(playerState, quest))
-    .map((quest) => ({ id: quest.id, title: quest.title, giver: quest.questGiver }));
+    .map((quest) => ({ id: quest.id, title: quest.title, giver: getQuestGiverName(playerState, quest) }));
+  const factionContext = getFactionContextForAI(playerState);
   const encounterCandidates = currentUnits.flatMap((unit) => unit.kind === 'monster' &&
     (!unit.source.requiredQuestId || playerState.activeQuests.some((quest) =>
       quest.questId === unit.source.requiredQuestId && quest.status === 'in_progress'
@@ -275,7 +278,10 @@ ${scenario.gmRole}
 - 當前地區在場 NPC 及數值: ${JSON.stringify(presentNpcs)}
 - NPC isDead 為 true 或 currentHp 為 0 時代表角色已死亡，不可當成存活人物交談、提供任務、交易或持有可取得物品。
 - NPC 持有物與金幣即為世界實際庫存，不能憑空贈送或生成；只能在持有量足夠且玩家明確取得時回報 npcItemTransfers。
-- 陣營傾向描述價值觀；對玩家的目前關係是友善/中立/敵對，依單位預設關係及已記錄世界事件判定。不可由 NPC/魔物種類或九大陣營推斷關係。
+- 陣營傾向描述價值觀；對玩家的目前關係是友善/中立/敵對，依「個人關係 → 所屬勢力對玩家的聲望 → 單位預設關係」判定，已計入上方 disposition。不可由 NPC/魔物種類或九大陣營推斷關係。
+- 各勢力對玩家的聲望（遊戲依勢力得知的事件結算，AI 不可自行改變；可依此調整 NPC 語氣、價格談判與傳聞內容）: ${JSON.stringify(factionContext.reputation)}
+- 勢力間關係（未列出者為中立）: ${JSON.stringify(factionContext.relations)}
+- 本地區人物與魔物所屬勢力的公開簡介: ${JSON.stringify(factionContext.presentFactions)}
 - 只有目前關係為敵對的單位才會作為敵人主動攻擊；友善或中立單位即使是魔物也不可無故描述為敵人或發動戰鬥。玩家明確攻擊友善/中立單位時，遊戲會記錄挑釁造成的敵對關係。
 - 當前可接取任務（僅可接取這些 ID）: ${JSON.stringify(availableQuests)}
 - 當前可交付任務（需玩家回到任務給予者所在位置且需求齊備）: ${JSON.stringify(turnInQuests)}
@@ -311,7 +317,7 @@ ${scenario.gmRole}
 - 若玩家有自傷意圖但沒有說明傷害數值，先詢問數值，不要猜測或只用文字敘述扣血。
 - 一般戰鬥由遊戲規則結算，不可敘事中自行宣告擊敗或扣除怪物。
 - 每次回應都必須包含 serviceRequest；只有玩家明確要求使用、購買某項服務（例如住店、休息一晚）時，才從「當前可使用服務」清單填入 shopId 與 serviceId，否則設為 null。詢問價格或服務內容不算使用。服務的費用、恢復效果與耗時由遊戲端結算，不可同時用 hpChange/mpChange/goldChange 描述同一服務，也不可在 storyText 宣稱已付款或已恢復；若清單中沒有對應服務，只能說明目前無法使用。
-- 遊戲時間由遊戲依行動類型推進；玩家要求原地等待時由遊戲處理，AI 不可在敘事中自行跳過時間。
+- 遊戲時間由遊戲依行動類型推進；玩家要求原地等待時由遊戲處理，AI 不可在敘事中自行跳過時間。玩家要求等待、睡覺或停留數天等長時間時，本回合只經過一般回合時間：storyText 不得描述數小時以上的時間流逝，應說明單次等待上限為 8 小時，請玩家分次等待或使用旅店休息。
 - 世界事件與死因只能依「世界事件紀錄」敘述，不可捏造未記錄的死亡、兇手或世界變化。NPC 只有出現在該事件 witnesses 中才知道 detail（誰下手、如何發生）；其他人只知道 summary 的公開結果，可以轉述傳聞或猜測，但不可斷定兇手或經過。目前玩家角色若不是當時在場的人，也只能從在場目擊者口中得知細節。
 - 每次回應都必須包含 eventProposals（陣列）；只有玩家行動確實促成「可提議的世界事件」所描述的情況（符合 when 說明）時，才填入該事件 ID，否則為空陣列。事件效果由遊戲驗證後套用，storyText 可描述促成事件的經過，但不可自行宣告超出事件描述的世界改變。
 - 只有玩家行動或明確世界事件確實改變了當前地區單位對玩家的關係時，才在 stateChanges.unitDispositionChanges 回報單位 ID 與 friendly/neutral/hostile；純對話、陣營傾向或臆測不能改變關係。單位關係變更須與 storyText 敘事一致。

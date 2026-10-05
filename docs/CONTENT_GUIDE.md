@@ -50,7 +50,7 @@ content/
 | 名稱／稱號 | name／title | |
 | 單位類型 | unitType | NPC→npc、魔物→monster |
 | 種族／職階 | species／class | 種族對應 `species.json` ID、職階對應 `character_classes.json` ID（見下方對照表）；組合由 `npm run validate:data` 驗證 |
-| 勢力 | faction | FAC-xxx |
+| 勢力 | factionId | FAC-xxx；對應 NPC／魔物資料的 `factionId`，決定聲望對該角色態度的影響 |
 | 陣營傾向 | alignment | 沿用現有 `CharacterAlignment` 中文值 |
 | 所在地 | mapId | |
 | 預設關係 | defaultDisposition | 友善→friendly、中立→neutral、敵對→hostile |
@@ -87,7 +87,7 @@ content/
 
 ### 事件
 
-觸發方式→trigger（自動→auto、劇情片段完成→storylet、角色決策→agent、AI提議→aiProposal）；條件欄位同劇情片段；設定旗標／移除旗標→effects.setFlags／effects.clearFlags；影響單位／影響地區→effects.units／effects.mapIds；傳播範圍→knownBy（目擊者→witnesses、同勢力→faction、本地區→region、全世界→world）。內文「世界影響」由維護者轉為 `worldModifiers` 等結構化效果，「發生了什麼」轉為 `summary`，AI 提議事件的使用時機寫入 `aiHint`。遊戲資料格式見 `src/data/events.json` 與 `docs/API.md`「世界事件、世界修正與世界規則」；目前遊戲端只支援自動與 AI 提議兩種觸發方式，以及目擊者／本地區／全世界三種傳播範圍（同勢力待 O38）。
+觸發方式→trigger（自動→auto、劇情片段完成→storylet、角色決策→agent、AI提議→aiProposal）；條件欄位同劇情片段；設定旗標／移除旗標→effects.setFlags／effects.clearFlags；影響單位／影響地區→effects.units／effects.mapIds；傳播範圍→knownBy（目擊者→witnesses、同勢力→faction、本地區→region、全世界→world）。內文「世界影響」由維護者轉為 `worldModifiers` 等結構化效果，「發生了什麼」轉為 `summary`，AI 提議事件的使用時機寫入 `aiHint`。遊戲資料格式見 `src/data/events.json` 與 `docs/API.md`「世界事件、世界修正與世界規則」；目前遊戲端只支援自動與 AI 提議兩種觸發方式；四種傳播範圍都已支援，「同勢力」需另列得知事件的勢力（`knownByFactions`）。事件也可用聲望等級與勢力關係作為條件、以聲望與勢力關係變化作為效果（見 `docs/API.md`「勢力聲望與勢力間關係」）。
 
 ### 設定條目
 
@@ -113,7 +113,7 @@ content/
 
 - 世界觀採用**受托爾金啟發的原創設定**，不直接使用《魔戒》的國家、地名與專有種族名稱（例如以「半身人」代替該作品專有名稱），以避免公開部署時的版權與商標問題。
 - 種族：`content/lore/RACE-001`～`RACE-007`，遊戲 ID 為 human（人類）、elf（精靈）、dwarf（矮人）、halfling（半身人）、goblin（哥布林）、orc（獸人）、beast（野獸，不可有職階）。哥布林只能搭配戰鬥類職階，獸人可搭配戰鬥與生活類。
-- 勢力：`content/lore/FAC-001`～`FAC-009`（橡木村、艾德蘭王國、北原騎族聯盟、銀灣共和國、鐵脊山王國、霧林、綠丘郡、灰燼部族、斷劍傭兵團）。
+- 勢力：`content/lore/FAC-001`～`FAC-009`（橡木村、艾德蘭王國、北原騎族聯盟、銀灣共和國、鐵脊山王國、霧林、綠丘郡、灰燼部族、斷劍傭兵團）。遊戲資料在 `src/data/factions.json`：勢力的「摘要」轉為 `summary`（只寫公開資訊，AI 會讀取），初始聲望 `initialReputation` 與勢力間初始關係（同盟／友好／中立／緊張／敵對／交戰，加上債務、禁運、盟約、貿易往來等附加關係）由維護者依「詳細內容」的對外關係填寫，目前為依審閱中草稿整理的版本。「未揭露的真相」不可寫入勢力關係（例如祕密資助不列為公開關係）。
 - 世界局勢與核心設定：`LORE-001 世界局勢`（AI 每回合讀取）、`LORE-002 星鐵`、`LORE-003 主線大綱`（僅作者）。
 - 職階清單：`content/03 職階清單.md`。角色卡以中文名稱填寫，建置時對應下表 ID；24 種職階皆已定義於 `character_classes.json`。
 

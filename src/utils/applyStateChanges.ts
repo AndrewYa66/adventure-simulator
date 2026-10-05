@@ -1,6 +1,6 @@
 import type { AIResponsePayload, PlayerState } from '../types/game';
 import { getItemById, getMapById, getPlayerResourceCaps, getQuestById, getWorldUnitById, getWorldUnitDisposition, levelBenchmarksDatabase, MAX_UNIT_LEVEL } from '../data/staticData';
-import { acceptQuest } from './questRules';
+import { acceptQuest, canReachQuestGiver, getActiveQuestGiverId } from './questRules';
 import { resolveLevelFromExp } from './unitGrowth';
 
 export function applyStateChanges(player: PlayerState, response: AIResponsePayload, source: 'ai' | 'game' = 'ai'): PlayerState {
@@ -38,7 +38,7 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
       const unit = getWorldUnitById(transfer.npcId);
       const state = unitInstances[transfer.npcId];
       if (unit?.kind !== 'npc' || !unit.mapIds.includes(player.currentMapId) || !currentMap?.npcsPresent.includes(unit.id) ||
-          getWorldUnitDisposition({ unitDispositionOverrides }, unit.id) === 'hostile' || !getItemById(transfer.itemId) ||
+          getWorldUnitDisposition({ factionReputation: player.factionReputation, unitDispositionOverrides }, unit.id) === 'hostile' || !getItemById(transfer.itemId) ||
           !Number.isInteger(transfer.quantity) || transfer.quantity < 1 || !state || state.isDead || state.currentHp === 0) continue;
       const stock = state.inventory.find((entry) => entry.itemId === transfer.itemId);
       if (!stock || stock.quantity < transfer.quantity) continue;
@@ -90,9 +90,8 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
   for (const update of changes.questUpdates ?? []) {
     const active = activeQuests.find((entry) => entry.questId === update.questId && entry.status === 'in_progress');
     const quest = getQuestById(update.questId);
-    const giver = quest ? getWorldUnitById(quest.questGiverId) : undefined;
-    if (!active || !quest || giver?.kind !== 'npc' || unitInstances[giver.id]?.isDead || unitInstances[giver.id]?.currentHp === 0 || getWorldUnitDisposition({ unitDispositionOverrides }, giver.id) === 'hostile' ||
-        quest.mapId !== player.currentMapId || !currentMap?.npcsPresent.includes(quest.questGiverId)) continue;
+    const giverId = quest ? getActiveQuestGiverId(active, quest.questGiverId) : undefined;
+    if (!active || !quest || !giverId || !canReachQuestGiver({ ...player, unitInstances, unitDispositionOverrides }, quest, giverId)) continue;
     const defeatsMet = (quest.requirements.defeatMonsters ?? []).every((requirement) =>
       (active.progress?.defeatedMonsters[requirement.monsterId] ?? 0) >= requirement.quantity
     );
@@ -105,7 +104,7 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
     const bounded = (amount: number, range?: { min: number; max: number }) =>
       range ? Math.max(range.min, Math.min(range.max, amount)) : amount;
     questExp += bounded(quest.rewards.exp, limits?.exp);
-    const giverState = unitInstances[quest.questGiverId];
+    const giverState = unitInstances[giverId];
     const requestedGold = bounded(quest.rewards.gold, limits?.gold);
     const paidGold = Math.min(requestedGold, giverState?.gold ?? 0);
     questGold += paidGold;

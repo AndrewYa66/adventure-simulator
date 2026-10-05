@@ -1,0 +1,49 @@
+{
+  "reputation": {
+    "min": -100,
+    "max": 100,
+    "tiers": [
+      { "id": "hated", "name": "敵視", "min": -100, "disposition": "hostile" },
+      { "id": "cold", "name": "冷淡", "min": -40 },
+      { "id": "neutral", "name": "中立", "min": -10 },
+      { "id": "friendly", "name": "友好", "min": 25 },
+      { "id": "revered", "name": "崇敬", "min": 60, "disposition": "friendly" }
+    ],
+    "rules": {
+      "memberKilled": -40,
+      "memberAttacked": -15,
+      "questCompleted": 10,
+      "enemyMemberKilled": 5
+    }
+  },
+  "relationTags": [
+    { "id": "debt", "name": "債務" },
+    { "id": "embargo", "name": "禁運" },
+    { "id": "pact", "name": "盟約" },
+    { "id": "trade", "name": "貿易往來" }
+  ],
+  "factions": [
+    { "id": "FAC-001", "name": "橡木村", "summary": "艾德蘭王國東境邊陲的小村，以農耕和往來商隊為生，人口少、兵力弱，近來飽受哥布林騷擾。", "initialReputation": 10 },
+    { "id": "FAC-002", "name": "艾德蘭王國", "summary": "最古老的人類王國，擁有平原糧倉與正統王權，但國力衰落、財政吃緊，宮廷分裂為主戰與主和兩派。", "initialReputation": 0 },
+    { "id": "FAC-003", "name": "北原騎族聯盟", "summary": "北方草原的人類氏族聯盟，騎兵舉世無雙，靠輸出傭兵與馬匹換取糧食，重視榮譽與誓約。", "initialReputation": 0 },
+    { "id": "FAC-004", "name": "銀灣共和國", "summary": "南方海港的商業共和國，由商會議會統治，掌握航路與金融，以貸款與禁運影響各國。", "initialReputation": 0 },
+    { "id": "FAC-005", "name": "鐵脊山王國", "summary": "東北山脈的矮人王國，擁有大陸最好的鍛造技術，重視契約，與各國做生意但不輕易結盟。", "initialReputation": 0 },
+    { "id": "FAC-006", "name": "霧林", "summary": "西北古老森林中的精靈，採取孤立主義，對伐木越界日漸不滿。", "initialReputation": 0 },
+    { "id": "FAC-007", "name": "綠丘郡", "summary": "南方丘陵的半身人家園，大陸重要的糧食產地，沒有軍隊，靠各國互相牽制維持中立。", "initialReputation": 0 },
+    { "id": "FAC-008", "name": "灰燼部族", "summary": "東方荒原上由獸人與哥布林組成的鬆散部落聯合，為了生存越來越常劫掠邊境，與人類各國敵對。", "initialReputation": -60 },
+    { "id": "FAC-009", "name": "斷劍傭兵團", "summary": "由各族退伍軍人與亡命之徒組成的傭兵團，不屬於任何國家，誰付錢就替誰打仗，只看戰功不問出身。", "initialReputation": 0 }
+  ],
+  "relations": [
+    { "factionIds": ["FAC-001", "FAC-002"], "status": "friendly" },
+    { "factionIds": ["FAC-002", "FAC-003"], "status": "tense", "tags": ["pact", "debt"] },
+    { "factionIds": ["FAC-002", "FAC-004"], "status": "tense", "tags": ["debt"] },
+    { "factionIds": ["FAC-002", "FAC-005"], "status": "neutral", "tags": ["debt"] },
+    { "factionIds": ["FAC-003", "FAC-007"], "status": "friendly", "tags": ["trade"] },
+    { "factionIds": ["FAC-004", "FAC-005"], "status": "friendly", "tags": ["trade"] },
+    { "factionIds": ["FAC-004", "FAC-007"], "status": "friendly", "tags": ["trade"] },
+    { "factionIds": ["FAC-001", "FAC-008"], "status": "hostile" },
+    { "factionIds": ["FAC-002", "FAC-008"], "status": "hostile" },
+    { "factionIds": ["FAC-003", "FAC-008"], "status": "hostile" },
+    { "factionIds": ["FAC-004", "FAC-008"], "status": "hostile" }
+  ]
+}

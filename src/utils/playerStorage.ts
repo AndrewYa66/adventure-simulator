@@ -1,5 +1,5 @@
 import type { PlayerState, StoryMessage, WorldEvent, WorldModifier, WorldRuntimeState } from '../types/game';
-import { createDefaultUnitInstance, getBaseExpForLevel, getEventById, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getQuestById, getSpeciesById, getUnitAbilities, getUnitLevelCap, getWorldUnitById, MAX_UNIT_LEVEL, PLAYER_UNIT_ID, scenario, unitTemplatesDatabase } from '../data/staticData';
+import { clampReputation, createDefaultUnitInstance, createInitialReputation, FACTION_RELATION_STATUSES, factionData, getBaseExpForLevel, getEventById, getCharacterClassById, getFactionById, getItemById, getMapById, getPlayerResourceCaps, getQuestById, getSpeciesById, getUnitAbilities, getUnitLevelCap, getWorldUnitById, MAX_UNIT_LEVEL, PLAYER_UNIT_ID, scenario, unitTemplatesDatabase } from '../data/staticData';
 import { isValidGameTime } from './gameTime';
 import { isValidSpeciesClassCombo, UNIT_STAT_KEYS } from './unitGrowth';
 import { createCombat } from './combatState';
@@ -12,15 +12,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every((entry) => typeof entry === 'string');
-const EVENT_TYPES = ['unit_death', 'unit_respawn', 'quest_failed', 'scenario_event'];
-const KNOWN_BY = ['witnesses', 'region', 'world'];
+const EVENT_TYPES = ['unit_death', 'unit_respawn', 'unit_occupation', 'quest_failed', 'quest_transferred', 'reputation_change', 'scenario_event'];
+const KNOWN_BY = ['witnesses', 'faction', 'region', 'world'];
 const DEATH_CAUSES = ['combat', 'self_inflicted', 'misadventure', 'unknown'];
 
 function isWorldEvent(value: unknown): value is WorldEvent {
   if (!isRecord(value) || typeof value.id !== 'string' || !EVENT_TYPES.includes(String(value.type)) || !isValidGameTime(value.gameTimeMinutes) ||
       typeof value.mapId !== 'string' || typeof value.summary !== 'string' || (value.detail !== undefined && typeof value.detail !== 'string') ||
-      !KNOWN_BY.includes(String(value.knownBy)) || !isStringArray(value.witnessUnitIds) || typeof value.cause !== 'string' ||
+      !KNOWN_BY.includes(String(value.knownBy)) || !isStringArray(value.witnessUnitIds) || !isStringArray(value.awareFactionIds) || typeof value.cause !== 'string' ||
       (value.eventId !== undefined && typeof value.eventId !== 'string')) return false;
+  if (value.reputationChanges !== undefined && !(Array.isArray(value.reputationChanges) && value.reputationChanges.every((change) =>
+    isRecord(change) && typeof change.factionId === 'string' && Number.isInteger(change.change)))) return false;
   if (value.death !== undefined) {
     const death = value.death;
     if (!isRecord(death) || typeof death.victimUnitId !== 'string' || typeof death.victimName !== 'string' || !DEATH_CAUSES.includes(String(death.cause)) ||
@@ -40,11 +42,23 @@ function isWorldModifier(value: unknown): value is WorldModifier {
 function normalizeWorldState(value: unknown): WorldRuntimeState | null {
   if (!isRecord(value) || !Array.isArray(value.events) || !value.events.every(isWorldEvent) || !isStringArray(value.chronicle) ||
       !Number.isSafeInteger(value.nextEventSeq) || (value.nextEventSeq as number) < 1 ||
-      !Array.isArray(value.modifiers) || !value.modifiers.every(isWorldModifier) || !isStringArray(value.firedEventIds) || !isRecord(value.regions)) return null;
+      !Array.isArray(value.modifiers) || !value.modifiers.every(isWorldModifier) || !isStringArray(value.firedEventIds) || !isRecord(value.regions) ||
+      !isRecord(value.factionRelations)) return null;
   const regions: WorldRuntimeState['regions'] = {};
   for (const [mapId, region] of Object.entries(value.regions)) {
     if (!getMapById(mapId) || !isRecord(region) || !Number.isSafeInteger(region.lastRestockDay)) return null;
     regions[mapId] = { lastRestockDay: region.lastRestockDay as number };
+  }
+  // 勢力關係：靜態資料移除的勢力或附加關係略過，其餘格式錯誤即整份拒絕。
+  const factionRelations: WorldRuntimeState['factionRelations'] = {};
+  for (const [key, relation] of Object.entries(value.factionRelations)) {
+    if (!isRecord(relation) || !FACTION_RELATION_STATUSES.includes(relation.status as never) || !isStringArray(relation.tags)) return null;
+    const [a, b] = key.split('|');
+    if (!a || !b || !getFactionById(a) || !getFactionById(b)) continue;
+    factionRelations[key] = {
+      status: relation.status as WorldRuntimeState['factionRelations'][string]['status'],
+      tags: relation.tags.filter((tag) => factionData.relationTags.some((entry) => entry.id === tag))
+    };
   }
   return {
     events: value.events as WorldEvent[],
@@ -53,7 +67,8 @@ function normalizeWorldState(value: unknown): WorldRuntimeState | null {
     modifiers: value.modifiers as WorldModifier[],
     // 靜態資料移除的事件不再視為已觸發。
     firedEventIds: value.firedEventIds.filter((eventId) => !!getEventById(eventId)),
-    regions
+    regions,
+    factionRelations
   };
 }
 
@@ -71,7 +86,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
       !Array.isArray(value.activeQuests) || value.unitId !== PLAYER_UNIT_ID || typeof value.speciesId !== 'string' ||
       typeof value.setupComplete !== 'boolean' || !isValidGameTime(value.gameTimeMinutes) || !isRecord(value.unitInstances) ||
       !isRecord(value.abilities) || !Array.isArray(value.statusEffects) || !Array.isArray(value.transactionHistory) ||
-      !isRecord(value.defeatedMonsters) || !isRecord(value.unitDispositionOverrides)) return null;
+      !isRecord(value.defeatedMonsters) || !isRecord(value.unitDispositionOverrides) || !isRecord(value.factionReputation)) return null;
   const world = normalizeWorldState(value.world);
   if (!world) return null;
 
@@ -103,7 +118,8 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     for (const [monsterId, count] of Object.entries(savedDefeats)) {
       if (isMonsterUnitId(monsterId) && Number.isInteger(count) && (count as number) >= 0) defeated[monsterId] = count as number;
     }
-    return [{ questId: entry.questId, status: entry.status as 'in_progress' | 'completed' | 'failed', progress: { defeatedMonsters: defeated } }];
+    const giverUnitId = typeof entry.giverUnitId === 'string' && getWorldUnitById(entry.giverUnitId)?.kind === 'npc' ? entry.giverUnitId : undefined;
+    return [{ questId: entry.questId, status: entry.status as 'in_progress' | 'completed' | 'failed', progress: { defeatedMonsters: defeated }, ...(giverUnitId ? { giverUnitId } : {}) }];
   });
   const defeatedMonsters: Record<string, number> = {};
   for (const [monsterId, count] of Object.entries(value.defeatedMonsters)) {
@@ -148,7 +164,9 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
       currentHp: Number.isInteger(savedState.currentHp) && (savedState.currentHp as number) >= 0
         ? Math.min(savedState.currentHp as number, maxHp) : maxHp,
       isDead: savedState.isDead === true || savedState.currentHp === 0,
-      ...(isValidGameTime(savedState.diedAtMinutes) ? { diedAtMinutes: savedState.diedAtMinutes } : {})
+      ...(isValidGameTime(savedState.diedAtMinutes) ? { diedAtMinutes: savedState.diedAtMinutes } : {}),
+      // 潛伏狀態只對潛伏樣板有效；佔領發生後即為一般實例。
+      ...(savedState.isDormant === true && template.dormantUntilOccupation ? { isDormant: true } : {})
     }];
   })) as PlayerState['unitInstances'];
 
@@ -188,6 +206,11 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     savedEncounteredNpcState?.isDead !== true && savedEncounteredNpcState?.currentHp !== 0
     ? savedEncounteredUnitId
     : undefined;
+  // 聲望：缺少的勢力（靜態資料新增）補初始值，數值夾在範圍內，已移除的勢力略過。
+  const factionReputation = createInitialReputation();
+  for (const [factionId, reputation] of Object.entries(value.factionReputation as Record<string, unknown>)) {
+    if (getFactionById(factionId) && Number.isFinite(reputation)) factionReputation[factionId] = clampReputation(reputation as number);
+  }
   const hp = Math.min(resourceCaps.maxHp, Math.max(0, value.hp as number));
   const statusEffects = Array.isArray(value.statusEffects)
     ? value.statusEffects.flatMap((effect) => isRecord(effect) && effect.id === 'unconscious' &&
@@ -236,6 +259,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     storyFlags: value.storyFlags as Record<string, boolean>,
     defeatedMonsters,
     unitDispositionOverrides,
+    factionReputation,
     activeQuests,
     world,
     ...(encounteredUnitId && !isDead ? { encounteredUnitId } : {}),

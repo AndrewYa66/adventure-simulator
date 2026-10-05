@@ -8,6 +8,7 @@
     "level": 1,
     "mapId": "MAP-001",
     "defaultDisposition": "friendly",
+    "factionId": "FAC-001",
     "startingGold": 200,
     "startingInventory": [{ "itemId": "ITEM-001", "quantity": 5 }, { "itemId": "ITEM-003", "quantity": 2 }],
     "alignment": "守序善良",
@@ -23,6 +24,7 @@
     "mapId": "MAP-001",
     "shopId": "SHOP-001",
     "defaultDisposition": "friendly",
+    "factionId": "FAC-001",
     "startingGold": 150,
     "startingInventory": [{ "itemId": "ITEM-101", "quantity": 2 }, { "itemId": "ITEM-201", "quantity": 2 }],
     "alignment": "絕對中立",
@@ -37,6 +39,7 @@
     "level": 1,
     "mapId": "MAP-001",
     "defaultDisposition": "friendly",
+    "factionId": "FAC-001",
     "alignment": "中立善良",
     "description": "在村外耕作，熟悉附近田地與道路。"
   },
@@ -50,6 +53,7 @@
     "mapId": "MAP-001",
     "shopId": "SHOP-002",
     "defaultDisposition": "friendly",
+    "factionId": "FAC-001",
     "startingGold": 100,
     "startingInventory": [{ "itemId": "ITEM-001", "quantity": 10 }, { "itemId": "ITEM-003", "quantity": 8 }],
     "alignment": "中立善良",
@@ -64,6 +68,7 @@
     "level": 2,
     "mapId": "MAP-001",
     "defaultDisposition": "friendly",
+    "factionId": "FAC-001",
     "alignment": "守序中立",
     "description": "負責守護村莊與訓練巡守隊。"
   },
@@ -76,6 +81,7 @@
     "level": 1,
     "mapId": "MAP-002",
     "defaultDisposition": "friendly",
+    "factionId": "FAC-001",
     "alignment": "守序善良",
     "description": "熟悉綠林古道，追蹤到哥布林巢穴附近的足跡。"
   }

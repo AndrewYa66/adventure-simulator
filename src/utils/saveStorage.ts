@@ -20,7 +20,7 @@ import { isStoryMessage, normalizePlayerState } from './playerStorage';
  * 存檔格式版本；開發階段每次變更存檔格式就加一，版本不符的存檔直接捨棄，不撰寫遷移程式。
  * 正式上線後才開始為舊版本提供遷移。
  */
-export const SAVE_SCHEMA_VERSION = 4;
+export const SAVE_SCHEMA_VERSION = 5;
 
 export const AUTO_SLOT_ID: SaveSlotId = 'auto';
 export const MANUAL_SLOT_IDS: SaveSlotId[] = ['manual-1', 'manual-2', 'manual-3'];
@@ -66,7 +66,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // 世界／角色兩層的拆分與合併
 // ------------------------------------------
 
-const canonicalInstance = (instance: UnitInstance) => JSON.stringify([instance.level, instance.exp, instance.gold, instance.inventory, instance.currentHp, instance.isDead ?? false, instance.diedAtMinutes]);
+const canonicalInstance = (instance: UnitInstance) => JSON.stringify([instance.level, instance.exp, instance.gold, instance.inventory, instance.currentHp, instance.isDead ?? false, instance.diedAtMinutes, instance.isDormant ?? false]);
 
 /** 存檔只保存與樣板預設不同的單位實例；讀檔時缺少的實例由樣板補上（靜態資料新增的單位也因此出現在舊存檔）。 */
 export function compactUnitInstances(instances: Record<string, UnitInstance>): Record<string, UnitInstance> {

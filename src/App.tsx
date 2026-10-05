@@ -7,7 +7,7 @@ import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getP
 import { getPlayerStatBreakdown, resolveActionCheck } from './utils/gameChecks';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from './utils/travelIntent';
 import { sendPlayerAction } from './services/aiService';
-import { acceptQuest, canTurnInQuest } from './utils/questRules';
+import { acceptQuest, canTurnInQuest, getQuestGiverName } from './utils/questRules';
 import { canPlayerAct, isPlayerUnconscious } from './utils/playerStatus';
 import type { AIProvider } from './services/aiModels';
 import { loadAIModelSettings, saveAIModelSettings, type AIModelSettings } from './services/aiModels';
@@ -23,6 +23,7 @@ import { grantUnitExp } from './utils/unitProgress';
 import { createCombat, getCombatTarget, setEnemyHp } from './utils/combatState';
 import { getPlayerWorldUnit } from './utils/worldUnits';
 import { applyEventProposals, finalizeWorld, type DeathHint } from './utils/worldEvents';
+import { createSuccessorReputation, describeReputationChanges } from './utils/factions';
 import { rollWaitInterruption } from './utils/waitRules';
 import type { CharacterAlignment } from './types/game';
 
@@ -31,7 +32,7 @@ function withNpcHp(player: PlayerState, npcId: string, currentHp: number, isDead
   return { ...player, unitInstances: { ...player.unitInstances, [npcId]: { ...state, currentHp, isDead } } };
 }
 
-/** 擊倒 NPC 時取得其全部持有物與金幣（不給經驗；後果由善惡與勢力系統處理）。 */
+/** 擊倒 NPC 時取得其全部持有物與金幣；經驗依劇本規則 npcKillGrantsExp 另行發放，後果由勢力聲望承擔。 */
 function lootDefeatedNpc(player: PlayerState, npcId: string, npcName: string) {
   const state = player.unitInstances[npcId];
   if (!state || (state.gold <= 0 && state.inventory.length === 0)) return { player, loot: [] as { itemId: string; quantity: number }[], gold: 0 };
@@ -182,7 +183,10 @@ export default function App() {
     const knownIds = new Set(player.world.events.map((event) => event.id));
     const newEvents = finalized.world.events.filter((event) => !knownIds.has(event.id));
     if (newEvents.length) {
-      setTimeout(() => appendSystemMessage(`🌍 世界變化：\n${newEvents.map((event) => `・${event.summary}`).join('\n')}`), 0);
+      // 劇情事件附帶的聲望變化另外列出（玩家行動造成的聲望事件已寫在描述中）。
+      const describe = (event: typeof newEvents[number]) => event.type === 'scenario_event' && event.reputationChanges?.length
+        ? `${event.summary}（聲望變化：${describeReputationChanges(player, event.reputationChanges)}）` : event.summary;
+      setTimeout(() => appendSystemMessage(`🌍 世界變化：\n${newEvents.map((event) => `・${describe(event)}`).join('\n')}`), 0);
     }
   };
 
@@ -215,8 +219,11 @@ export default function App() {
     setSetupMode('new-world');
   };
 
-  const handleCreateCharacter = (name: string, classId: string, alignment: CharacterAlignment) => {
-    const newCharacter = createInitialPlayer(name, classId, alignment, true);
+  const handleCreateCharacter = (name: string, classId: string, alignment: CharacterAlignment, relatedToPrevious = false) => {
+    const created = createInitialPlayer(name, classId, alignment, true);
+    // 新角色對各勢力的聲望預設重置；劇本允許且玩家選擇與前角色有關聯時，部分繼承前角色的聲望變化。
+    const inheritRatio = setupMode === 'continue' && relatedToPrevious ? scenario.succession?.reputationInheritRatio ?? 0 : 0;
+    const newCharacter = inheritRatio > 0 ? { ...created, factionReputation: createSuccessorReputation(player, inheritRatio) } : created;
     const text = scenario.opening.newCharacterText
       .replaceAll('{name}', name)
       .replaceAll('{className}', getCharacterClassById(classId)?.name ?? classId);
@@ -228,7 +235,7 @@ export default function App() {
       setPlayer(continueWorldWithCharacter(previous, newCharacter));
       setMessages([{
         id: `${Date.now()}-legacy`, sender: 'system', timestamp: new Date().toLocaleTimeString(),
-        text: `📜 ${previous.name}（Lv.${previous.level}）的故事已結束，其事蹟將在這個世界流傳。世界的時間與變化都保留了下來。`
+        text: `📜 ${previous.name}（Lv.${previous.level}）的故事已結束，其事蹟將在這個世界流傳。世界的時間與變化都保留了下來。${inheritRatio > 0 ? '\n各勢力記得你與前任冒險者的關係，你繼承了部分聲望。' : '\n各勢力對你的聲望從頭開始。'}`
       }, opening]);
     } else {
       const world = createWorld(newCharacter, [opening]);
@@ -327,7 +334,7 @@ export default function App() {
     updatePlayer(nextPlayer);
     const rewardRecord = nextPlayer.transactionHistory.find((record) => record.type === 'quest_reward' &&
       !player.transactionHistory.some((previous) => previous.id === record.id));
-    appendSystemMessage(rewardRecord?.description ?? `已向${quest.questGiver}交付任務「${quest.title}」。`);
+    appendSystemMessage(rewardRecord?.description ?? `已向${getQuestGiverName(player, quest)}交付任務「${quest.title}」。`);
   };
 
   const handleBuyItem = (shopId: string, itemId: string) => {
@@ -486,14 +493,20 @@ export default function App() {
 
     if (monsterHp <= 0 && unit.kind === 'npc') {
       const looted = lootDefeatedNpc(combatActionPlayer, unit.id, unit.name);
-      const victoryState = { ...looted.player };
+      // 單位一致：擊倒 NPC 與魔物以同一公式給予經驗（劇本可關閉）；殺害的後果由勢力聲望承擔。
+      const expGain = scenario.rules.npcKillGrantsExp ? unit.expReward : 0;
+      const rewarded = expGain > 0
+        ? applyStateChanges(looted.player, { storyText: '', suggestedActions: [], stateChanges: { expChange: expGain } }, 'game')
+        : looted.player;
+      const victoryState = { ...rewarded };
       delete victoryState.combat;
       delete victoryState.encounteredUnitId;
       updatePlayer(victoryState, { [unit.id]: { cause: 'combat', killerUnitId: sourcePlayer.unitId } });
       const lootText = looted.gold > 0 || looted.loot.length
         ? `你從其身上取得${[looted.gold > 0 ? `${looted.gold} 金幣` : '', ...looted.loot.map((item) => `${getItemById(item.itemId)?.name ?? item.itemId} ×${item.quantity}`)].filter(Boolean).join('、')}。`
         : '其身上沒有可取得的物品。';
-      appendSystemMessage(`⚔️ ${attackText}\n${unit.name}已被擊倒，不會獲得經驗。${lootText}`, checks);
+      const levelText = rewarded.level > looted.player.level ? ` 📈 升至 Lv.${rewarded.level}！` : '';
+      appendSystemMessage(`⚔️ ${attackText}\n${unit.name}已被擊倒，${expGain > 0 ? `獲得 ${expGain} EXP。${levelText}` : '不會獲得經驗。'}${lootText}`, checks);
       return;
     }
 
@@ -674,7 +687,7 @@ export default function App() {
         : waitIntent.kind === 'duration' && waitNext !== player
         ? `⏳ 你原地等待了 ${formatDuration(waitIntent.minutes)}，現在是 ${formatGameTime(waitNext.gameTimeMinutes)}。等待不會恢復生命與魔力。${waitIntent.hasFollowUp ? '\n等待之後的行動請另外輸入。' : ''}`
         : waitIntent.kind === 'duration'
-          ? `單次最多只能等待 ${formatDuration(MAX_WAIT_MINUTES)}，時間沒有推進。`
+          ? `⚠️ 你想等待${waitIntent.label ? `「${waitIntent.label}」` : ` ${formatDuration(waitIntent.minutes)}`}，但單次最多只能等待 ${formatDuration(MAX_WAIT_MINUTES)}，時間沒有推進（目前仍是 ${formatGameTime(player.gameTimeMinutes)}）。需要更久請分次等待，或到旅店休息。`
           : waitIntent.kind === 'time_of_day'
             ? `目前尚未支援「等到某個時段」，請改為指定時長，例如「等待 2 小時」（單次最多 ${formatDuration(MAX_WAIT_MINUTES)}）。`
             : `請說明要等待多久，例如「等待 2 小時」（單次最多 ${formatDuration(MAX_WAIT_MINUTES)}）。`;
@@ -905,7 +918,9 @@ export default function App() {
         onSave={handleSaveAISettings}
         onClose={() => setIsKeyModalOpen(false)}
       />}
-      {setupMode && !isSaveManagerOpen && <CharacterSetup onCreate={handleCreateCharacter} onCancel={setupMode === 'continue'
+      {setupMode && !isSaveManagerOpen && <CharacterSetup onCreate={handleCreateCharacter}
+        relatedOptionLabel={setupMode === 'continue' ? scenario.succession?.relatedLabel : undefined}
+        onCancel={setupMode === 'continue'
         ? () => setSetupMode(null)
         // 建立新世界時若已有其他世界，可取消並回到存檔管理切換世界。
         : loadSaveIndex().worlds.length > 0 ? () => { setSetupMode(null); setIsSaveManagerOpen(true); } : undefined} />}

@@ -111,6 +111,12 @@ export interface UnitStaticBase extends UnitBuild {
   title?: string;
   alignment?: CharacterAlignment;
   defaultDisposition: UnitDisposition;
+  /** 所屬勢力（factions.json）；未設定代表不屬於任何勢力（例如野獸）。 */
+  factionId?: string;
+  /** 世界規則「他方佔領」：此單位死亡滿 afterDays 天後不再重生，改由 byUnitId（須為潛伏單位）佔據原地。 */
+  occupation?: { byUnitId: string; afterDays: number };
+  /** 潛伏單位：開局不出現在世界中，只會經由「他方佔領」出現。 */
+  dormantUntilOccupation?: boolean;
 }
 
 /** 怪物靜態資料 (來自 monsters.json) */
@@ -206,6 +212,8 @@ export interface UnitInstance {
   isDead?: boolean;
   /** 死亡時的遊戲時間（分鐘）；供重生規則使用。 */
   diedAtMinutes?: number;
+  /** 潛伏中（尚未經由「他方佔領」出現）：視為不在場，isDead 為 true 但沒有死亡事件。 */
+  isDormant?: boolean;
 }
 
 export interface TransactionRecord {
@@ -234,13 +242,89 @@ export interface ScenarioStatic {
   inputPlaceholder: string;
   /** 不屬於此世界觀、玩家不可憑空取出的物品詞彙。 */
   anachronisticItemTerms: string[];
+  /** 劇本層級的規則開關。 */
+  rules: {
+    /** 擊倒 NPC 是否依單位公式給予經驗值（後果另由勢力聲望承擔）。 */
+    npcKillGrantsExp: boolean;
+  };
+  /** 新角色接續：劇本允許新角色與前一位角色有關聯時，可部分繼承勢力聲望的變化量。 */
+  succession?: {
+    /** 角色建立畫面的選項文字，例如「以前任冒險者的同鄉身分出發」。 */
+    relatedLabel: string;
+    /** 繼承比例 0–1：新聲望 = 初始值 + 比例 ×（前角色聲望 − 初始值）。 */
+    reputationInheritRatio: number;
+  };
+}
+
+// ---------- 勢力（factions.json）----------
+
+/** 勢力之間的關係狀態，由敵到友：交戰、敵對、緊張、中立、友好、同盟。 */
+export type FactionRelationStatus = 'war' | 'hostile' | 'tense' | 'neutral' | 'friendly' | 'alliance';
+
+/** 聲望等級；disposition 只允許出現在最低（hostile）或最高（friendly）的連續等級，其餘等級沿用單位預設關係。 */
+export interface ReputationTierStatic {
+  id: string;
+  name: string;
+  /** 此等級的最低聲望值（含）。 */
+  min: number;
+  disposition?: 'hostile' | 'friendly';
+}
+
+/** 玩家行動造成的聲望變化量（只影響得知該事件的勢力）。 */
+export interface ReputationRules {
+  /** 殺害該勢力成員。 */
+  memberKilled: number;
+  /** 主動攻擊原本非敵對的成員。 */
+  memberAttacked: number;
+  /** 完成該勢力成員發布的委託。 */
+  questCompleted: number;
+  /** 殺害與自己敵對或交戰勢力的成員。 */
+  enemyMemberKilled: number;
+}
+
+export interface FactionStatic {
+  id: string;
+  name: string;
+  /** 公開的勢力簡介（不可包含未揭露的真相），提供給 AI。 */
+  summary: string;
+  /** 新角色對此勢力的初始聲望。 */
+  initialReputation: number;
+}
+
+export interface FactionRelationStatic {
+  factionIds: [string, string];
+  status: FactionRelationStatus;
+  /** 附加關係，例如債務、禁運、盟約（relationTags 的 ID）。 */
+  tags?: string[];
+}
+
+export interface FactionDataStatic {
+  reputation: { min: number; max: number; tiers: ReputationTierStatic[]; rules: ReputationRules };
+  relationTags: { id: string; name: string }[];
+  factions: FactionStatic[];
+  /** 未列出的勢力組合視為中立、沒有附加關係。 */
+  relations: FactionRelationStatic[];
+}
+
+/** 勢力條件：事件使用，日後的劇情片段與任務範本共用同一判定。 */
+export interface FactionConditions {
+  /** 玩家對勢力的聲望等級須介於 minTier 與 maxTier 之間（含）。 */
+  reputation?: { factionId: string; minTier?: string; maxTier?: string }[];
+  /** 兩勢力目前的關係須為其中之一。 */
+  factionRelations?: { factionIds: [string, string]; status: FactionRelationStatus[] }[];
+}
+
+/** 事件效果中的勢力變化。 */
+export interface FactionEffects {
+  reputation?: { factionId: string; change: number }[];
+  factionRelations?: { factionIds: [string, string]; status?: FactionRelationStatus; addTags?: string[]; removeTags?: string[] }[];
 }
 
 /** 世界修正的作用對象：`unit:<ID>`、`species:<ID>`、`map:<ID>`（位於該地區的單位）。 */
 export type WorldModifierScope = `unit:${string}` | `species:${string}` | `map:${string}`;
 
-/** 事件的傳播範圍：目擊者、本地區、全世界（同勢力待 O38）。 */
-export type EventKnownBy = 'witnesses' | 'region' | 'world';
+/** 事件的傳播範圍：目擊者、同勢力、本地區、全世界。 */
+export type EventKnownBy = 'witnesses' | 'faction' | 'region' | 'world';
 
 /** 靜態事件 (來自 events.json)：條件與效果由資料定義，前端驗證條件後套用並寫入事件紀錄。 */
 export interface EventStatic {
@@ -248,14 +332,16 @@ export interface EventStatic {
   title: string;
   /** auto：條件成立時由遊戲自動觸發；aiProposal：只能由 AI 提議，前端驗證條件後套用。 */
   trigger: 'auto' | 'aiProposal';
-  requires?: { flags?: string[]; unitsAlive?: string[]; unitsDead?: string[]; mapIds?: string[] };
+  requires?: { flags?: string[]; unitsAlive?: string[]; unitsDead?: string[]; mapIds?: string[] } & FactionConditions;
   excludes?: { flags?: string[] };
   effects: {
     setFlags?: string[];
     clearFlags?: string[];
     worldModifiers?: { scope: WorldModifierScope; stat: UnitStatKey; op: 'add' | 'multiply'; value: number; durationMinutes?: number }[];
-  };
+  } & FactionEffects;
   knownBy: EventKnownBy;
+  /** knownBy 為 faction 時得知此事件的勢力。 */
+  knownByFactions?: string[];
   /** 公開的事件描述（發生了什麼）。 */
   summary: string;
   /** AI 提議事件的使用時機。 */
@@ -329,7 +415,7 @@ export type DeathCause = 'combat' | 'self_inflicted' | 'misadventure' | 'unknown
  */
 export interface WorldEvent {
   id: string;
-  type: 'unit_death' | 'unit_respawn' | 'quest_failed' | 'scenario_event';
+  type: 'unit_death' | 'unit_respawn' | 'unit_occupation' | 'quest_failed' | 'quest_transferred' | 'reputation_change' | 'scenario_event';
   gameTimeMinutes: number;
   mapId: string;
   summary: string;
@@ -337,13 +423,17 @@ export interface WorldEvent {
   knownBy: EventKnownBy;
   /** 事件發生時在場且存活的 NPC/魔物（目擊者）。 */
   witnessUnitIds: string[];
+  /** 得知此事件（至少公開結果）的勢力，依傳播範圍於寫入時決定。 */
+  awareFactionIds: string[];
   /** 觸發原因，例如「戰鬥」「條件成立自動觸發」「AI 提議」。 */
   cause: string;
   death?: { victimUnitId: string; victimName: string; cause: DeathCause; killerUnitId?: string; killerName?: string };
   /** 靜態事件 ID（scenario_event）。 */
   eventId?: string;
   /** 造成的改變。 */
-  changes?: { setFlags?: string[]; clearFlags?: string[]; modifierIds?: string[]; questIds?: string[]; unitIds?: string[] };
+  changes?: { setFlags?: string[]; clearFlags?: string[]; modifierIds?: string[]; questIds?: string[]; unitIds?: string[]; factionIds?: string[] };
+  /** 玩家聲望變化（勢力 ID 與變化量）。 */
+  reputationChanges?: { factionId: string; change: number }[];
 }
 
 /** 世界修正：一律為相對值（加減或倍率），疊加在公式數值之上，靜態數值調整後仍自動生效。 */
@@ -369,6 +459,8 @@ export interface WorldRuntimeState {
   firedEventIds: string[];
   /** 地區延後結算：玩家所在地區才結算，記錄上次補貨的遊戲日。 */
   regions: Record<string, { lastRestockDay: number }>;
+  /** 勢力間關係：只保存與 factions.json 初始值不同的組合，鍵為排序後的「勢力A|勢力B」。 */
+  factionRelations: Record<string, { status: FactionRelationStatus; tags: string[] }>;
 }
 
 /** 玩家動態存檔狀態 (寫入 LocalStorage) */
@@ -414,12 +506,16 @@ export interface PlayerState {
   defeatedMonsters: Record<string, number>;
   encounteredUnitId?: string;
   unitDispositionOverrides: Record<string, UnitDisposition>;
-  
+  /** 各勢力對目前角色的聲望（角色層；新角色依劇本初始值重置）。 */
+  factionReputation: Record<string, number>;
+
   // 當前進行中的任務
   activeQuests: {
     questId: string;
     status: 'in_progress' | 'completed' | 'failed';
     progress?: { defeatedMonsters: Record<string, number> };
+    /** 原委託人死亡後，由同勢力、同職階單位接手時的新委託人 ID。 */
+    giverUnitId?: string;
   }[];
   /** 進行中的戰鬥；怪物仍以專屬資料決定掉落與特殊招式。 */
   combat?: CombatState;
