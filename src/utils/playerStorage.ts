@@ -1,7 +1,7 @@
 import type { GameSession, PlayerState, StoryMessage } from '../types/game';
-import { createDefaultNpcWorldState, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getQuestById, getWorldUnitById, npcsDatabase, PLAYER_UNIT_ID } from '../data/staticData';
+import { createDefaultNpcWorldState, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getQuestById, getWorldUnitById, npcsDatabase, PLAYER_UNIT_ID, scenario } from '../data/staticData';
 import { createInitialPlayer } from './playerInit';
-import { GAME_START_MINUTES, isValidGameTime } from './gameTime';
+import { isValidGameTime } from './gameTime';
 
 const PLAYER_STORAGE_KEY = 'TRPG_PLAYER_STATE';
 const SESSION_STORAGE_KEY = 'TRPG_GAME_SESSION';
@@ -30,7 +30,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
       !isRecord(value.storyFlags) || !Object.values(value.storyFlags).every((flag) => typeof flag === 'boolean') ||
       !Array.isArray(value.activeQuests)) return null;
 
-  const classId = typeof value.classId === 'string' && getCharacterClassById(value.classId) ? value.classId : 'adventurer';
+  const classId = typeof value.classId === 'string' && getCharacterClassById(value.classId) ? value.classId : scenario.defaultPlayer.classId;
   const resourceCaps = getPlayerResourceCaps(value.level as number, classId);
   if ((value.hp as number) > resourceCaps.maxHp || (value.mp as number) > resourceCaps.maxMp) return null;
   const abilityKeys = ['str', 'dex', 'con', 'int', 'wis', 'cha'] as const;
@@ -170,7 +170,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     transactionHistory,
     currentMapId: value.currentMapId,
     ...(previousMapId ? { previousMapId } : {}),
-    gameTimeMinutes: isValidGameTime(value.gameTimeMinutes) ? value.gameTimeMinutes : GAME_START_MINUTES,
+    gameTimeMinutes: isValidGameTime(value.gameTimeMinutes) ? value.gameTimeMinutes : scenario.start.gameTimeMinutes,
     inventory,
     equipped,
     storyFlags: value.storyFlags as Record<string, boolean>,

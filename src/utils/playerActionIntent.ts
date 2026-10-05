@@ -1,3 +1,5 @@
+import { scenario } from '../data/staticData';
+
 const CHINESE_DIGITS: Record<string, number> = {
   '一': 1, '二': 2, '兩': 2, '三': 3, '四': 4, '五': 5,
   '六': 6, '七': 7, '八': 8, '九': 9, '十': 10
@@ -38,10 +40,15 @@ export function isSelfDamageIntent(actionText: string): boolean {
   return /(?:對自己|(?:傷害|攻擊|打|割傷|刺傷|劃傷|戳)自己|自殘|自傷|自己.{0,6}(?:造成傷害|受到傷害|受傷|流血|損血)|讓自己.{0,4}(?:受傷|流血|損血)|(?:我|角色).{0,6}(?:掉血|扣血|損血|HP下降|生命值下降)|(?:HP|血量|生命值).{0,5}(?:下降|減少|扣血|掉血)|(?:扣|減少|損失)(?:除)?\s*(?:掉)?\s*(?:自己|自身)?\s*\d+\s*(?:點|滴)(?:血|生命|HP))/u.test(actionText);
 }
 
+/** 比對時忽略大小寫、空白與連字號，讓「AK 47」與劇本設定的「AK-47」視為同一詞。 */
+const normalizeItemTerm = (text: string): string => text.toLocaleLowerCase().replace(/[\s\-‐–—]+/gu, '');
+
 export function unsupportedInventoryItemRequested(actionText: string): string | undefined {
   if (/(?:有沒有|是否|能不能|可不可以|怎麼取得|哪裡有|資訊|資料)/u.test(actionText)) return undefined;
-  const item = actionText.match(/手榴彈|巴雷特|AK\s*[- ]?\s*47/iu)?.[0];
+  const normalizedAction = normalizeItemTerm(actionText);
+  const item = scenario.anachronisticItemTerms.find((term) => normalizedAction.includes(normalizeItemTerm(term)));
   if (!item) return undefined;
-  if (!/(?:掏出|拿出|取出|使用|裝備|拔出|丟出|投擲|射擊|開槍|給我|我要|我想要|取得|來一把)/u.test(actionText) && actionText.trim() !== item) return undefined;
-  return item.toUpperCase().replace(/\s+/g, ' ');
+  if (!/(?:掏出|拿出|取出|使用|裝備|拔出|丟出|投擲|射擊|開槍|給我|我要|我想要|取得|來一把)/u.test(actionText) &&
+      normalizedAction !== normalizeItemTerm(item)) return undefined;
+  return item;
 }

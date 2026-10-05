@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import type { CharacterAlignment } from '../types/game';
-import { characterClassesDatabase, getItemById } from '../data/staticData';
+import { characterClassesDatabase, getItemById, scenario } from '../data/staticData';
 
 const alignments: CharacterAlignment[] = [
   '守序善良', '中立善良', '混亂善良', '守序中立', '絕對中立', '混亂中立', '守序邪惡', '中立邪惡', '混亂邪惡'
@@ -11,9 +11,9 @@ interface CharacterSetupProps {
 }
 
 export function CharacterSetup({ onCreate }: CharacterSetupProps) {
-  const [name, setName] = useState('亞瑟');
-  const [classId, setClassId] = useState('adventurer');
-  const [alignment, setAlignment] = useState<CharacterAlignment>('絕對中立');
+  const [name, setName] = useState(scenario.defaultPlayer.name);
+  const [classId, setClassId] = useState(scenario.defaultPlayer.classId);
+  const [alignment, setAlignment] = useState<CharacterAlignment>(scenario.defaultPlayer.alignment);
   const characterClass = characterClassesDatabase.find((entry) => entry.id === classId) ?? characterClassesDatabase[0];
 
   const submit = (event: FormEvent<HTMLFormElement>) => {

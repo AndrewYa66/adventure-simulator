@@ -1,6 +1,6 @@
 import type { PlayerState, AIResponsePayload } from '../types/game';
 import type { AIModelSettings } from './aiModels';
-import { canPlayerEnterMap, getItemById, getMapById, getNpcCategoryById, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, questsDatabase } from '../data/staticData';
+import { canPlayerEnterMap, getItemById, getMapById, getNpcCategoryById, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, questsDatabase, scenario } from '../data/staticData';
 import { canAcceptQuest, canTurnInQuest } from '../utils/questRules';
 import { getPlayerWorldUnit } from '../utils/worldUnits';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from '../utils/travelIntent';
@@ -194,7 +194,7 @@ export async function sendPlayerAction(
   }
 
   const systemPrompt = `
-你是一位中世紀奇幻 TRPG 的遊戲主持人 (GM)。
+${scenario.gmRole}
 當前玩家狀態：
 - 姓名: ${playerState.name} (Lv.${playerState.level})
 - 玩家單位 ID: ${playerUnit.id} | 有效戰鬥數值: ${JSON.stringify(playerUnit.stats)}（玩家不是 NPC/魔物，不可出現在 unitDispositionChanges、encounterRequest 或戰鬥目標）
@@ -232,7 +232,7 @@ export async function sendPlayerAction(
 - 任務只能從「當前可接取任務」中接受。玩家明確表示接取/接受某任務時，才在 stateChanges.questAcceptances 填入對應 ID；不可因詢問細節、委託描述或含糊回覆而接取。不可自行建立任務、改寫需求或獎勵。
 - 任務接取由遊戲端再次驗證所在地、任務給予者是否在場及任務是否已接取/完成；不可只在 storyText 宣稱已接取。
 - 任務僅能在上列可交付清單內回報完成。交付道具由程式轉入 NPC 持有物，任務獎勵金幣與物品從任務給予者的實際持有物中發放，不足時只發可取得部分並明確說明短缺。
-- 玩家不能取得物品資料庫或在場 NPC 持有物中不存在的道具；不得透過敘事生成手榴彈、槍械、裝備或消耗品。npcItemTransfers 僅能列出當前在場 NPC 與靜態物品 ID，且只在玩家明確偷取、拾取或接受贈與時使用。
+- 玩家不能取得物品資料庫或在場 NPC 持有物中不存在的道具；不得透過敘事生成不屬於本世界觀的物品（例如 ${scenario.anachronisticItemTerms.join('、')}）、裝備或消耗品。npcItemTransfers 僅能列出當前在場 NPC 與靜態物品 ID，且只在玩家明確偷取、拾取或接受贈與時使用。
 - 任何會持續改變玩家或世界狀態的行動，都必須在同一回應填入對應的結構化欄位；若沒有合法狀態欄位可套用，只能描述尚未完成的嘗試或詢問玩家，不可在敘事中宣稱效果已生效。
 - 玩家沒有劇情保護。合理危險、檢定失敗或敵方有效攻擊可以使 HP 降至 0；不得為避免死亡而竄改檢定結果、取消已成立的傷害或在 storyText 宣稱玩家倖存。HP 歸零就是死亡，不是昏迷；只有明確套用 unconscious 狀態才代表昏迷。
 - 非戰鬥行動若有風險且失敗會造成實質後果，依最相關能力提出 checkRequest（atk/def/spd 或 str/dex/con/int/wis/cha），在成功/失敗分支填入相應 HP/MP 變化。玩家明確提出自我傷害等會直接改變資源的行動時，必須依其明確數值回報變化，並照常套用 HP 歸零死亡規則。
@@ -243,7 +243,7 @@ export async function sendPlayerAction(
 - 玩家在對話中明確要求攻擊目前地區的敵人時，不可假裝攻擊已命中、敵人已受傷或已被擊敗；戰鬥與獎勵由遊戲端確定性規則處理，若無法由遊戲端執行，只能說明尚未發起戰鬥。
 - 不可在敘事中宣稱玩家已使用消耗品、恢復 HP/MP 或已取得金幣/經驗/掉落物，除非對應狀態變更已由遊戲端結算。
 注意事項：
-1. 當給予或扣除玩家道具時，請使用 Item ID (例如: "ITEM-001" 小型生命藥水, "ITEM-002" 哥布林耳朵, "ITEM-101" 精鋼短劍, "ITEM-201" 冒險者皮甲)。
+1. 當給予或扣除玩家道具時，只可使用上方「世界靜態物品清單」中的 Item ID。
 2. 只有結果不確定且失敗會有實質影響時才要求檢定；一般對話、觀察或無風險行動不擲骰。
 3. 檢定使用 checkRequest {"stat":"atk|def|spd|str|dex|con|int|wis|cha","dc":5至25,"reason":"理由"}。不可在 storyText 中預先宣告檢定成功或失敗。
 4. 有檢定時必須提供 checkOutcomes.successText 與 checkOutcomes.failureText。stateChanges 只會在檢定成功時套用；需要描述失敗時的代價可用 failureStateChanges。
@@ -263,11 +263,11 @@ export async function sendPlayerAction(
     "mpChange": 0,
     "expChange": 0,
     "goldChange": 0,
-    "addItems": [{"itemId": "ITEM-001", "quantity": 1}],
+    "addItems": [{"itemId": "<物品 ID>", "quantity": 1}],
     "removeItems": [],
     "defeatedMonsters": [],
-    "setFlags": {"MET_VILLAGE_CHIEF": true},
-    "questUpdates": [{"questId": "QST-001", "status": "completed"}],
+    "setFlags": {"<劇情旗標>": true},
+    "questUpdates": [{"questId": "<任務 ID>", "status": "completed"}],
     "questAcceptances": [],
     "npcItemTransfers": [],
     "unitDispositionChanges": []

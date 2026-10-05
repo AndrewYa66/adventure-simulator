@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import type { ActionCheckResult, StoryMessage } from '../types/game';
 import { STAT_LABELS } from '../utils/gameChecks';
+import { scenario } from '../data/staticData';
 
 interface StoryLogProps {
   messages: StoryMessage[];
@@ -103,7 +104,7 @@ export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAct
           value={inputAction}
           onChange={(e) => setInputAction(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-          placeholder="自由輸入你的行動（例如：拔出短劍朝哥布林砍去...）"
+          placeholder={scenario.inputPlaceholder}
           disabled={loading || combatActive || inputDisabled}
           style={{ flex: 1, padding: '10px', borderRadius: '4px', border: '1px solid #444', backgroundColor: '#121212', color: '#fff' }}
         />

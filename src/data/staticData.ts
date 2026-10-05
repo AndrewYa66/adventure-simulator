@@ -8,6 +8,7 @@ import type {
   NpcWorldState,
   PlayerGrowthStatic,
   QuestStatic,
+  ScenarioStatic,
   ShopStatic,
   UnitDisposition,
   WorldUnitStatic
@@ -22,6 +23,7 @@ import rawNpcs from './npcs.json';
 import rawPlayerGrowth from './player_growth.json';
 import rawQuests from './quests.json';
 import rawShops from './shops.json';
+import rawScenario from './scenario.json';
 
 // 進行靜態型別轉型，確保導出的資料陣列完全符合 DTO 規範
 export const itemsDatabase: ItemStatic[] = rawItems as ItemStatic[];
@@ -33,6 +35,7 @@ export const npcsDatabase: NpcStatic[] = rawNpcs as NpcStatic[];
 export const playerGrowthDatabase: PlayerGrowthStatic[] = rawPlayerGrowth as PlayerGrowthStatic[];
 export const questsDatabase: QuestStatic[] = rawQuests as QuestStatic[];
 export const shopsDatabase: ShopStatic[] = rawShops as ShopStatic[];
+export const scenario: ScenarioStatic = rawScenario as ScenarioStatic;
 
 /** 玩家的穩定單位 ID；NPC/魔物資料不得使用此 ID。 */
 export const PLAYER_UNIT_ID = 'PLAYER-001';

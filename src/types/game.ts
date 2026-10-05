@@ -4,8 +4,8 @@
 
 /** 道具靜態資料 (來自 items.json) */
 export interface ItemStatic {
-  id: string;             // 例如: "ITEM-001"
-  name: string;           // 例如: "小型生命藥水"
+  id: string;             // 格式: "ITEM-xxx"
+  name: string;           // 顯示名稱
   type: 'consumable' | 'weapon' | 'armor' | 'accessory' | 'quest';
   usableInCombat: boolean;
   effect: {
@@ -177,9 +177,29 @@ export interface TransactionRecord {
   timestamp: number;
 }
 
+/** 劇本設定 (來自 scenario.json)：開場、起始狀態等劇本專屬內容，替換此檔即可更換劇本開場。 */
+export interface ScenarioStatic {
+  id: string;
+  title: string;
+  /** 主持人 AI 的角色與世界觀定位，置於系統指令開頭。 */
+  gmRole: string;
+  start: { mapId: string; gold: number; gameTimeMinutes: number };
+  defaultPlayer: { name: string; classId: string; alignment: CharacterAlignment };
+  opening: {
+    introText: string;
+    resetText: string;
+    /** 可使用 {name}、{className} 佔位字。 */
+    newCharacterText: string;
+    suggestedActions: string[];
+  };
+  inputPlaceholder: string;
+  /** 不屬於此世界觀、玩家不可憑空取出的物品詞彙。 */
+  anachronisticItemTerms: string[];
+}
+
 /** 地圖靜態資料 (來自 maps.json) */
 export interface MapStatic {
-  id: string;             // 例如: "MAP-001"
+  id: string;             // 格式: "MAP-xxx"
   name: string;
   enName: string;
   recommendedLevel: string;
@@ -197,7 +217,7 @@ export interface MapStatic {
 
 /** 任務靜態資料 (來自 quests.json) */
 export interface QuestStatic {
-  id: string;             // 例如: "QST-001"
+  id: string;             // 格式: "QST-xxx"
   title: string;
   questGiverId: string;
   questGiver: string;

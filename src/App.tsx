@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ActionCheckResult, PlayerGrowthStatic, PlayerState, StoryMessage, WorldUnitStatic } from './types/game';
 import { loadGameSession, resetPlayerState, saveGameSession } from './utils/playerStorage';
 import { applyStateChanges } from './utils/applyStateChanges';
-import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getQuestById, getShopById, getUnlockedSkillsByLevel, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase } from './data/staticData';
+import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getQuestById, getShopById, getUnlockedSkillsByLevel, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, scenario } from './data/staticData';
 import { getPlayerStatBreakdown, resolveActionCheck } from './utils/gameChecks';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from './utils/travelIntent';
 import { sendPlayerAction } from './services/aiService';
@@ -78,6 +78,10 @@ function createRestoreNotice(player: PlayerState, savedAt: number, messageCount:
   };
 }
 
+function createOpeningMessage(id: string, text: string): StoryMessage {
+  return { id, sender: 'ai', text, options: [...scenario.opening.suggestedActions], timestamp: new Date().toLocaleTimeString() };
+}
+
 export default function App() {
   const [initialSession] = useState(loadGameSession);
   const [modelSettings, setModelSettings] = useState<AIModelSettings>(loadAIModelSettings);
@@ -94,15 +98,7 @@ export default function App() {
 
   const [messages, setMessages] = useState<StoryMessage[]>(initialSession.resumed
     ? [createRestoreNotice(initialSession.player, initialSession.savedAt!, initialSession.messages.filter((message) => message.id !== 'session-restore-notice').length), ...initialSession.messages.filter((message) => message.id !== 'session-restore-notice')]
-    : initialSession.messages.length ? initialSession.messages : [
-    {
-      id: '1',
-      sender: 'ai',
-      text: '你站在橡木村的微風旅館門口，陽光微微灑落。村長埃爾德正在公會告示板前發布關於野外哥布林襲擊的委託。你準備好開啟冒險了嗎？',
-      options: ['向村長詢問任務細節', '前往綠林古道探索', '檢查背包裝備'],
-      timestamp: new Date().toLocaleTimeString()
-    }
-  ]);
+    : initialSession.messages.length ? initialSession.messages : [createOpeningMessage('1', scenario.opening.introText)]);
   const [loading, setLoading] = useState(false);
 
   const updatePlayer = (nextPlayer: PlayerState) => {
@@ -128,26 +124,17 @@ export default function App() {
     if (!window.confirm('確定要清除目前角色存檔並重新開始嗎？')) return;
     updatePlayer(resetPlayerState());
     setIsCharacterSetupOpen(true);
-    setMessages([{
-      id: Date.now().toString(),
-      sender: 'ai',
-      text: '新的冒險即將開始。你站在橡木村的微風旅館門口，村長正等待冒險者前來。',
-      options: ['向村長詢問任務細節', '前往綠林古道探索', '檢查背包裝備'],
-      timestamp: new Date().toLocaleTimeString()
-    }]);
+    setMessages([createOpeningMessage(Date.now().toString(), scenario.opening.resetText)]);
   };
 
   const handleCreateCharacter = (name: string, classId: string, alignment: CharacterAlignment) => {
     const newPlayer = createInitialPlayer(name, classId, alignment, true);
     updatePlayer(newPlayer);
     setIsCharacterSetupOpen(false);
-    setMessages([{
-      id: `${Date.now()}`,
-      sender: 'ai',
-      text: `新的冒險即將開始。${name}（${getCharacterClassById(classId)?.name ?? classId}）來到橡木村，村長埃爾德正在公會告示板前等候冒險者。`,
-      options: ['向村長詢問任務細節', '前往綠林古道探索', '檢查背包裝備'],
-      timestamp: new Date().toLocaleTimeString()
-    }]);
+    const text = scenario.opening.newCharacterText
+      .replaceAll('{name}', name)
+      .replaceAll('{className}', getCharacterClassById(classId)?.name ?? classId);
+    setMessages([createOpeningMessage(`${Date.now()}`, text)]);
   };
 
   const movePlayerTo = (mapId: string, sourcePlayer: PlayerState = player) => {

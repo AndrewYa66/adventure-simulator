@@ -2,9 +2,6 @@ import type { PlayerState } from '../types/game';
 
 const MINUTES_PER_DAY = 24 * 60;
 
-/** 新世界起始時間：第 1 天 08:00（以自世界開始經過的分鐘數保存）。 */
-export const GAME_START_MINUTES = 8 * 60;
-
 /** 依「已確認的設計決策」：每種行動固定耗時（分鐘），不由 AI 決定。 */
 export const ACTION_DURATIONS = {
   dialogue: 10,

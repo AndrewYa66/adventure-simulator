@@ -1,15 +1,14 @@
 import type { CharacterAlignment, PlayerState } from '../types/game';
-import { createDefaultNpcWorldState, getCharacterClassById, getPlayerResourceCaps, npcsDatabase, PLAYER_UNIT_ID } from '../data/staticData';
-import { GAME_START_MINUTES } from './gameTime';
+import { createDefaultNpcWorldState, getCharacterClassById, getPlayerResourceCaps, npcsDatabase, PLAYER_UNIT_ID, scenario } from '../data/staticData';
 
 /** 建立預設新玩家存檔 */
 export const createInitialPlayer = (
-  playerName = '亞瑟',
-  classId = 'adventurer',
-  alignment: CharacterAlignment = '絕對中立',
+  playerName = scenario.defaultPlayer.name,
+  classId = scenario.defaultPlayer.classId,
+  alignment: CharacterAlignment = scenario.defaultPlayer.alignment,
   setupComplete = false
 ): PlayerState => {
-  const characterClass = getCharacterClassById(classId) ?? getCharacterClassById('adventurer')!;
+  const characterClass = getCharacterClassById(classId) ?? getCharacterClassById(scenario.defaultPlayer.classId)!;
   const caps = getPlayerResourceCaps(1, characterClass.id);
 
   return {
@@ -25,11 +24,11 @@ export const createInitialPlayer = (
     exp: 0,
     hp: caps.maxHp,
     mp: caps.maxMp,
-    gold: 50,
+    gold: scenario.start.gold,
     npcStates: Object.fromEntries(npcsDatabase.map((npc) => [npc.id, createDefaultNpcWorldState(npc)])),
     transactionHistory: [],
-    currentMapId: 'MAP-001',
-    gameTimeMinutes: GAME_START_MINUTES,
+    currentMapId: scenario.start.mapId,
+    gameTimeMinutes: scenario.start.gameTimeMinutes,
     inventory: characterClass.startingItems.map((entry) => ({ ...entry })),
     equipped: { ...characterClass.startingEquipment },
     storyFlags: {},
