@@ -6,7 +6,7 @@ import type {
   MapStatic,
   MonsterStatic,
   NpcStatic,
-  NpcWorldState,
+  UnitInstance,
   PlayerState,
   QuestStatic,
   ScenarioStatic,
@@ -163,23 +163,41 @@ const toUnitBase = (unit: NpcStatic | MonsterStatic) => ({
   speciesId: unit.speciesId, classId: unit.classId, level: unit.level, statAdjustments: unit.statAdjustments
 });
 
-/** Shared lookup adapter. Legacy NPC/monster records and their IDs remain unchanged. */
-export const getWorldUnitById = (id: string): WorldUnitStatic | undefined => {
+/** 所有 NPC/魔物單位樣板（UnitTemplate）。 */
+export const unitTemplatesDatabase = (): (NpcStatic | MonsterStatic)[] => [...npcsDatabase, ...monstersDatabase];
+
+type UnitInstanceSource = Record<string, Pick<UnitInstance, 'level'>> | undefined;
+
+/**
+ * Shared lookup adapter. Legacy NPC/monster records and their IDs remain unchanged.
+ * 傳入存檔的 unitInstances 時，數值與擊倒獎勵依實例目前等級計算；否則使用樣板等級。
+ */
+export const getWorldUnitById = (id: string, instances?: UnitInstanceSource): WorldUnitStatic | undefined => {
   const npc = getNpcById(id);
   const monster = getMonsterById(id);
   if (Boolean(npc) === Boolean(monster)) return undefined;
   const template = (npc ?? monster)!;
-  const stats = getUnitBuildStats(template);
+  const level = instances?.[id]?.level ?? template.level;
+  const build = { ...template, level };
+  const stats = getUnitBuildStats(build);
   if (!stats) return undefined;
-  const expReward = getUnitExpReward(template);
+  const expReward = getUnitExpReward(build);
 
   if (npc) {
-    return { ...toUnitBase(npc), kind: 'npc', title: npc.title, stats, expReward, mapIds: [npc.mapId], source: npc };
+    return { ...toUnitBase(npc), level, kind: 'npc', title: npc.title, stats, expReward, mapIds: [npc.mapId], source: npc };
   }
 
   const mapIds = mapsDatabase.filter((map) => map.monstersPresent.includes(monster!.id)).map((map) => map.id);
-  return { ...toUnitBase(monster!), kind: 'monster', stats, expReward, mapIds, source: monster! };
+  return { ...toUnitBase(monster!), level, kind: 'monster', stats, expReward, mapIds, source: monster! };
 };
+
+/** 單位成長上限：魔物受出沒地區限制，NPC 以基準表最高等級為限。 */
+export const getUnitLevelCap = (unitId: string): number =>
+  getMonsterById(unitId) ? getMonsterLevelCap(unitId) : MAX_UNIT_LEVEL;
+
+/** 到達某等級所需的累計經驗（實例初始經驗）。 */
+export const getBaseExpForLevel = (level: number): number =>
+  level > 1 ? getLevelBenchmark(level - 1)?.requiredExp ?? 0 : 0;
 
 /** 單位的種族/職階顯示名稱，例如「哥布林・斥候 Lv.1」。 */
 export const describeUnitBuild = (build: UnitBuild): string => {
@@ -188,22 +206,30 @@ export const describeUnitBuild = (build: UnitBuild): string => {
   return `${className ? `${speciesName}・${className}` : speciesName} Lv.${build.level}`;
 };
 
-/** NPC 動態狀態預設值；新存檔建立與舊存檔補欄位共用。 */
-export const createDefaultNpcWorldState = (npc: NpcStatic): NpcWorldState => ({
-  gold: npc.startingGold ?? 0,
-  inventory: (npc.startingInventory ?? []).flatMap((entry) =>
-    getItemById(entry.itemId) && Number.isInteger(entry.quantity) && entry.quantity > 0 ? [{ ...entry }] : []),
-  currentHp: getWorldUnitById(npc.id)?.stats.hp ?? 1,
-  isDead: false
-});
+/** 單位實例預設值（取自樣板）；新存檔建立與舊存檔補欄位共用。 */
+export const createDefaultUnitInstance = (template: NpcStatic | MonsterStatic): UnitInstance => {
+  const npc = 'mapId' in template ? template : undefined;
+  return {
+    level: template.level,
+    exp: getBaseExpForLevel(template.level),
+    gold: npc?.startingGold ?? 0,
+    inventory: (npc?.startingInventory ?? []).flatMap((entry) =>
+      getItemById(entry.itemId) && Number.isInteger(entry.quantity) && entry.quantity > 0 ? [{ ...entry }] : []),
+    currentHp: getWorldUnitById(template.id)?.stats.hp ?? 1,
+    isDead: false
+  };
+};
+
+export const createDefaultUnitInstances = (): Record<string, UnitInstance> =>
+  Object.fromEntries(unitTemplatesDatabase().map((template) => [template.id, createDefaultUnitInstance(template)]));
 
 /** Return the normalized units referenced by a map, preserving NPC and monster order. */
-export const getWorldUnitsAtMap = (mapId: string): WorldUnitStatic[] => {
+export const getWorldUnitsAtMap = (mapId: string, instances?: UnitInstanceSource): WorldUnitStatic[] => {
   const map = getMapById(mapId);
   if (!map) return [];
   return [...map.npcsPresent, ...map.monstersPresent]
     .flatMap((unitId) => {
-      const unit = getWorldUnitById(unitId);
+      const unit = getWorldUnitById(unitId, instances);
       return unit ? [unit] : [];
     });
 };

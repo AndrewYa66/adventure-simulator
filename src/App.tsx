@@ -18,11 +18,13 @@ import { createInitialPlayer } from './utils/playerInit';
 import { isSelfDamageIntent, parseExplicitSelfDamage, unsupportedInventoryItemRequested } from './utils/playerActionIntent';
 import { buyItem, purchaseService, sellItem } from './utils/tradeRules';
 import { advanceGameTime, formatGameTime } from './utils/gameTime';
+import { grantUnitExp } from './utils/unitProgress';
+import { getPlayerWorldUnit } from './utils/worldUnits';
 import type { CharacterAlignment } from './types/game';
 
 function withNpcHp(player: PlayerState, npcId: string, currentHp: number, isDead = false): PlayerState {
-  const state = player.npcStates[npcId];
-  return { ...player, npcStates: { ...player.npcStates, [npcId]: { ...state, currentHp, isDead } } };
+  const state = player.unitInstances[npcId];
+  return { ...player, unitInstances: { ...player.unitInstances, [npcId]: { ...state, currentHp, isDead } } };
 }
 
 function resolveEnemyTurn(player: PlayerState, combat: NonNullable<PlayerState['combat']>, unit: WorldUnitStatic) {
@@ -43,20 +45,24 @@ function resolveEnemyTurn(player: PlayerState, combat: NonNullable<PlayerState['
   const unconsciousTurns = !isDead && !check.success ? action?.applyUnconsciousTurnsOnFailure ?? 0 : 0;
   const statusEffects = player.statusEffects.filter((effect) => effect.id !== 'unconscious');
   if (unconsciousTurns > 0) statusEffects.push({ id: 'unconscious', remainingTurns: unconsciousTurns });
+  // 擊倒玩家的單位依同一規則獲得玩家的擊倒經驗，並可能升級。
+  const victorGrowth = isDead ? grantUnitExp(player.unitInstances, unit.id, getPlayerWorldUnit(player).expReward) : undefined;
   const nextPlayer: PlayerState = {
     ...player, hp, isDead, statusEffects,
+    ...(victorGrowth ? { unitInstances: victorGrowth.instances } : {}),
     ...(isDead ? { encounteredUnitId: undefined } : {}),
     ...(isDead ? { combat: undefined } : { combat: { ...combat, round: combat.round + 1 } })
   };
   const result = check.success
     ? action ? `你成功閃過${special?.name}。` : `你成功閃避${unit.name}的反擊。`
     : `${action ? `${special?.name}命中` : `${unit.name}反擊命中`}，你受到 ${damage} 點傷害。${unconsciousTurns ? `你陷入昏迷 ${unconsciousTurns} 回合。` : ''}`;
-  return { player: nextPlayer, check, text: `${result}${isDead ? '\n☠️ HP 歸零，你已死亡。' : `\n第 ${combat.round + 1} 回合開始。`}` };
+  const victorLevelText = victorGrowth && victorGrowth.level > victorGrowth.previousLevel ? `\n📈 ${unit.name}升至 Lv.${victorGrowth.level}。` : '';
+  return { player: nextPlayer, check, text: `${result}${isDead ? `\n☠️ HP 歸零，你已死亡。${victorLevelText}` : `\n第 ${combat.round + 1} 回合開始。`}` };
 }
 
 function createRestoreNotice(player: PlayerState, savedAt: number, messageCount: number): StoryMessage {
   const map = getMapById(player.currentMapId);
-  const combatUnit = player.combat ? getWorldUnitById(player.combat.unitId) : undefined;
+  const combatUnit = player.combat ? getWorldUnitById(player.combat.unitId, player.unitInstances) : undefined;
   const activeQuests = player.activeQuests.filter((quest) => quest.status === 'in_progress')
     .map((quest) => getQuestById(quest.questId)?.title ?? quest.questId);
   const inventory = player.inventory.map((entry) => `${getItemById(entry.itemId)?.name ?? entry.itemId} ×${entry.quantity}`);
@@ -245,10 +251,10 @@ export default function App() {
 
   const handleStartCombat = (unitId: string) => {
     const map = getMapById(player.currentMapId);
-    const unit = getWorldUnitById(unitId);
+    const unit = getWorldUnitById(unitId, player.unitInstances);
     const present = unit?.mapIds.includes(player.currentMapId) && (unit.kind === 'npc' ? map?.npcsPresent.includes(unitId) : map?.monstersPresent.includes(unitId));
     const monster = unit?.kind === 'monster' ? unit.source : undefined;
-    const npcState = unit?.kind === 'npc' ? player.npcStates[unit.id] : undefined;
+    const npcState = unit?.kind === 'npc' ? player.unitInstances[unit.id] : undefined;
     if (player.combat || !canPlayerAct(player) || !map || !unit || !present || getWorldUnitDisposition(player, unitId) !== 'hostile' ||
         (unit.kind === 'monster' && (map.isSafeZone || player.encounteredUnitId !== unitId || (monster?.requiredQuestId && !player.activeQuests.some((quest) => quest.questId === monster.requiredQuestId && quest.status === 'in_progress')))) ||
         (unit.kind === 'npc' && (npcState?.isDead || npcState?.currentHp === 0))) return;
@@ -259,7 +265,7 @@ export default function App() {
 
   const handleFleeCombat = () => {
     if (!player.combat || !canPlayerAct(player)) return;
-    const combatUnit = getWorldUnitById(player.combat.unitId);
+    const combatUnit = getWorldUnitById(player.combat.unitId, player.unitInstances);
     const outOfCombat = { ...player };
     delete outOfCombat.combat;
     delete outOfCombat.encounteredUnitId;
@@ -269,7 +275,7 @@ export default function App() {
 
   const handleCombatAction = (skill?: SkillStatic, sourcePlayer: PlayerState = player) => {
     const combat = sourcePlayer.combat;
-    const unit = combat ? getWorldUnitById(combat.unitId) : undefined;
+    const unit = combat ? getWorldUnitById(combat.unitId, sourcePlayer.unitInstances) : undefined;
     if (!combat || !unit || sourcePlayer.isDead) return;
     if (isPlayerUnconscious(sourcePlayer)) {
       const recovered = { ...advanceGameTime(sourcePlayer, 'combatRound'), statusEffects: sourcePlayer.statusEffects.filter((effect) => effect.id !== 'unconscious'), combat: { ...combat } };
@@ -396,7 +402,7 @@ export default function App() {
       return;
     }
 
-    const combatUnit = getWorldUnitById(player.combat.unitId);
+    const combatUnit = getWorldUnitById(player.combat.unitId, player.unitInstances);
     if (!combatUnit) return;
     const combatNext = combatUnit.kind === 'npc' ? withNpcHp(next, combatUnit.id, player.combat.currentHp) : next;
     const enemyTurn = resolveEnemyTurn({ ...combatNext, combat: player.combat }, player.combat, combatUnit);
@@ -443,9 +449,9 @@ export default function App() {
     const attackIntent = !isQuestion && /(?:攻擊|攻打|打倒|擊倒|砍向|砍|刺向|刺|揮擊|attack|strike|fight)/iu.test(actionText) && !/(?:攻擊自己|打自己|刺自己|砍自己)/u.test(actionText);
     if (attackIntent && canPlayerAct(player)) {
       const map = getMapById(player.currentMapId);
-      const available = getWorldUnitsAtMap(player.currentMapId).filter((unit) => unit.kind === 'monster' || !player.npcStates[unit.id]?.isDead);
+      const available = getWorldUnitsAtMap(player.currentMapId, player.unitInstances).filter((unit) => unit.kind === 'monster' || !player.unitInstances[unit.id]?.isDead);
       const matched = available.filter((unit) => actionText.includes(unit.name) || actionText.includes(unit.id) || (unit.kind === 'monster' && actionText.toLowerCase().includes(unit.source.enName.toLowerCase())));
-      const encountered = player.encounteredUnitId ? getWorldUnitById(player.encounteredUnitId) : undefined;
+      const encountered = player.encounteredUnitId ? getWorldUnitById(player.encounteredUnitId, player.unitInstances) : undefined;
       const target = matched.length === 1 ? matched[0] : matched.length === 0 ? encountered : undefined;
       const userMessage: StoryMessage = { id: `${Date.now()}-user`, sender: 'user', text: actionText, timestamp: new Date().toLocaleTimeString() };
       if (!player.combat && (!map || !target)) {
@@ -473,7 +479,7 @@ export default function App() {
           appendSystemMessage(`你尚未遭遇${target.name}；請先探索，等實際遭遇後再攻擊。`);
           return;
         }
-        const currentHp = target.kind === 'npc' ? provokedPlayer.npcStates[target.id]?.currentHp ?? target.stats.hp : target.stats.hp;
+        const currentHp = target.kind === 'npc' ? provokedPlayer.unitInstances[target.id]?.currentHp ?? target.stats.hp : target.stats.hp;
         const combatPlayer: PlayerState = { ...provokedPlayer, encounteredUnitId: target.id, combat: { unitId: target.id, currentHp, round: 1 } };
         appendSystemMessage(`你${provokedPlayer === player ? '與' : '激怒並與'}已遭遇的${target.name}進入戰鬥！`);
         handleCombatAction(undefined, combatPlayer);

@@ -190,7 +190,14 @@ export interface ShopStatic {
   services?: { id: string; name: string; price: number; kind: 'restore_resources'; description: string }[];
 }
 
-export interface NpcWorldState {
+/**
+ * 單位實例（UnitInstance）：世界中實際存在、可成長的個體，保存於存檔；靜態樣板只提供初始值。
+ * NPC 與魔物皆有實例；魔物樣板代表在該地區出沒的同一群個體，HP 以戰鬥狀態追蹤。
+ */
+export interface UnitInstance {
+  level: number;
+  /** 累計經驗值；以等級基準表的門檻判定升級。 */
+  exp: number;
   gold: number;
   inventory: { itemId: string; quantity: number }[];
   currentHp?: number;
@@ -287,7 +294,8 @@ export interface PlayerState {
   hp: number;
   mp: number;
   gold: number;
-  npcStates: Record<string, NpcWorldState>;
+  /** NPC 與魔物的實例狀態；舊存檔的 npcStates 載入時遷移至此。O37/O29 會移至世界存檔。 */
+  unitInstances: Record<string, UnitInstance>;
   transactionHistory: TransactionRecord[];
   currentMapId: string;
   previousMapId?: string;

@@ -31,7 +31,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
   const unlockedSkills = getUnlockedSkills(player.classId, player.level);
 
   const currentMap = getMapById(player.currentMapId);
-  const presentNpcs = getWorldUnitsAtMap(player.currentMapId).filter((unit) => unit.kind === 'npc');
+  const presentNpcs = getWorldUnitsAtMap(player.currentMapId, player.unitInstances).filter((unit) => unit.kind === 'npc');
   const weapon = player.equipped.weaponItemId ? getItemById(player.equipped.weaponItemId) : null;
   const armor = player.equipped.armorItemId ? getItemById(player.equipped.armorItemId) : null;
   const combatStats = (['atk', 'def', 'spd'] as const).map((stat) => ({
@@ -148,7 +148,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
           const npc = unit.source;
           const stats = unit.stats;
           const disposition = getWorldUnitDisposition(player, unit.id);
-          const npcState = player.npcStates[npc.id];
+          const npcState = player.unitInstances[npc.id];
           const dispositionLabel = disposition === 'friendly' ? '友善' : disposition === 'hostile' ? '敵對' : '中立';
           return <div key={npc.id} style={{ marginBottom: '7px', fontSize: '12px' }}>
             <strong>{npc.name}・{npc.title}</strong>
@@ -166,7 +166,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
                   const item = getItemById(listing.itemId);
                   if (!item) return null;
                   const price = listing.buyPrice ?? item.buyPrice;
-                  const stock = player.npcStates[npc.id]?.inventory.find((entry) => entry.itemId === item.id)?.quantity ?? 0;
+                  const stock = player.unitInstances[npc.id]?.inventory.find((entry) => entry.itemId === item.id)?.quantity ?? 0;
                   return <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '4px', marginTop: '4px' }}>
                     <span>{item.name} · {price} 金幣 · 庫存 {stock}</span>
                     <button disabled={unavailable || player.gold < price || stock <= 0} onClick={() => onBuyItem(shop.id, item.id)}>購買</button>
@@ -196,7 +196,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
       <div>
         <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #444' }}>👹 遭遇</h4>
         {player.combat ? (() => {
-          const unit = getWorldUnitById(player.combat.unitId);
+          const unit = getWorldUnitById(player.combat.unitId, player.unitInstances);
           return <div>
             <div style={{ marginBottom: '6px' }}>{unit?.name || player.combat.unitId} HP {player.combat.currentHp}/{unit?.stats.hp}</div>
             <div style={{ color: '#aaa', fontSize: '11px', marginBottom: '8px' }}>第 {player.combat.round} 回合</div>
@@ -205,7 +205,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
             <button onClick={onFleeCombat} disabled={!canPlayerAct(player)} style={{ padding: '6px 10px', cursor: canPlayerAct(player) ? 'pointer' : 'not-allowed' }}>脫離戰鬥</button>
           </div>;
         })() : (() => {
-          const unit = player.encounteredUnitId ? getWorldUnitById(player.encounteredUnitId) : undefined;
+          const unit = player.encounteredUnitId ? getWorldUnitById(player.encounteredUnitId, player.unitInstances) : undefined;
           const monster = unit?.kind === 'monster' ? unit : undefined;
           const disposition = monster ? getWorldUnitDisposition(player, monster.id) : undefined;
           const dispositionLabel = disposition === 'friendly' ? '友善' : disposition === 'hostile' ? '敵對' : '中立';

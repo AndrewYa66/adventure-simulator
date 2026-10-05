@@ -164,7 +164,7 @@ export async function sendPlayerAction(
       : [];
   }) ?? [];
   const previousMap = playerState.previousMapId ? getMapById(playerState.previousMapId) : undefined;
-  const currentUnits = getWorldUnitsAtMap(playerState.currentMapId);
+  const currentUnits = getWorldUnitsAtMap(playerState.currentMapId, playerState.unitInstances);
   const presentNpcs = currentUnits.flatMap((unit) => unit.kind === 'npc' ? [{
     id: unit.id,
     name: unit.name,
@@ -173,9 +173,9 @@ export async function sendPlayerAction(
     stats: unit.stats,
     alignment: unit.alignment,
     disposition: getWorldUnitDisposition(playerState, unit.id),
-    isDead: playerState.npcStates[unit.id]?.isDead ?? playerState.npcStates[unit.id]?.currentHp === 0,
-    currentHp: playerState.npcStates[unit.id]?.currentHp ?? unit.stats.hp,
-    holdings: playerState.npcStates[unit.id] ?? { gold: unit.source.startingGold ?? 0, inventory: unit.source.startingInventory ?? [] },
+    isDead: playerState.unitInstances[unit.id]?.isDead ?? playerState.unitInstances[unit.id]?.currentHp === 0,
+    currentHp: playerState.unitInstances[unit.id]?.currentHp ?? unit.stats.hp,
+    holdings: playerState.unitInstances[unit.id] ?? { gold: unit.source.startingGold ?? 0, inventory: unit.source.startingInventory ?? [] },
     description: unit.source.description
   }] : []);
   const availableQuests = questsDatabase.filter((quest) => canAcceptQuest(playerState, quest))
@@ -186,7 +186,7 @@ export async function sendPlayerAction(
     (!unit.source.requiredQuestId || playerState.activeQuests.some((quest) =>
       quest.questId === unit.source.requiredQuestId && quest.status === 'in_progress'
     )) ? [{ id: unit.id, name: unit.name, build: describeUnitBuild(unit), disposition: getWorldUnitDisposition(playerState, unit.id) }] : []);
-  const encounteredUnit = playerState.encounteredUnitId ? getWorldUnitById(playerState.encounteredUnitId) : undefined;
+  const encounteredUnit = playerState.encounteredUnitId ? getWorldUnitById(playerState.encounteredUnitId, playerState.unitInstances) : undefined;
   const playerUnit = getPlayerWorldUnit(playerState);
 
   if (!cleanApiKey) {
@@ -285,7 +285,7 @@ ${scenario.gmRole}
   const availableDestinationIds = availableDestinations.map((destination) => destination.id);
   const presentNpcIds = presentNpcs.filter((npc) => !npc.isDead && npc.disposition !== 'hostile').map((npc) => npc.id);
   const dispositionUnitIds = currentUnits.filter((unit) => unit.kind !== 'npc' ||
-    (!playerState.npcStates[unit.id]?.isDead && playerState.npcStates[unit.id]?.currentHp !== 0)).map((unit) => unit.id);
+    (!playerState.unitInstances[unit.id]?.isDead && playerState.unitInstances[unit.id]?.currentHp !== 0)).map((unit) => unit.id);
   const knownItemIds = itemsDatabase.map((item) => item.id);
   const jsonResponseSchema = {
     type: 'object',

@@ -1,5 +1,5 @@
 import type { CharacterAlignment, PlayerState } from '../types/game';
-import { createDefaultNpcWorldState, getCharacterClassById, getPlayerResourceCaps, getUnitAbilities, npcsDatabase, PLAYER_UNIT_ID, scenario } from '../data/staticData';
+import { createDefaultUnitInstances, getCharacterClassById, getPlayerResourceCaps, getUnitAbilities, PLAYER_UNIT_ID, scenario } from '../data/staticData';
 
 /** 建立預設新玩家存檔；種族、能力值與資源上限與 NPC/魔物共用種族 × 職階公式。 */
 export const createInitialPlayer = (
@@ -29,7 +29,7 @@ export const createInitialPlayer = (
     hp: caps.maxHp,
     mp: caps.maxMp,
     gold: scenario.start.gold,
-    npcStates: Object.fromEntries(npcsDatabase.map((npc) => [npc.id, createDefaultNpcWorldState(npc)])),
+    unitInstances: createDefaultUnitInstances(),
     transactionHistory: [],
     currentMapId: scenario.start.mapId,
     gameTimeMinutes: scenario.start.gameTimeMinutes,

@@ -31,5 +31,5 @@ export function getPlayerWorldUnit(player: PlayerState): PlayerWorldUnit {
 
 /** 依單位 ID 辨識玩家、NPC 或魔物；NPC/魔物專屬規則仍以 kind 與 source 區分。 */
 export function resolveWorldUnit(player: PlayerState, unitId: string): WorldUnitView | undefined {
-  return unitId === player.unitId ? getPlayerWorldUnit(player) : getWorldUnitById(unitId);
+  return unitId === player.unitId ? getPlayerWorldUnit(player) : getWorldUnitById(unitId, player.unitInstances);
 }

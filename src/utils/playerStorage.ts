@@ -1,5 +1,5 @@
 import type { GameSession, PlayerState, StoryMessage } from '../types/game';
-import { createDefaultNpcWorldState, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getQuestById, getSpeciesById, getUnitAbilities, getWorldUnitById, MAX_UNIT_LEVEL, npcsDatabase, PLAYER_UNIT_ID, scenario } from '../data/staticData';
+import { createDefaultUnitInstance, getBaseExpForLevel, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getQuestById, getSpeciesById, getUnitAbilities, getUnitLevelCap, getWorldUnitById, MAX_UNIT_LEVEL, PLAYER_UNIT_ID, scenario, unitTemplatesDatabase } from '../data/staticData';
 import { createInitialPlayer } from './playerInit';
 import { isValidGameTime } from './gameTime';
 import { isValidSpeciesClassCombo } from './unitGrowth';
@@ -81,17 +81,44 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     if (typeof id === 'string' && getItemById(id)) equipped[slot] = id;
   }
 
+  // 單位實例：新存檔為 unitInstances，舊存檔為只含 NPC 的 npcStates；缺少的實例（含魔物）由樣板補上。
+  const savedInstances = isRecord(value.unitInstances) ? value.unitInstances : isRecord(value.npcStates) ? value.npcStates : {};
+  const unitInstances = Object.fromEntries(unitTemplatesDatabase().map((template) => {
+    const savedState = savedInstances[template.id];
+    const defaults = createDefaultUnitInstance(template);
+    if (!isRecord(savedState)) return [template.id, defaults];
+    const level = Number.isInteger(savedState.level) && (savedState.level as number) >= template.level &&
+      (savedState.level as number) <= getUnitLevelCap(template.id) ? savedState.level as number : defaults.level;
+    const exp = Number.isSafeInteger(savedState.exp) && (savedState.exp as number) >= getBaseExpForLevel(level)
+      ? savedState.exp as number : getBaseExpForLevel(level);
+    const maxHp = getWorldUnitById(template.id, { [template.id]: { level } })?.stats.hp ?? 1;
+    const savedInventory = Array.isArray(savedState.inventory) ? savedState.inventory.flatMap((entry) =>
+      isRecord(entry) && typeof entry.itemId === 'string' && getItemById(entry.itemId) &&
+      Number.isInteger(entry.quantity) && (entry.quantity as number) > 0
+        ? [{ itemId: entry.itemId, quantity: entry.quantity as number }]
+        : []) : [];
+    return [template.id, {
+      level,
+      exp,
+      gold: Number.isSafeInteger(savedState.gold) && (savedState.gold as number) >= 0 ? savedState.gold as number : 0,
+      inventory: savedInventory,
+      currentHp: Number.isInteger(savedState.currentHp) && (savedState.currentHp as number) >= 0
+        ? Math.min(savedState.currentHp as number, maxHp) : maxHp,
+      isDead: savedState.isDead === true || savedState.currentHp === 0
+    }];
+  })) as PlayerState['unitInstances'];
+
   let combat: PlayerState['combat'];
   if (value.combat !== undefined && value.combat !== null) {
     const combatUnitId = isRecord(value.combat) && typeof value.combat.unitId === 'string'
       ? value.combat.unitId
       : isRecord(value.combat) && typeof value.combat.monsterId === 'string' ? value.combat.monsterId : undefined;
-    const combatUnit = combatUnitId ? getWorldUnitById(combatUnitId) : undefined;
+    const combatUnit = combatUnitId ? getWorldUnitById(combatUnitId, unitInstances) : undefined;
     const combatUnitIsPresent = combatUnit?.kind === 'npc'
       ? getMapById(value.currentMapId)?.npcsPresent.includes(combatUnitId!)
       : !!combatUnit && getMapById(value.currentMapId)?.monstersPresent.includes(combatUnitId!);
-    const savedCombatNpcState = combatUnit?.kind === 'npc' && isRecord(value.npcStates) && isRecord(value.npcStates[combatUnitId!])
-      ? value.npcStates[combatUnitId!] as Record<string, unknown> : undefined;
+    const savedCombatNpcState = combatUnit?.kind === 'npc' && isRecord(savedInstances[combatUnitId!])
+      ? savedInstances[combatUnitId!] as Record<string, unknown> : undefined;
     if (!isRecord(value.combat) || !combatUnitId || !combatUnit || !combatUnitIsPresent ||
         !Number.isInteger(value.combat.currentHp) || (value.combat.currentHp as number) <= 0 ||
         !Number.isInteger(value.combat.round) || (value.combat.round as number) < 1 ||
@@ -109,8 +136,8 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
   const encounteredUnitIsPresent = encounteredUnit?.kind === 'npc'
     ? getMapById(value.currentMapId)?.npcsPresent.includes(savedEncounteredUnitId!)
     : !!encounteredUnit && getMapById(value.currentMapId)?.monstersPresent.includes(savedEncounteredUnitId!);
-  const savedEncounteredNpcState = encounteredUnit?.kind === 'npc' && isRecord(value.npcStates) && isRecord(value.npcStates[savedEncounteredUnitId!])
-    ? value.npcStates[savedEncounteredUnitId!] as Record<string, unknown> : undefined;
+  const savedEncounteredNpcState = encounteredUnit?.kind === 'npc' && isRecord(savedInstances[savedEncounteredUnitId!])
+    ? savedInstances[savedEncounteredUnitId!] as Record<string, unknown> : undefined;
   const encounteredUnitId = typeof savedEncounteredUnitId === 'string' && encounteredUnit && encounteredUnitIsPresent &&
     savedEncounteredNpcState?.isDead !== true && savedEncounteredNpcState?.currentHp !== 0
     ? savedEncounteredUnitId
@@ -123,24 +150,6 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
       : [])
     : [];
   const isDead = value.isDead === true || hp === 0;
-  const savedNpcStates = isRecord(value.npcStates) ? value.npcStates : {};
-  const npcStates = Object.fromEntries(npcsDatabase.map((npc) => {
-    const savedState = savedNpcStates[npc.id];
-    const maxHp = getWorldUnitById(npc.id)?.stats.hp ?? 1;
-    if (!isRecord(savedState)) return [npc.id, createDefaultNpcWorldState(npc)];
-    const savedInventory = Array.isArray(savedState.inventory) ? savedState.inventory.flatMap((entry) =>
-      isRecord(entry) && typeof entry.itemId === 'string' && getItemById(entry.itemId) &&
-      Number.isInteger(entry.quantity) && (entry.quantity as number) > 0
-        ? [{ itemId: entry.itemId, quantity: entry.quantity as number }]
-        : []) : [];
-    return [npc.id, {
-      gold: Number.isSafeInteger(savedState.gold) && (savedState.gold as number) >= 0 ? savedState.gold as number : 0,
-      inventory: savedInventory,
-      currentHp: Number.isInteger(savedState.currentHp) && (savedState.currentHp as number) >= 0
-        ? Math.min(savedState.currentHp as number, maxHp) : maxHp,
-      isDead: savedState.isDead === true || savedState.currentHp === 0
-    }];
-  }));
   const transactionHistory = Array.isArray(value.transactionHistory) ? value.transactionHistory.flatMap((record) =>
     isRecord(record) && typeof record.id === 'string' &&
     ['purchase', 'sale', 'service', 'quest_reward', 'npc_transfer', 'game_change'].includes(String(record.type)) &&
@@ -171,7 +180,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     hp,
     mp: Math.min(resourceCaps.maxMp, Math.max(0, value.mp as number)),
     gold: value.gold as number,
-    npcStates,
+    unitInstances,
     transactionHistory,
     currentMapId: value.currentMapId,
     ...(previousMapId ? { previousMapId } : {}),

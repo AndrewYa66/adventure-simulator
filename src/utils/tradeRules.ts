@@ -7,7 +7,7 @@ export type TradeResult = { ok: true; player: PlayerState; quantity: number; tot
 
 function canTrade(player: PlayerState, shop: ShopStatic, currentMapId: string): boolean {
   const unit = getWorldUnitById(shop.npcId);
-  return canPlayerAct(player) && !player.combat && unit?.kind === 'npc' && !player.npcStates[unit.id]?.isDead && player.npcStates[unit.id]?.currentHp !== 0 && getWorldUnitDisposition(player, unit.id) !== 'hostile' && unit.source.shopId === shop.id &&
+  return canPlayerAct(player) && !player.combat && unit?.kind === 'npc' && !player.unitInstances[unit.id]?.isDead && player.unitInstances[unit.id]?.currentHp !== 0 && getWorldUnitDisposition(player, unit.id) !== 'hostile' && unit.source.shopId === shop.id &&
     unit.mapIds.includes(currentMapId) && !!getMapById(currentMapId)?.npcsPresent.includes(unit.id);
 }
 
@@ -33,7 +33,7 @@ export function buyItem(
   if (!Number.isSafeInteger(totalPrice)) return { ok: false, reason: '交易金額超出有效範圍。' };
   if (player.gold < totalPrice) return { ok: false, reason: `金幣不足，需要 ${totalPrice} 枚。` };
   const inventory = player.inventory.map((entry) => ({ ...entry }));
-  const npcState = player.npcStates[shop.npcId];
+  const npcState = player.unitInstances[shop.npcId];
   if (!npcState || (npcState.inventory.find((entry) => entry.itemId === item.id)?.quantity ?? 0) < quantity) {
     return { ok: false, reason: '商店目前庫存不足。' };
   }
@@ -47,7 +47,7 @@ export function buyItem(
   const description = `購買 ${item.name} ×${quantity}`;
   return { ok: true, player: {
     ...player, gold: player.gold - totalPrice, inventory,
-    npcStates: { ...player.npcStates, [shop.npcId]: { ...npcState, gold: npcState.gold + totalPrice, inventory: npcInventory } },
+    unitInstances: { ...player.unitInstances, [shop.npcId]: { ...npcState, gold: npcState.gold + totalPrice, inventory: npcInventory } },
     transactionHistory: record(player, 'purchase', description, -totalPrice)
   }, quantity, totalPrice };
 }
@@ -67,7 +67,7 @@ export function sellItem(
   const inventory = player.inventory.map((entry) => ({ ...entry }));
   const owned = inventory.find((entry) => entry.itemId === item.id);
   if (!owned || owned.quantity < quantity) return { ok: false, reason: '持有數量不足。' };
-  const npcState = player.npcStates[shop.npcId];
+  const npcState = player.unitInstances[shop.npcId];
   const totalPrice = item.sellPrice * quantity;
   if (!Number.isSafeInteger(totalPrice)) return { ok: false, reason: '交易金額超出有效範圍。' };
   if (!npcState || npcState.gold < totalPrice) return { ok: false, reason: '商人目前沒有足夠金幣收購。' };
@@ -79,7 +79,7 @@ export function sellItem(
   else npcInventory.push({ itemId: item.id, quantity });
   return { ok: true, player: {
     ...player, gold: player.gold + totalPrice, inventory,
-    npcStates: { ...player.npcStates, [shop.npcId]: { gold: npcState.gold - totalPrice, inventory: npcInventory } },
+    unitInstances: { ...player.unitInstances, [shop.npcId]: { ...npcState, gold: npcState.gold - totalPrice, inventory: npcInventory } },
     transactionHistory: record(player, 'sale', `出售 ${item.name} ×${quantity}`, totalPrice)
   }, quantity, totalPrice };
 }
@@ -87,7 +87,7 @@ export function sellItem(
 export function purchaseService(player: PlayerState, shop: ShopStatic, serviceId: string, currentMapId: string): TradeResult {
   if (!canTrade(player, shop, currentMapId)) return { ok: false, reason: '目前無法使用服務。' };
   const service = shop.services?.find((entry) => entry.id === serviceId);
-  const npcState = player.npcStates[shop.npcId];
+  const npcState = player.unitInstances[shop.npcId];
   if (!service || !npcState) return { ok: false, reason: '找不到這項服務。' };
   if (!Number.isSafeInteger(service.price) || service.price < 0) return { ok: false, reason: '服務價格資料無效。' };
   if (player.gold < service.price) return { ok: false, reason: `金幣不足，需要 ${service.price} 枚。` };
@@ -99,7 +99,7 @@ export function purchaseService(player: PlayerState, shop: ShopStatic, serviceId
     hp: caps.maxHp,
     mp: caps.maxMp,
     gold: player.gold - service.price,
-    npcStates: { ...player.npcStates, [shop.npcId]: { ...npcState, gold: npcState.gold + service.price } },
+    unitInstances: { ...player.unitInstances, [shop.npcId]: { ...npcState, gold: npcState.gold + service.price } },
     transactionHistory: record(player, 'service', `使用服務：${service.name}`, -service.price)
   } };
 }
