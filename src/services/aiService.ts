@@ -4,6 +4,7 @@ import { canPlayerEnterMap, getItemById, getMapById, getNpcCategoryById, getWorl
 import { canAcceptQuest, canTurnInQuest } from '../utils/questRules';
 import { getPlayerWorldUnit } from '../utils/worldUnits';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from '../utils/travelIntent';
+import { formatGameTime } from '../utils/gameTime';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -201,6 +202,7 @@ export async function sendPlayerAction(
 - 能力值：${JSON.stringify(playerState.abilities)}（檢定須選最相關欄位）
 - HP: ${playerState.hp} | MP: ${playerState.mp} | 金幣: ${playerState.gold}
 - 生命狀態: ${playerState.isDead ? '死亡；冒險已結束' : playerState.statusEffects.some((effect) => effect.id === 'unconscious') ? '昏迷；無法採取行動' : '存活'}
+- 遊戲時間: ${formatGameTime(playerState.gameTimeMinutes)}（本回合行動前；時間由遊戲依行動類型推進，敘事中的時刻與晝夜須與此一致，不可自行跳過時間）
 - 當前地區: ${currentMap?.name ?? playerState.currentMapId} (${playerState.currentMapId})
 - 可前往的相鄰地區（只可選這些 ID）: ${JSON.stringify(availableDestinations)}
 - 當前地區在場 NPC 及數值: ${JSON.stringify(presentNpcs)}

@@ -4,6 +4,7 @@ import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getN
 import { getPlayerStatBreakdown, STAT_LABELS } from '../utils/gameChecks';
 import { canAcceptQuest, canTurnInQuest } from '../utils/questRules';
 import { canPlayerAct, isPlayerUnconscious } from '../utils/playerStatus';
+import { formatGameTime } from '../utils/gameTime';
 
 interface PlayerHUDProps {
   player: PlayerState;
@@ -43,6 +44,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
     <aside id="player-sidebar" aria-label="玩家選單" style={{ width: '300px', minHeight: 0, overflowY: 'auto', backgroundColor: '#212121', padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
       <div>
         <h3 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #444', paddingBottom: '6px' }}>👤 角色狀態</h3>
+        <p style={{ margin: '4px 0' }}><strong>🕰️ 時間:</strong> {formatGameTime(player.gameTimeMinutes)}</p>
         <p style={{ margin: '4px 0' }}><strong>姓名:</strong> {player.name}</p>
         <p style={{ margin: '4px 0' }}><strong>職業:</strong> {getCharacterClassById(player.classId)?.name ?? player.classId}</p>
         <p style={{ margin: '4px 0' }}><strong>傾向:</strong> {player.alignment}</p>

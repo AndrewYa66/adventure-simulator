@@ -1,6 +1,7 @@
 import type { GameSession, PlayerState, StoryMessage } from '../types/game';
 import { createDefaultNpcWorldState, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getQuestById, getWorldUnitById, npcsDatabase, PLAYER_UNIT_ID } from '../data/staticData';
 import { createInitialPlayer } from './playerInit';
+import { GAME_START_MINUTES, isValidGameTime } from './gameTime';
 
 const PLAYER_STORAGE_KEY = 'TRPG_PLAYER_STATE';
 const SESSION_STORAGE_KEY = 'TRPG_GAME_SESSION';
@@ -169,6 +170,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     transactionHistory,
     currentMapId: value.currentMapId,
     ...(previousMapId ? { previousMapId } : {}),
+    gameTimeMinutes: isValidGameTime(value.gameTimeMinutes) ? value.gameTimeMinutes : GAME_START_MINUTES,
     inventory,
     equipped,
     storyFlags: value.storyFlags as Record<string, boolean>,

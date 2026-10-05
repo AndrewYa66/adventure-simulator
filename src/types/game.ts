@@ -241,6 +241,8 @@ export interface PlayerState {
   transactionHistory: TransactionRecord[];
   currentMapId: string;
   previousMapId?: string;
+  /** 遊戲時鐘：自世界開始經過的分鐘數，只依行動類型固定耗時推進；O37 拆分世界存檔後移至世界層。 */
+  gameTimeMinutes: number;
   
   // 背包建議儲存 itemId 與 quantity，其餘詳細說明向靜態資料庫查詢
   inventory: { 

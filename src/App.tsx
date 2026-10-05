@@ -17,6 +17,7 @@ import { CharacterSetup } from './components/CharacterSetup';
 import { createInitialPlayer } from './utils/playerInit';
 import { isSelfDamageIntent, parseExplicitSelfDamage, unsupportedInventoryItemRequested } from './utils/playerActionIntent';
 import { buyItem, purchaseService, sellItem } from './utils/tradeRules';
+import { advanceGameTime, formatGameTime } from './utils/gameTime';
 import type { CharacterAlignment } from './types/game';
 
 function withNpcHp(player: PlayerState, npcId: string, currentHp: number, isDead = false): PlayerState {
@@ -61,7 +62,7 @@ function createRestoreNotice(player: PlayerState, savedAt: number, messageCount:
   const inventory = player.inventory.map((entry) => `${getItemById(entry.itemId)?.name ?? entry.itemId} ×${entry.quantity}`);
   const lines = [
     `📦 遊戲快照已恢復（${new Date(savedAt).toLocaleString()}）`,
-    `地區：${map?.name ?? player.currentMapId}｜角色：${player.name} Lv.${player.level}｜HP ${player.hp}｜MP ${player.mp}｜金幣 ${player.gold}`,
+    `時間：${formatGameTime(player.gameTimeMinutes)}｜地區：${map?.name ?? player.currentMapId}｜角色：${player.name} Lv.${player.level}｜HP ${player.hp}｜MP ${player.mp}｜金幣 ${player.gold}`,
     `已恢復最近對話：${messageCount} 則`,
     `進行中任務：${activeQuests.length ? activeQuests.join('、') : '無'}`,
     `持有物：${inventory.length ? inventory.join('、') : '無'}`
@@ -154,7 +155,7 @@ export default function App() {
     const currentMap = getMapById(sourcePlayer.currentMapId);
     const destination = getMapById(mapId);
     if (!currentMap?.connectedMapIds.includes(mapId) || !destination || !canPlayerEnterMap(sourcePlayer, destination)) return null;
-    const nextPlayer = { ...sourcePlayer, previousMapId: sourcePlayer.currentMapId, currentMapId: destination.id, encounteredUnitId: undefined };
+    const nextPlayer = advanceGameTime({ ...sourcePlayer, previousMapId: sourcePlayer.currentMapId, currentMapId: destination.id, encounteredUnitId: undefined }, 'travel');
     return { player: nextPlayer, destination };
   };
 
@@ -175,7 +176,7 @@ export default function App() {
     if (!quest) return;
     const accepted = acceptQuest(player, quest);
     if (!accepted) return;
-    updatePlayer(accepted);
+    updatePlayer(advanceGameTime(accepted, 'dialogue'));
     setMessages((previous) => [...previous, {
       id: Date.now().toString(),
       sender: 'system',
@@ -187,7 +188,7 @@ export default function App() {
   const handleTurnInQuest = (questId: string) => {
     const quest = getQuestById(questId);
     if (!quest || !canTurnInQuest(player, quest)) return;
-    const nextPlayer = applyStateChanges(player, {
+    const nextPlayer = applyStateChanges(advanceGameTime(player, 'dialogue'), {
       storyText: '', suggestedActions: [], stateChanges: { questUpdates: [{ questId, status: 'completed' }] }
     }, 'game');
     updatePlayer(nextPlayer);
@@ -205,7 +206,7 @@ export default function App() {
       appendSystemMessage(`交易未完成：${result.reason}`);
       return;
     }
-    updatePlayer(result.player);
+    updatePlayer(advanceGameTime(result.player, 'trade'));
     appendSystemMessage(`向${shop.name}購買${item.name} ×${result.quantity}，支付 ${result.totalPrice} 金幣。`);
   };
 
@@ -218,7 +219,7 @@ export default function App() {
       appendSystemMessage(`交易未完成：${result.reason}`);
       return;
     }
-    updatePlayer(result.player);
+    updatePlayer(advanceGameTime(result.player, 'trade'));
     appendSystemMessage(`向${shop.name}出售${item.name} ×${result.quantity}，取得 ${result.totalPrice} 金幣。`);
   };
 
@@ -231,8 +232,8 @@ export default function App() {
       appendSystemMessage(`服務未完成：${result.reason}`);
       return;
     }
-    updatePlayer(result.player);
-    appendSystemMessage(`使用${service?.name ?? '服務'}，支付 ${result.totalPrice} 金幣，生命與魔力已恢復。服務時間將於時間系統實作後納入處理。`);
+    updatePlayer(advanceGameTime(result.player, 'rest'));
+    appendSystemMessage(`使用${service?.name ?? '服務'}，支付 ${result.totalPrice} 金幣，休息 8 小時後生命與魔力已恢復。`);
   };
 
   const handleEquipItem = (itemId: string) => {
@@ -241,7 +242,7 @@ export default function App() {
     if (!item || !owned || !canPlayerAct(player) || player.combat) return;
     const slot = item.type === 'weapon' ? 'weaponItemId' : item.type === 'armor' ? 'armorItemId' : item.type === 'accessory' ? 'accessoryItemId' : undefined;
     if (!slot) return;
-    updatePlayer({ ...player, equipped: { ...player.equipped, [slot]: itemId } });
+    updatePlayer(advanceGameTime({ ...player, equipped: { ...player.equipped, [slot]: itemId } }, 'quick'));
     appendSystemMessage(`已裝備${item.name}。`);
   };
 
@@ -275,7 +276,7 @@ export default function App() {
     const outOfCombat = { ...player };
     delete outOfCombat.combat;
     delete outOfCombat.encounteredUnitId;
-    updatePlayer(outOfCombat);
+    updatePlayer(advanceGameTime(outOfCombat, 'combatRound'));
     appendSystemMessage(`你與${combatUnit?.name ?? '敵人'}拉開距離，戰鬥結束。`);
   };
 
@@ -284,7 +285,7 @@ export default function App() {
     const unit = combat ? getWorldUnitById(combat.unitId) : undefined;
     if (!combat || !unit || sourcePlayer.isDead) return;
     if (isPlayerUnconscious(sourcePlayer)) {
-      const recovered = { ...sourcePlayer, statusEffects: sourcePlayer.statusEffects.filter((effect) => effect.id !== 'unconscious'), combat: { ...combat } };
+      const recovered = { ...advanceGameTime(sourcePlayer, 'combatRound'), statusEffects: sourcePlayer.statusEffects.filter((effect) => effect.id !== 'unconscious'), combat: { ...combat } };
       const enemyTurn = resolveEnemyTurn(recovered, combat, unit);
       updatePlayer(enemyTurn.player);
       appendSystemMessage(`你仍昏迷，失去本回合行動。\n${enemyTurn.text}`, [enemyTurn.check]);
@@ -310,7 +311,8 @@ export default function App() {
     const attackText = attackCheck.success
       ? `${skill?.name ?? '攻擊'}命中，對${unit.name}造成 ${damage} 點傷害。`
       : `${skill?.name ?? '攻擊'}未命中${unit.name}。`;
-    const actionPlayer = skill ? { ...sourcePlayer, mp: sourcePlayer.mp - skill.costMp } : sourcePlayer;
+    const timedPlayer = advanceGameTime(sourcePlayer, 'combatRound');
+    const actionPlayer = skill ? { ...timedPlayer, mp: timedPlayer.mp - skill.costMp } : timedPlayer;
     const combatActionPlayer = unit.kind === 'npc' ? withNpcHp(actionPlayer, unit.id, monsterHp, monsterHp <= 0) : actionPlayer;
 
     if (monsterHp <= 0 && unit.kind === 'monster') {
@@ -372,7 +374,7 @@ export default function App() {
         appendSystemMessage(`${skill.name}目前無法恢復 HP，沒有消耗 MP。`);
         return;
       }
-      const nextPlayer = applyStateChanges(player, {
+      const nextPlayer = applyStateChanges(advanceGameTime(player, 'quick'), {
         storyText: '', suggestedActions: [],
         stateChanges: { hpChange: restored, mpChange: -skill.costMp }
       }, 'game');
@@ -396,7 +398,7 @@ export default function App() {
       return;
     }
 
-    const next = applyStateChanges(player, {
+    const next = applyStateChanges(advanceGameTime(player, 'quick'), {
       storyText: '', suggestedActions: [],
       stateChanges: { hpChange: hpRestore, mpChange: mpRestore, removeItems: [{ itemId, quantity: 1 }] }
     }, 'game');
@@ -499,7 +501,7 @@ export default function App() {
     const explicitSelfDamage = parseExplicitSelfDamage(actionText);
     if (explicitSelfDamage !== undefined) {
       const actualDamage = Math.min(player.hp, explicitSelfDamage);
-      const nextPlayer = applyStateChanges(player, {
+      const nextPlayer = applyStateChanges(advanceGameTime(player, 'quick'), {
         storyText: '', suggestedActions: [], stateChanges: { hpChange: -actualDamage }
       }, 'game');
       updatePlayer(nextPlayer);
@@ -548,7 +550,7 @@ export default function App() {
         }]);
         return;
       }
-      updatePlayer(applyStateChanges(player, {
+      updatePlayer(applyStateChanges(advanceGameTime(player, 'quick'), {
         storyText: '', suggestedActions: [],
         stateChanges: { hpChange: restored, mpChange: -requestedSkill.costMp }
       }, 'game'));
@@ -651,7 +653,7 @@ export default function App() {
           ? undefined
           : aiResponse.travelRequest?.destinationMapId;
       const travel = requestedDestinationId ? movePlayerTo(requestedDestinationId, nextPlayer) : null;
-      if (travel) nextPlayer = travel.player;
+      nextPlayer = travel ? travel.player : advanceGameTime(nextPlayer, 'dialogue');
       updatePlayer(nextPlayer);
 
       const previousMap = getMapById(player.currentMapId);

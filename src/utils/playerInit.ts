@@ -1,5 +1,6 @@
 import type { CharacterAlignment, PlayerState } from '../types/game';
 import { createDefaultNpcWorldState, getCharacterClassById, getPlayerResourceCaps, npcsDatabase, PLAYER_UNIT_ID } from '../data/staticData';
+import { GAME_START_MINUTES } from './gameTime';
 
 /** 建立預設新玩家存檔 */
 export const createInitialPlayer = (
@@ -28,6 +29,7 @@ export const createInitialPlayer = (
     npcStates: Object.fromEntries(npcsDatabase.map((npc) => [npc.id, createDefaultNpcWorldState(npc)])),
     transactionHistory: [],
     currentMapId: 'MAP-001',
+    gameTimeMinutes: GAME_START_MINUTES,
     inventory: characterClass.startingItems.map((entry) => ({ ...entry })),
     equipped: { ...characterClass.startingEquipment },
     storyFlags: {},
