@@ -28,6 +28,37 @@ function withNpcHp(player: PlayerState, npcId: string, currentHp: number, isDead
   return { ...player, unitInstances: { ...player.unitInstances, [npcId]: { ...state, currentHp, isDead } } };
 }
 
+/** 擊倒 NPC 時取得其全部持有物與金幣（不給經驗；後果由善惡與勢力系統處理）。 */
+function lootDefeatedNpc(player: PlayerState, npcId: string, npcName: string) {
+  const state = player.unitInstances[npcId];
+  if (!state || (state.gold <= 0 && state.inventory.length === 0)) return { player, loot: [] as { itemId: string; quantity: number }[], gold: 0 };
+  const inventory = player.inventory.map((entry) => ({ ...entry }));
+  for (const item of state.inventory) {
+    const owned = inventory.find((entry) => entry.itemId === item.itemId);
+    if (owned) owned.quantity += item.quantity;
+    else inventory.push({ ...item });
+  }
+  const itemText = state.inventory.map((item) => `${getItemById(item.itemId)?.name ?? item.itemId} ×${item.quantity}`).join('、');
+  const record = {
+    id: `${Date.now()}-${Math.random()}`,
+    type: 'npc_transfer' as const,
+    description: `從 ${npcName} 身上取得${[state.gold > 0 ? `${state.gold} 金幣` : '', itemText].filter(Boolean).join('、')}`,
+    goldChange: state.gold,
+    timestamp: Date.now()
+  };
+  return {
+    player: {
+      ...player,
+      gold: player.gold + state.gold,
+      inventory,
+      unitInstances: { ...player.unitInstances, [npcId]: { ...state, gold: 0, inventory: [] } },
+      transactionHistory: [record, ...player.transactionHistory].slice(0, 100)
+    },
+    loot: state.inventory,
+    gold: state.gold
+  };
+}
+
 function resolveEnemyTurn(player: PlayerState, combat: NonNullable<PlayerState['combat']>, unit: WorldUnitStatic) {
   const monster = unit.kind === 'monster' ? unit.source : undefined;
   const special = monster?.specialAbilities.find((ability) => ability.combatAction && combat.round % ability.combatAction.triggerEveryRounds === 0);
@@ -343,11 +374,15 @@ export default function App() {
     }
 
     if (monsterHp <= 0 && unit.kind === 'npc') {
-      const victoryState = { ...combatActionPlayer };
+      const looted = lootDefeatedNpc(combatActionPlayer, unit.id, unit.name);
+      const victoryState = { ...looted.player };
       delete victoryState.combat;
       delete victoryState.encounteredUnitId;
       updatePlayer(victoryState);
-      appendSystemMessage(`⚔️ ${attackText}\n${unit.name}已被擊倒，不會掉落經驗、金幣或道具。`, checks);
+      const lootText = looted.gold > 0 || looted.loot.length
+        ? `你從其身上取得${[looted.gold > 0 ? `${looted.gold} 金幣` : '', ...looted.loot.map((item) => `${getItemById(item.itemId)?.name ?? item.itemId} ×${item.quantity}`)].filter(Boolean).join('、')}。`
+        : '其身上沒有可取得的物品。';
+      appendSystemMessage(`⚔️ ${attackText}\n${unit.name}已被擊倒，不會獲得經驗。${lootText}`, checks);
       return;
     }
 
