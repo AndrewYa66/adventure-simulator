@@ -206,7 +206,7 @@ export const describeUnitBuild = (build: UnitBuild): string => {
   return `${className ? `${speciesName}・${className}` : speciesName} Lv.${build.level}`;
 };
 
-/** 單位實例預設值（取自樣板）；新存檔建立與舊存檔補欄位共用。 */
+/** 單位實例預設值（取自樣板）；新存檔建立與存檔中缺少的單位共用。 */
 export const createDefaultUnitInstance = (template: NpcStatic | MonsterStatic): UnitInstance => {
   const npc = 'mapId' in template ? template : undefined;
   return {

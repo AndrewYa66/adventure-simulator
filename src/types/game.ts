@@ -293,10 +293,10 @@ export interface CombatState {
 
 /** 玩家動態存檔狀態 (寫入 LocalStorage) */
 export interface PlayerState {
-  /** 玩家穩定單位 ID；舊存檔載入時補上 PLAYER_UNIT_ID。 */
+  /** 玩家穩定單位 ID，固定為 PLAYER_UNIT_ID。 */
   unitId: string;
   name: string;
-  /** 玩家種族；舊存檔載入時補為劇本預設種族。 */
+  /** 玩家種族；新角色取自劇本預設種族。 */
   speciesId: string;
   classId: string;
   alignment: CharacterAlignment;
@@ -309,7 +309,7 @@ export interface PlayerState {
   hp: number;
   mp: number;
   gold: number;
-  /** NPC 與魔物的實例狀態；舊存檔的 npcStates 載入時遷移至此。O37/O29 會移至世界存檔。 */
+  /** NPC 與魔物的實例狀態。O37/O29 會移至世界存檔。 */
   unitInstances: Record<string, UnitInstance>;
   transactionHistory: TransactionRecord[];
   currentMapId: string;
@@ -364,8 +364,8 @@ export interface ActionCheckResult {
   baseStat: number;
   equipmentBonus: number;
   statValue: number;
-  /** 種族/職階檢定加值（已計入 modifier）；舊紀錄沒有此欄位。 */
-  checkBonus?: number;
+  /** 種族/職階檢定加值（已計入 modifier）。 */
+  checkBonus: number;
   modifier: number;
   total: number;
   dc: number;
@@ -374,7 +374,8 @@ export interface ActionCheckResult {
 }
 
 export interface GameSession {
-  schemaVersion: 1;
+  /** 見 playerStorage 的 SAVE_SCHEMA_VERSION。 */
+  schemaVersion: number;
   savedAt: number;
   player: PlayerState;
   messages: StoryMessage[];

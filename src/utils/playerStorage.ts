@@ -7,6 +7,11 @@ import { createCombat } from './combatState';
 
 const PLAYER_STORAGE_KEY = 'TRPG_PLAYER_STATE';
 const SESSION_STORAGE_KEY = 'TRPG_GAME_SESSION';
+/**
+ * 存檔格式版本；開發階段每次變更存檔格式就加一，版本不符的存檔直接捨棄並重新建立角色，不撰寫遷移程式。
+ * 正式上線後才開始為舊版本提供遷移。
+ */
+export const SAVE_SCHEMA_VERSION = 2;
 
 export interface LoadedGameSession {
   player: PlayerState;
@@ -30,14 +35,17 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
       typeof value.currentMapId !== 'string' || !getMapById(value.currentMapId) ||
       !Array.isArray(value.inventory) || !isRecord(value.equipped) ||
       !isRecord(value.storyFlags) || !Object.values(value.storyFlags).every((flag) => typeof flag === 'boolean') ||
-      !Array.isArray(value.activeQuests)) return null;
+      !Array.isArray(value.activeQuests) || value.unitId !== PLAYER_UNIT_ID || typeof value.speciesId !== 'string' ||
+      typeof value.setupComplete !== 'boolean' || !isValidGameTime(value.gameTimeMinutes) || !isRecord(value.unitInstances) ||
+      !isRecord(value.abilities) || !Array.isArray(value.statusEffects) || !Array.isArray(value.transactionHistory) ||
+      !isRecord(value.defeatedMonsters) || !isRecord(value.unitDispositionOverrides)) return null;
 
   const classId = typeof value.classId === 'string' && getCharacterClassById(value.classId)?.playerSelectable ? value.classId : scenario.defaultPlayer.classId;
-  // 舊存檔沒有種族時補為劇本預設種族；無效組合同樣回到預設種族。
+  // 種族不存在或與職階組合無效時回到劇本預設種族。
   const savedSpecies = typeof value.speciesId === 'string' ? getSpeciesById(value.speciesId) : undefined;
   const speciesId = savedSpecies && isValidSpeciesClassCombo(savedSpecies, getCharacterClassById(classId)) ? savedSpecies.id : scenario.defaultPlayer.speciesId;
   const level = Math.min(value.level as number, MAX_UNIT_LEVEL);
-  // 數值基準重新校準後，舊存檔的 HP/MP 可能略高於新上限；夾回上限而非整份存檔作廢。
+  // 靜態數值調整後，存檔的 HP/MP 可能略高於新上限；夾回上限而非整份存檔作廢。
   const resourceCaps = getPlayerResourceCaps({ speciesId, classId, level });
   const abilityKeys = ['str', 'dex', 'con', 'int', 'wis', 'cha'] as const;
   const savedAbilities = isRecord(value.abilities) ? value.abilities : {};
@@ -63,8 +71,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     return [{ questId: entry.questId, status: entry.status as 'in_progress' | 'completed', progress: { defeatedMonsters: defeated } }];
   });
   const defeatedMonsters: Record<string, number> = {};
-  if (value.defeatedMonsters !== undefined && !isRecord(value.defeatedMonsters)) return null;
-  for (const [monsterId, count] of Object.entries(value.defeatedMonsters ?? {})) {
+  for (const [monsterId, count] of Object.entries(value.defeatedMonsters)) {
     if (isMonsterUnitId(monsterId) && Number.isInteger(count) && (count as number) >= 0) defeatedMonsters[monsterId] = count as number;
   }
   const unitDispositionOverrides: PlayerState['unitDispositionOverrides'] = {};
@@ -82,8 +89,8 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     if (typeof id === 'string' && getItemById(id)) equipped[slot] = id;
   }
 
-  // 單位實例：新存檔為 unitInstances，舊存檔為只含 NPC 的 npcStates；缺少的實例（含魔物）由樣板補上。
-  const savedInstances = isRecord(value.unitInstances) ? value.unitInstances : isRecord(value.npcStates) ? value.npcStates : {};
+  // 單位實例：靜態資料新增的單位在存檔中沒有實例，由樣板補上。
+  const savedInstances = value.unitInstances as Record<string, unknown>;
   const unitInstances = Object.fromEntries(unitTemplatesDatabase().map((template) => {
     const savedState = savedInstances[template.id];
     const defaults = createDefaultUnitInstance(template);
@@ -111,11 +118,8 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
 
   let combat: PlayerState['combat'];
   if (value.combat !== undefined && value.combat !== null) {
-    if (!isRecord(value.combat) || !Number.isInteger(value.combat.round) || (value.combat.round as number) < 1) return null;
-    // 新格式為參與者清單；舊格式為單一目標 { unitId | monsterId, currentHp }，轉為一名敵方參與者。
-    const savedEnemies: unknown[] = Array.isArray(value.combat.participants)
-      ? value.combat.participants.filter((participant) => isRecord(participant) && participant.side === 'enemy')
-      : [{ unitId: typeof value.combat.unitId === 'string' ? value.combat.unitId : value.combat.monsterId, currentHp: value.combat.currentHp }];
+    if (!isRecord(value.combat) || !Number.isInteger(value.combat.round) || (value.combat.round as number) < 1 || !Array.isArray(value.combat.participants)) return null;
+    const savedEnemies = value.combat.participants.filter((participant) => isRecord(participant) && participant.side === 'enemy');
     const enemies: { unitId: string; currentHp: number }[] = [];
     for (const enemy of savedEnemies) {
       const unitId = isRecord(enemy) && typeof enemy.unitId === 'string' ? enemy.unitId : undefined;
@@ -137,9 +141,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     getMapById(value.currentMapId)?.connectedMapIds.includes(value.previousMapId)
     ? value.previousMapId
     : undefined;
-  const savedEncounteredUnitId = typeof value.encounteredUnitId === 'string'
-    ? value.encounteredUnitId
-    : typeof value.encounteredMonsterId === 'string' ? value.encounteredMonsterId : undefined;
+  const savedEncounteredUnitId = typeof value.encounteredUnitId === 'string' ? value.encounteredUnitId : undefined;
   const encounteredUnit = typeof savedEncounteredUnitId === 'string' ? getWorldUnitById(savedEncounteredUnitId) : undefined;
   const encounteredUnitIsPresent = encounteredUnit?.kind === 'npc'
     ? getMapById(value.currentMapId)?.npcsPresent.includes(savedEncounteredUnitId!)
@@ -179,7 +181,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     alignment: ['守序善良', '中立善良', '混亂善良', '守序中立', '絕對中立', '混亂中立', '守序邪惡', '中立邪惡', '混亂邪惡'].includes(String(value.alignment))
       ? value.alignment as PlayerState['alignment']
       : '絕對中立',
-    setupComplete: typeof value.setupComplete === 'boolean' ? value.setupComplete : true,
+    setupComplete: value.setupComplete as boolean,
     abilities,
     isDead,
     statusEffects,
@@ -192,7 +194,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     transactionHistory,
     currentMapId: value.currentMapId,
     ...(previousMapId ? { previousMapId } : {}),
-    gameTimeMinutes: isValidGameTime(value.gameTimeMinutes) ? value.gameTimeMinutes : scenario.start.gameTimeMinutes,
+    gameTimeMinutes: value.gameTimeMinutes as number,
     inventory,
     equipped,
     storyFlags: value.storyFlags as Record<string, boolean>,
@@ -216,7 +218,7 @@ export function loadGameSession(): LoadedGameSession {
     const saved = localStorage.getItem(SESSION_STORAGE_KEY);
     if (saved) {
       const value: unknown = JSON.parse(saved);
-      if (isRecord(value) && value.schemaVersion === 1 && Number.isFinite(value.savedAt) && Array.isArray(value.messages) &&
+      if (isRecord(value) && value.schemaVersion === SAVE_SCHEMA_VERSION && Number.isFinite(value.savedAt) && Array.isArray(value.messages) &&
           value.messages.every(isStoryMessage)) {
         const player = normalizePlayerState(value.player);
         if (player) return { player, messages: (value.messages as StoryMessage[]).slice(-100), resumed: true, savedAt: value.savedAt as number };
@@ -230,7 +232,7 @@ export function loadGameSession(): LoadedGameSession {
 
 export function saveGameSession(player: PlayerState, messages: StoryMessage[]): boolean {
   try {
-    const snapshot: GameSession = { schemaVersion: 1, savedAt: Date.now(), player, messages: messages.slice(-100) };
+    const snapshot: GameSession = { schemaVersion: SAVE_SCHEMA_VERSION, savedAt: Date.now(), player, messages: messages.slice(-100) };
     localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(snapshot));
     return savePlayerState(player);
   } catch {
@@ -242,7 +244,9 @@ export function loadPlayerState(): PlayerState {
   try {
     const saved = localStorage.getItem(PLAYER_STORAGE_KEY);
     if (!saved) return createInitialPlayer();
-    return normalizePlayerState(JSON.parse(saved) as unknown) ?? createInitialPlayer();
+    const value: unknown = JSON.parse(saved);
+    if (!isRecord(value) || value.schemaVersion !== SAVE_SCHEMA_VERSION) return createInitialPlayer();
+    return normalizePlayerState(value.player) ?? createInitialPlayer();
   } catch {
     return createInitialPlayer();
   }
@@ -250,7 +254,7 @@ export function loadPlayerState(): PlayerState {
 
 export function savePlayerState(player: PlayerState): boolean {
   try {
-    localStorage.setItem(PLAYER_STORAGE_KEY, JSON.stringify(player));
+    localStorage.setItem(PLAYER_STORAGE_KEY, JSON.stringify({ schemaVersion: SAVE_SCHEMA_VERSION, player }));
     return true;
   } catch {
     return false;
@@ -260,9 +264,8 @@ export function savePlayerState(player: PlayerState): boolean {
 export function resetPlayerState(): PlayerState {
   const player = createInitialPlayer();
   try {
-    localStorage.removeItem(PLAYER_STORAGE_KEY);
     localStorage.removeItem(SESSION_STORAGE_KEY);
-    localStorage.setItem(PLAYER_STORAGE_KEY, JSON.stringify(player));
+    savePlayerState(player);
   } catch {
     // Keep the in-memory reset even when browser storage is unavailable.
   }
