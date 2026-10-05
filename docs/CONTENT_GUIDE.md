@@ -49,7 +49,7 @@ content/
 | --- | --- | --- |
 | 名稱／稱號 | name／title | |
 | 單位類型 | unitType | NPC→npc、魔物→monster |
-| 種族／職階 | species／class | O28 建立種族與職階清單後改為 ID 驗證 |
+| 種族／職階 | species／class | 種族對應 `species.json` ID、職階對應 `character_classes.json` ID（見下方對照表）；組合由 `npm run validate:data` 驗證 |
 | 勢力 | faction | FAC-xxx |
 | 陣營傾向 | alignment | 沿用現有 `CharacterAlignment` 中文值 |
 | 所在地 | mapId | |
@@ -112,10 +112,10 @@ content/
 ## 世界設定與職階清單
 
 - 世界觀採用**受托爾金啟發的原創設定**，不直接使用《魔戒》的國家、地名與專有種族名稱（例如以「半身人」代替該作品專有名稱），以避免公開部署時的版權與商標問題。
-- 種族：`content/lore/RACE-001`～`RACE-007`（人類、精靈、矮人、半身人、哥布林、獸人、野獸）。
+- 種族：`content/lore/RACE-001`～`RACE-007`，遊戲 ID 為 human（人類）、elf（精靈）、dwarf（矮人）、halfling（半身人）、goblin（哥布林）、orc（獸人）、beast（野獸，不可有職階）。哥布林只能搭配戰鬥類職階，獸人可搭配戰鬥與生活類。
 - 勢力：`content/lore/FAC-001`～`FAC-009`（橡木村、艾德蘭王國、北原騎族聯盟、銀灣共和國、鐵脊山王國、霧林、綠丘郡、灰燼部族、斷劍傭兵團）。
 - 世界局勢與核心設定：`LORE-001 世界局勢`（AI 每回合讀取）、`LORE-002 星鐵`、`LORE-003 主線大綱`（僅作者）。
-- 職階清單：`content/03 職階清單.md`。角色卡以中文名稱填寫，建置時對應下表 ID；`adventurer`、`warrior`、`scout`、`mage` 沿用現有 `character_classes.json`，其餘為 O28 新增。
+- 職階清單：`content/03 職階清單.md`。角色卡以中文名稱填寫，建置時對應下表 ID；24 種職階皆已定義於 `character_classes.json`。
 
 | 中文 | ID | 類別 | 玩家可選 |
 | --- | --- | --- | --- |
@@ -144,4 +144,4 @@ content/
 | 礦工 | miner | 生活 | |
 | 學者 | scholar | 生活 | |
 
-現有 NPC 類別（`npc_categories.json`）與魔物對應：一般村民→依個人職階（長老、工匠、農民、店主）、村莊守衛→衛兵、林地獵人→獵人；哥布林斥候→斥候、哥布林打手→戰士、格羅姆・裂牙→首領、灰林狼→無職階（野獸）。
+O28 已將既有 NPC 類別（原 `npc_categories.json`，已移除）與魔物遷移為：一般村民→依個人職階（長老、工匠、農民、店主）、村莊守衛→衛兵、林地獵人→獵人；哥布林斥候→斥候、哥布林打手→戰士、格羅姆・裂牙→首領、灰林狼→無職階（野獸）。
