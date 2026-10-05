@@ -1,0 +1,12 @@
+[
+  { "level": 1, "requiredExp": 100, "hp": 100, "mp": 30, "atk": 10, "def": 5, "spd": 10, "expReward": 20 },
+  { "level": 2, "requiredExp": 250, "hp": 120, "mp": 40, "atk": 14, "def": 7, "spd": 11, "expReward": 28 },
+  { "level": 3, "requiredExp": 450, "hp": 140, "mp": 48, "atk": 17, "def": 9, "spd": 12, "expReward": 38 },
+  { "level": 4, "requiredExp": 700, "hp": 160, "mp": 56, "atk": 20, "def": 11, "spd": 13, "expReward": 50 },
+  { "level": 5, "requiredExp": 1000, "hp": 180, "mp": 64, "atk": 23, "def": 13, "spd": 14, "expReward": 64 },
+  { "level": 6, "requiredExp": 1400, "hp": 200, "mp": 72, "atk": 26, "def": 15, "spd": 15, "expReward": 80 },
+  { "level": 7, "requiredExp": 1900, "hp": 220, "mp": 80, "atk": 29, "def": 17, "spd": 16, "expReward": 98 },
+  { "level": 8, "requiredExp": 2500, "hp": 240, "mp": 88, "atk": 32, "def": 19, "spd": 17, "expReward": 118 },
+  { "level": 9, "requiredExp": 3200, "hp": 260, "mp": 96, "atk": 35, "def": 21, "spd": 18, "expReward": 140 },
+  { "level": 10, "requiredExp": 4000, "hp": 280, "mp": 104, "atk": 38, "def": 23, "spd": 19, "expReward": 165 }
+]

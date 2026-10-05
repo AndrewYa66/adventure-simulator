@@ -1,23 +1,27 @@
 import type { CharacterAlignment, PlayerState } from '../types/game';
-import { createDefaultNpcWorldState, getCharacterClassById, getPlayerResourceCaps, npcsDatabase, PLAYER_UNIT_ID, scenario } from '../data/staticData';
+import { createDefaultNpcWorldState, getCharacterClassById, getPlayerResourceCaps, getUnitAbilities, npcsDatabase, PLAYER_UNIT_ID, scenario } from '../data/staticData';
 
-/** 建立預設新玩家存檔 */
+/** 建立預設新玩家存檔；種族、能力值與資源上限與 NPC/魔物共用種族 × 職階公式。 */
 export const createInitialPlayer = (
   playerName = scenario.defaultPlayer.name,
   classId = scenario.defaultPlayer.classId,
   alignment: CharacterAlignment = scenario.defaultPlayer.alignment,
   setupComplete = false
 ): PlayerState => {
-  const characterClass = getCharacterClassById(classId) ?? getCharacterClassById(scenario.defaultPlayer.classId)!;
-  const caps = getPlayerResourceCaps(1, characterClass.id);
+  const requestedClass = getCharacterClassById(classId);
+  const characterClass = requestedClass?.playerSelectable ? requestedClass : getCharacterClassById(scenario.defaultPlayer.classId)!;
+  const speciesId = scenario.defaultPlayer.speciesId;
+  const build = { speciesId, classId: characterClass.id, level: 1 };
+  const caps = getPlayerResourceCaps(build);
 
   return {
     unitId: PLAYER_UNIT_ID,
     name: playerName,
+    speciesId,
     classId: characterClass.id,
     alignment,
     setupComplete,
-    abilities: { ...characterClass.baseAbilities },
+    abilities: getUnitAbilities(build)!,
     isDead: false,
     statusEffects: [],
     level: 1,
@@ -29,7 +33,7 @@ export const createInitialPlayer = (
     transactionHistory: [],
     currentMapId: scenario.start.mapId,
     gameTimeMinutes: scenario.start.gameTimeMinutes,
-    inventory: characterClass.startingItems.map((entry) => ({ ...entry })),
+    inventory: (characterClass.startingItems ?? []).map((entry) => ({ ...entry })),
     equipped: { ...characterClass.startingEquipment },
     storyFlags: {},
     defeatedMonsters: {},

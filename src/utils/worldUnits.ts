@@ -1,5 +1,5 @@
 import type { PlayerState, PlayerWorldUnit, WorldUnitView } from '../types/game';
-import { getCharacterClassById, getPlayerResourceCaps, getWorldUnitById, PLAYER_UNIT_ID } from '../data/staticData';
+import { getCharacterClassById, getPlayerResourceCaps, getUnitExpReward, getWorldUnitById, PLAYER_UNIT_ID } from '../data/staticData';
 import { getPlayerStatBreakdown } from './gameChecks';
 
 export const isPlayerUnitId = (unitId: string): boolean => unitId === PLAYER_UNIT_ID;
@@ -12,14 +12,18 @@ export function getPlayerWorldUnit(player: PlayerState): PlayerWorldUnit {
     id: player.unitId,
     name: player.name,
     title: characterClass?.name,
-    categoryId: player.classId,
+    speciesId: player.speciesId,
+    classId: player.classId,
+    level: player.level,
     alignment: player.alignment,
     stats: {
-      hp: getPlayerResourceCaps(player.level, player.classId).maxHp,
+      hp: getPlayerResourceCaps(player).maxHp,
+      mp: getPlayerResourceCaps(player).maxMp,
       atk: getPlayerStatBreakdown(player, 'atk').statValue,
       def: getPlayerStatBreakdown(player, 'def').statValue,
       spd: getPlayerStatBreakdown(player, 'spd').statValue
     },
+    expReward: getUnitExpReward(player),
     mapIds: [player.currentMapId],
     source: player
   };

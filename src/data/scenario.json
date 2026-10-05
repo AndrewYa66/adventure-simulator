@@ -9,6 +9,7 @@
   },
   "defaultPlayer": {
     "name": "亞瑟",
+    "speciesId": "human",
     "classId": "adventurer",
     "alignment": "絕對中立"
   },

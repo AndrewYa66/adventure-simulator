@@ -1,5 +1,6 @@
 import type { ActionCheckResult, PlayerState } from '../types/game';
-import { getCharacterClassById, getItemById, getPlayerGrowthByLevel } from '../data/staticData';
+import { getCharacterClassById, getItemById, getPlayerBaseStats, getSpeciesById } from '../data/staticData';
+import { computeCheckBonus } from './unitGrowth';
 
 export const STAT_LABELS: Record<ActionCheckResult['stat'], string> = {
   atk: '攻擊',
@@ -17,6 +18,8 @@ export interface PlayerStatBreakdown {
   baseStat: number;
   equipmentBonus: number;
   statValue: number;
+  /** 種族與職階資料定義的檢定加值，已計入 modifier。 */
+  checkBonus: number;
   modifier: number;
 }
 
@@ -35,20 +38,20 @@ export function getPlayerStatBreakdown(
   player: PlayerState,
   stat: ActionCheckResult['stat']
 ): PlayerStatBreakdown {
-  const growth = getPlayerGrowthByLevel(player.level);
   const abilityStat = ['str', 'dex', 'con', 'int', 'wis', 'cha'].includes(stat);
+  // 戰鬥數值與 NPC/魔物同一公式（種族 × 職階 × 等級），玩家另加裝備。
   const baseStat = abilityStat
     ? player.abilities[stat as keyof PlayerState['abilities']]
-    : stat === 'atk' ? growth?.baseAtk ?? 10 : stat === 'def' ? growth?.baseDef ?? 5 : growth?.spd ?? 10;
-  const classBonus = !abilityStat ? getCharacterClassById(player.classId)?.bonuses[stat as 'atk' | 'def' | 'spd'] ?? 0 : 0;
+    : getPlayerBaseStats(player)[stat as 'atk' | 'def' | 'spd'];
   const equipmentIds = [player.equipped.weaponItemId, player.equipped.armorItemId, player.equipped.accessoryItemId];
   const equipmentBonus = equipmentIds.reduce((total, itemId) => {
     const effect = itemId ? getItemById(itemId)?.effect : undefined;
     const value = stat === 'atk' ? effect?.atkBonus : stat === 'def' ? effect?.defBonus : stat === 'spd' ? effect?.spdBonus : 0;
     return total + (value ?? 0);
-  }, classBonus);
+  }, 0);
   const statValue = baseStat + equipmentBonus;
-  return { baseStat, equipmentBonus, statValue, modifier: Math.floor((statValue - 10) / 2) };
+  const checkBonus = computeCheckBonus(getSpeciesById(player.speciesId), getCharacterClassById(player.classId), stat);
+  return { baseStat, equipmentBonus, statValue, checkBonus, modifier: Math.floor((statValue - 10) / 2) + checkBonus };
 }
 
 export function resolveActionCheck(

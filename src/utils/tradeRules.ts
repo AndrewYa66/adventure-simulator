@@ -91,9 +91,9 @@ export function purchaseService(player: PlayerState, shop: ShopStatic, serviceId
   if (!service || !npcState) return { ok: false, reason: '找不到這項服務。' };
   if (!Number.isSafeInteger(service.price) || service.price < 0) return { ok: false, reason: '服務價格資料無效。' };
   if (player.gold < service.price) return { ok: false, reason: `金幣不足，需要 ${service.price} 枚。` };
-  if (player.hp >= getPlayerResourceCaps(player.level, player.classId).maxHp &&
-      player.mp >= getPlayerResourceCaps(player.level, player.classId).maxMp) return { ok: false, reason: '目前生命與魔力已恢復，無需休息。' };
-  const caps = getPlayerResourceCaps(player.level, player.classId);
+  if (player.hp >= getPlayerResourceCaps(player).maxHp &&
+      player.mp >= getPlayerResourceCaps(player).maxMp) return { ok: false, reason: '目前生命與魔力已恢復，無需休息。' };
+  const caps = getPlayerResourceCaps(player);
   return { ok: true, quantity: 1, totalPrice: service.price, player: {
     ...player,
     hp: caps.maxHp,

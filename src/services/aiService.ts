@@ -1,6 +1,6 @@
 import type { PlayerState, AIResponsePayload } from '../types/game';
 import type { AIModelSettings } from './aiModels';
-import { canPlayerEnterMap, getItemById, getMapById, getNpcCategoryById, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, questsDatabase, scenario } from '../data/staticData';
+import { canPlayerEnterMap, describeUnitBuild, getItemById, getMapById, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, questsDatabase, scenario } from '../data/staticData';
 import { canAcceptQuest, canTurnInQuest } from '../utils/questRules';
 import { getPlayerWorldUnit } from '../utils/worldUnits';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from '../utils/travelIntent';
@@ -169,7 +169,7 @@ export async function sendPlayerAction(
     id: unit.id,
     name: unit.name,
     title: unit.title,
-    category: getNpcCategoryById(unit.categoryId)?.name ?? unit.categoryId,
+    build: describeUnitBuild(unit),
     stats: unit.stats,
     alignment: unit.alignment,
     disposition: getWorldUnitDisposition(playerState, unit.id),
@@ -185,7 +185,7 @@ export async function sendPlayerAction(
   const encounterCandidates = currentUnits.flatMap((unit) => unit.kind === 'monster' &&
     (!unit.source.requiredQuestId || playerState.activeQuests.some((quest) =>
       quest.questId === unit.source.requiredQuestId && quest.status === 'in_progress'
-    )) ? [{ id: unit.id, name: unit.name, disposition: getWorldUnitDisposition(playerState, unit.id) }] : []);
+    )) ? [{ id: unit.id, name: unit.name, build: describeUnitBuild(unit), disposition: getWorldUnitDisposition(playerState, unit.id) }] : []);
   const encounteredUnit = playerState.encounteredUnitId ? getWorldUnitById(playerState.encounteredUnitId) : undefined;
   const playerUnit = getPlayerWorldUnit(playerState);
 
@@ -198,7 +198,7 @@ ${scenario.gmRole}
 當前玩家狀態：
 - 姓名: ${playerState.name} (Lv.${playerState.level})
 - 玩家單位 ID: ${playerUnit.id} | 有效戰鬥數值: ${JSON.stringify(playerUnit.stats)}（玩家不是 NPC/魔物，不可出現在 unitDispositionChanges、encounterRequest 或戰鬥目標）
-- 職業: ${playerState.classId} | 陣營: ${playerState.alignment}
+- 種族/職業/等級: ${describeUnitBuild(playerState)} | 陣營: ${playerState.alignment}
 - 能力值：${JSON.stringify(playerState.abilities)}（檢定須選最相關欄位）
 - HP: ${playerState.hp} | MP: ${playerState.mp} | 金幣: ${playerState.gold}
 - 生命狀態: ${playerState.isDead ? '死亡；冒險已結束' : playerState.statusEffects.some((effect) => effect.id === 'unconscious') ? '昏迷；無法採取行動' : '存活'}

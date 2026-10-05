@@ -21,66 +21,101 @@ export interface ItemStatic {
   description: string;
 }
 
-/** 玩家等級成長設定 (來自 player_growth.json) */
-export interface PlayerGrowthStatic {
-  level: number;
-  requiredExp: number;
-  maxHp: number;
-  maxMp: number;
-  baseAtk: number;
-  baseDef: number;
+/** 能力值六維。 */
+export interface AbilityScores { str: number; dex: number; con: number; int: number; wis: number; cha: number }
+export type AbilityKey = keyof AbilityScores;
+
+/** 有效戰鬥與資源數值；玩家、NPC、魔物共用同一公式計算（見 utils/unitGrowth.ts）。 */
+export interface UnitStatBlock {
+  hp: number;
+  mp: number;
+  atk: number;
+  def: number;
   spd: number;
-  unlockedSkill?: {
-    id: string;
-    name: string;
-    type: 'active' | 'passive';
-    costMp: number;
-    description: string;
-    effect: { kind: 'damage_multiplier'; multiplier: number } | { kind: 'healing'; hpRestore: number };
-  };
-  notes: string;
+}
+export type UnitStatKey = keyof UnitStatBlock;
+
+/** 同等級強度基準表 (來自 level_benchmarks.json)：「人類冒險者」在該等級的標準數值，種族與職階以倍率相對校準。 */
+export interface LevelBenchmarkStatic extends UnitStatBlock {
+  level: number;
+  /** 累計經驗值達此數值即升至下一級；最高等級的值不使用。 */
+  requiredExp: number;
+  /** 被擊倒時給予的基準經驗值，再乘以種族與職階倍率。 */
+  expReward: number;
+}
+
+/** 技能靜態資料 (來自 skills.json)；由職階的 skillUnlocks 依等級解鎖。 */
+export interface SkillStatic {
+  id: string;
+  name: string;
+  type: 'active' | 'passive';
+  costMp: number;
+  description: string;
+  effect: { kind: 'damage_multiplier'; multiplier: number } | { kind: 'healing'; hpRestore: number };
+}
+
+export type ClassCategory = 'combat' | 'social' | 'life';
+export type CheckBonuses = Partial<Record<ActionCheckResult['stat'], number>>;
+
+/** 種族靜態資料 (來自 species.json)：提供基礎數值倍率、能力值修正與天生特性。 */
+export interface SpeciesStatic {
+  id: string;
+  name: string;
+  description: string;
+  /** 可搭配的職階類別；不在其中的職階組合會被資料驗證拒絕。 */
+  allowedClassCategories: ClassCategory[];
+  /** 是否允許沒有職階（例如野獸）。 */
+  allowsNoClass: boolean;
+  statMultipliers: UnitStatBlock;
+  abilityModifiers: Partial<AbilityScores>;
+  checkBonuses?: CheckBonuses;
+  expRewardMultiplier: number;
+  traits: string[];
+}
+
+/** 職階靜態資料 (來自 character_classes.json)：提供成長倍率、能力值修正、檢定加值與技能。 */
+export interface CharacterClassStatic {
+  id: string;
+  name: string;
+  category: ClassCategory;
+  playerSelectable: boolean;
+  description: string;
+  abilityModifiers: Partial<AbilityScores>;
+  statMultipliers: UnitStatBlock;
+  checkBonuses?: CheckBonuses;
+  expRewardMultiplier: number;
+  skillUnlocks?: { level: number; skillId: string }[];
+  /** 玩家可選職階必填。 */
+  startingItems?: { itemId: string; quantity: number }[];
+  startingEquipment?: { weaponItemId?: string; armorItemId?: string; accessoryItemId?: string };
 }
 
 export type CharacterAlignment = '守序善良' | '中立善良' | '混亂善良' | '守序中立' | '絕對中立' | '混亂中立' | '守序邪惡' | '中立邪惡' | '混亂邪惡';
 export type UnitDisposition = 'friendly' | 'neutral' | 'hostile';
 
-/** NPC 與魔物共用的靜態單位欄位；玩家以 PlayerWorldUnit 轉接，不併入靜態資料。 */
-export interface UnitStaticBase {
+/** 單位組成：種族 × 職階 × 等級，加上個體相對修正。玩家、NPC、魔物共用。 */
+export interface UnitBuild {
+  speciesId: string;
+  classId?: string;
+  level: number;
+  /** 相對於公式結果的個體修正（加減值），避免手填絕對數值。 */
+  statAdjustments?: Partial<UnitStatBlock>;
+}
+
+/** NPC 與魔物共用的靜態單位樣板（UnitTemplate）；世界中實際個體的成長保存於存檔。 */
+export interface UnitStaticBase extends UnitBuild {
   id: string;
   name: string;
   title?: string;
-  categoryId?: string;
   alignment?: CharacterAlignment;
   defaultDisposition: UnitDisposition;
-  stats?: Partial<UnitStatBlock>;
-}
-
-/** 所有非玩家單位使用的基礎戰鬥數值欄位。 */
-export interface UnitStatBlock {
-  hp: number;
-  atk: number;
-  def: number;
-  spd: number;
-}
-
-export interface CharacterClassStatic {
-  id: string;
-  name: string;
-  description: string;
-  baseAbilities: { str: number; dex: number; con: number; int: number; wis: number; cha: number };
-  bonuses: { atk: number; def: number; spd: number; maxHp: number; maxMp: number };
-  startingItems: { itemId: string; quantity: number }[];
-  startingEquipment: { weaponItemId?: string; armorItemId?: string; accessoryItemId?: string };
 }
 
 /** 怪物靜態資料 (來自 monsters.json) */
 export interface MonsterStatic extends UnitStaticBase {
   enName: string;
   tier: string;           // 例如: "普通 (Common)"
-  recommendedLevel: number;
-  stats: UnitStatBlock;
   rewards: {
-    exp: number;
     gold: number;
     dropItems: {
       itemId: string;
@@ -103,17 +138,9 @@ export interface MonsterStatic extends UnitStaticBase {
   tacticsAndBehavior: string; // 供 AI DM 參考的行為提示
 }
 
-/** NPC 數值類別：類別提供預設能力值，個別 NPC 可覆寫數值。 */
-export interface NpcCategoryStatic {
-  id: string;
-  name: string;
-  baseStats: UnitStatBlock;
-}
-
-/** NPC 靜態資料：身份、職稱、所屬地區與類別數值。 */
+/** NPC 靜態資料：身份、職稱、所屬地區與種族/職階。 */
 export interface NpcStatic extends UnitStaticBase {
   title: string;
-  categoryId: string;
   mapId: string;
   shopId?: string;
   startingGold?: number;
@@ -121,32 +148,33 @@ export interface NpcStatic extends UnitStaticBase {
   description: string;
 }
 
-/** 共用查詢層回傳的正規化單位視圖；source 保留原有種類專屬資料。 */
+/** 共用查詢層回傳的正規化單位視圖；stats/expReward 依種族、職階、等級計算，source 保留原有種類專屬資料。 */
 export type WorldUnitStatic =
-  | (Omit<UnitStaticBase, 'stats'> & {
+  | (UnitStaticBase & {
     kind: 'npc';
     title: string;
-    categoryId: string;
     stats: UnitStatBlock;
+    expReward: number;
     mapIds: string[];
     source: NpcStatic;
   })
-  | (Omit<UnitStaticBase, 'stats'> & {
+  | (UnitStaticBase & {
     kind: 'monster';
     stats: UnitStatBlock;
+    expReward: number;
     mapIds: string[];
     source: MonsterStatic;
   });
 
-/** 玩家在共用單位查詢中的視圖；數值由存檔與成長/職業/裝備規則即時計算，source 保留完整玩家存檔。 */
-export interface PlayerWorldUnit {
+/** 玩家在共用單位查詢中的視圖；數值與 NPC/魔物同一公式計算並加上裝備，source 保留完整玩家存檔。 */
+export interface PlayerWorldUnit extends UnitBuild {
   kind: 'player';
   id: string;
   name: string;
   title?: string;
-  categoryId: string;
   alignment: CharacterAlignment;
   stats: UnitStatBlock;
+  expReward: number;
   mapIds: string[];
   source: PlayerState;
 }
@@ -184,7 +212,7 @@ export interface ScenarioStatic {
   /** 主持人 AI 的角色與世界觀定位，置於系統指令開頭。 */
   gmRole: string;
   start: { mapId: string; gold: number; gameTimeMinutes: number };
-  defaultPlayer: { name: string; classId: string; alignment: CharacterAlignment };
+  defaultPlayer: { name: string; speciesId: string; classId: string; alignment: CharacterAlignment };
   opening: {
     introText: string;
     resetText: string;
@@ -246,10 +274,12 @@ export interface PlayerState {
   /** 玩家穩定單位 ID；舊存檔載入時補上 PLAYER_UNIT_ID。 */
   unitId: string;
   name: string;
+  /** 玩家種族；舊存檔載入時補為劇本預設種族。 */
+  speciesId: string;
   classId: string;
   alignment: CharacterAlignment;
   setupComplete: boolean;
-  abilities: { str: number; dex: number; con: number; int: number; wis: number; cha: number };
+  abilities: AbilityScores;
   isDead: boolean;
   statusEffects: { id: 'unconscious'; remainingTurns: number }[];
   level: number;
@@ -311,6 +341,8 @@ export interface ActionCheckResult {
   baseStat: number;
   equipmentBonus: number;
   statValue: number;
+  /** 種族/職階檢定加值（已計入 modifier）；舊紀錄沒有此欄位。 */
+  checkBonus?: number;
   modifier: number;
   total: number;
   dc: number;

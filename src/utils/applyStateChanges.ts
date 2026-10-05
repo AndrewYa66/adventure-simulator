@@ -1,6 +1,7 @@
 import type { AIResponsePayload, PlayerState } from '../types/game';
-import { getItemById, getMapById, getPlayerGrowthByLevel, getPlayerResourceCaps, getQuestById, getWorldUnitById, getWorldUnitDisposition } from '../data/staticData';
+import { getItemById, getMapById, getPlayerResourceCaps, getQuestById, getWorldUnitById, getWorldUnitDisposition, levelBenchmarksDatabase, MAX_UNIT_LEVEL } from '../data/staticData';
 import { acceptQuest } from './questRules';
+import { resolveLevelFromExp } from './unitGrowth';
 
 export function applyStateChanges(player: PlayerState, response: AIResponsePayload, source: 'ai' | 'game' = 'ai'): PlayerState {
   const changes = response.stateChanges;
@@ -146,7 +147,6 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
     else inventory.push({ itemId: item.itemId, quantity: item.quantity });
   }
 
-  let level = player.level;
   const trustedExpChange = source === 'game' ? changes.expChange ?? 0 : Math.min(0, changes.expChange ?? 0);
   const trustedGoldChange = source === 'game' ? changes.goldChange ?? 0 : Math.min(0, changes.goldChange ?? 0);
   if (trustedGoldChange !== 0) {
@@ -155,24 +155,12 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
   const exp = Math.max(0, player.exp + trustedExpChange + questExp);
   let hp = Math.max(0, player.hp + (changes.hpChange ?? 0));
   let mp = Math.max(0, player.mp + (changes.mpChange ?? 0));
-  let growth = getPlayerGrowthByLevel(level);
-
-  while (growth && exp >= growth.requiredExp) {
-    const nextGrowth = getPlayerGrowthByLevel(level + 1);
-    if (!nextGrowth) break;
-    const previousCaps = getPlayerResourceCaps(level, player.classId);
-    const nextCaps = getPlayerResourceCaps(nextGrowth.level, player.classId);
-    hp = Math.min(nextCaps.maxHp, hp + (nextCaps.maxHp - previousCaps.maxHp));
-    mp = Math.min(nextCaps.maxMp, mp + (nextCaps.maxMp - previousCaps.maxMp));
-    level = nextGrowth.level;
-    growth = nextGrowth;
-  }
-
-  if (growth) {
-    const caps = getPlayerResourceCaps(level, player.classId);
-    hp = Math.min(hp, caps.maxHp);
-    mp = Math.min(mp, caps.maxMp);
-  }
+  // 升級規則與 NPC/魔物共用：累計經驗達等級基準表門檻即升級，升級時增加的資源上限同步補給。
+  const level = resolveLevelFromExp(levelBenchmarksDatabase, player.level, exp, MAX_UNIT_LEVEL);
+  const previousCaps = getPlayerResourceCaps(player);
+  const caps = getPlayerResourceCaps({ ...player, level });
+  hp = Math.min(caps.maxHp, hp + Math.max(0, caps.maxHp - previousCaps.maxHp));
+  mp = Math.min(caps.maxMp, mp + Math.max(0, caps.maxMp - previousCaps.maxMp));
 
   return {
     ...player,

@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import type { CharacterAlignment } from '../types/game';
-import { characterClassesDatabase, getItemById, scenario } from '../data/staticData';
+import { getPlayerBaseStats, getSpeciesById, getItemById, getUnitAbilities, playerSelectableClasses, scenario } from '../data/staticData';
 
 const alignments: CharacterAlignment[] = [
   '守序善良', '中立善良', '混亂善良', '守序中立', '絕對中立', '混亂中立', '守序邪惡', '中立邪惡', '混亂邪惡'
@@ -14,7 +14,11 @@ export function CharacterSetup({ onCreate }: CharacterSetupProps) {
   const [name, setName] = useState(scenario.defaultPlayer.name);
   const [classId, setClassId] = useState(scenario.defaultPlayer.classId);
   const [alignment, setAlignment] = useState<CharacterAlignment>(scenario.defaultPlayer.alignment);
-  const characterClass = characterClassesDatabase.find((entry) => entry.id === classId) ?? characterClassesDatabase[0];
+  const selectableClasses = playerSelectableClasses();
+  const characterClass = selectableClasses.find((entry) => entry.id === classId) ?? selectableClasses[0];
+  const build = { speciesId: scenario.defaultPlayer.speciesId, classId: characterClass.id, level: 1 };
+  const abilities = getUnitAbilities(build);
+  const stats = getPlayerBaseStats(build);
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -29,7 +33,7 @@ export function CharacterSetup({ onCreate }: CharacterSetupProps) {
       </label>
       <label style={{ display: 'block', marginBottom: '14px' }}>職業
         <select value={classId} onChange={(event) => setClassId(event.target.value)} style={{ display: 'block', width: '100%', marginTop: '5px', padding: '9px', background: '#151515', color: '#fff', border: '1px solid #555', borderRadius: '4px' }}>
-          {characterClassesDatabase.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
+          {selectableClasses.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
         </select>
       </label>
       <label style={{ display: 'block', marginBottom: '14px' }}>陣營傾向
@@ -40,11 +44,11 @@ export function CharacterSetup({ onCreate }: CharacterSetupProps) {
       <p style={{ color: '#bbb' }}>{characterClass.description}</p>
       <h3>能力值</h3>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', fontSize: '13px' }}>
-        {Object.entries(characterClass.baseAbilities).map(([stat, value]) => <div key={stat} style={{ padding: '7px', background: '#333', borderRadius: '4px' }}>{stat.toUpperCase()} {value}</div>)}
+        {Object.entries(abilities ?? {}).map(([stat, value]) => <div key={stat} style={{ padding: '7px', background: '#333', borderRadius: '4px' }}>{stat.toUpperCase()} {value}</div>)}
       </div>
-      <p>戰鬥加值：ATK {characterClass.bonuses.atk >= 0 ? '+' : ''}{characterClass.bonuses.atk} · DEF {characterClass.bonuses.def >= 0 ? '+' : ''}{characterClass.bonuses.def} · SPD {characterClass.bonuses.spd >= 0 ? '+' : ''}{characterClass.bonuses.spd}<br />資源加值：HP {characterClass.bonuses.maxHp >= 0 ? '+' : ''}{characterClass.bonuses.maxHp} · MP {characterClass.bonuses.maxMp >= 0 ? '+' : ''}{characterClass.bonuses.maxMp}</p>
+      <p>種族：{getSpeciesById(build.speciesId)?.name ?? build.speciesId}（由劇本設定）<br />Lv.1 數值：HP {stats.hp} · MP {stats.mp} · ATK {stats.atk} · DEF {stats.def} · SPD {stats.spd}</p>
       <h3>初始持有物</h3>
-      <div style={{ fontSize: '13px', color: '#ccc' }}>{characterClass.startingItems.map((item) => `${getItemById(item.itemId)?.name ?? item.itemId} ×${item.quantity}`).join('、') || '無'}</div>
+      <div style={{ fontSize: '13px', color: '#ccc' }}>{(characterClass.startingItems ?? []).map((item) => `${getItemById(item.itemId)?.name ?? item.itemId} ×${item.quantity}`).join('、') || '無'}</div>
       <button type="submit" style={{ width: '100%', marginTop: '20px', padding: '11px', background: '#2e7d32', color: 'white', border: 0, borderRadius: '5px', cursor: 'pointer' }}>開始冒險</button>
     </form>
   </div>;

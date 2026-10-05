@@ -141,6 +141,6 @@ const CheckResultCard: React.FC<{ result: ActionCheckResult }> = ({ result }) =>
       ))}
     </div>
     <div>{STAT_LABELS[result.stat]}能力：{result.baseStat} 基礎 {result.equipmentBonus >= 0 ? '+' : '−'} {Math.abs(result.equipmentBonus)} 裝備 = {result.statValue}</div>
-    <div>檢定計算：{result.d20Rolls[0]} {result.modifier >= 0 ? '+' : '−'} {Math.abs(result.modifier)} 修正 = <strong>{result.total}</strong>，目標 DC {result.dc}</div>
+    <div>檢定計算：{result.d20Rolls[0]} {result.modifier >= 0 ? '+' : '−'} {Math.abs(result.modifier)} 修正{result.checkBonus ? `（含種族/職階加值 ${result.checkBonus > 0 ? '+' : ''}${result.checkBonus}）` : ''} = <strong>{result.total}</strong>，目標 DC {result.dc}</div>
   </section>
 );

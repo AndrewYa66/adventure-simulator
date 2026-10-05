@@ -1,0 +1,79 @@
+[
+  {
+    "id": "human",
+    "name": "人類",
+    "description": "分布最廣的種族，適應力強，各種職階都有。",
+    "allowedClassCategories": ["combat", "social", "life"],
+    "allowsNoClass": false,
+    "statMultipliers": { "hp": 1, "mp": 1, "atk": 1, "def": 1, "spd": 1 },
+    "abilityModifiers": {},
+    "expRewardMultiplier": 1,
+    "traits": ["適應力強"]
+  },
+  {
+    "id": "elf",
+    "name": "精靈",
+    "description": "長壽而敏銳的森林住民，擅長魔法與弓術。",
+    "allowedClassCategories": ["combat", "social", "life"],
+    "allowsNoClass": false,
+    "statMultipliers": { "hp": 0.9, "mp": 1.2, "atk": 1, "def": 0.9, "spd": 1.1 },
+    "abilityModifiers": { "dex": 2, "int": 1, "con": -1 },
+    "expRewardMultiplier": 1,
+    "traits": ["夜視", "長壽"]
+  },
+  {
+    "id": "dwarf",
+    "name": "矮人",
+    "description": "居於山中的工匠種族，體魄強健、意志堅定。",
+    "allowedClassCategories": ["combat", "social", "life"],
+    "allowsNoClass": false,
+    "statMultipliers": { "hp": 1.15, "mp": 0.9, "atk": 1, "def": 1.2, "spd": 0.85 },
+    "abilityModifiers": { "con": 2, "str": 1, "dex": -1 },
+    "expRewardMultiplier": 1,
+    "traits": ["耐毒", "熟悉礦脈"]
+  },
+  {
+    "id": "halfling",
+    "name": "半身人",
+    "description": "身材矮小、行動靈巧的農耕種族，運氣常站在他們這邊。",
+    "allowedClassCategories": ["combat", "social", "life"],
+    "allowsNoClass": false,
+    "statMultipliers": { "hp": 0.85, "mp": 1, "atk": 0.9, "def": 0.9, "spd": 1.15 },
+    "abilityModifiers": { "dex": 2, "cha": 1, "str": -2 },
+    "expRewardMultiplier": 1,
+    "traits": ["身形靈巧"]
+  },
+  {
+    "id": "goblin",
+    "name": "哥布林",
+    "description": "個體弱小但數量眾多，擅長游擊與夜襲。",
+    "allowedClassCategories": ["combat"],
+    "allowsNoClass": false,
+    "statMultipliers": { "hp": 0.3, "mp": 0.5, "atk": 0.6, "def": 0.4, "spd": 0.85 },
+    "abilityModifiers": { "dex": 2, "str": -2, "cha": -2 },
+    "expRewardMultiplier": 1,
+    "traits": ["夜視", "群體作戰"]
+  },
+  {
+    "id": "orc",
+    "name": "獸人",
+    "description": "體格壯碩的荒原部族，崇尚力量。",
+    "allowedClassCategories": ["combat", "life"],
+    "allowsNoClass": false,
+    "statMultipliers": { "hp": 0.55, "mp": 0.4, "atk": 0.9, "def": 0.6, "spd": 0.8 },
+    "abilityModifiers": { "str": 3, "con": 2, "int": -2, "cha": -2 },
+    "expRewardMultiplier": 1,
+    "traits": ["夜視", "怒氣"]
+  },
+  {
+    "id": "beast",
+    "name": "野獸",
+    "description": "沒有文明與職階的動物與魔獸。",
+    "allowedClassCategories": [],
+    "allowsNoClass": true,
+    "statMultipliers": { "hp": 0.3, "mp": 0, "atk": 0.7, "def": 0.4, "spd": 1.1 },
+    "abilityModifiers": { "str": 2, "dex": 2, "int": -6, "cha": -6 },
+    "expRewardMultiplier": 0.9,
+    "traits": ["本能行動"]
+  }
+]

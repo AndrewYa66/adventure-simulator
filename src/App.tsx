@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import type { ActionCheckResult, PlayerGrowthStatic, PlayerState, StoryMessage, WorldUnitStatic } from './types/game';
+import type { ActionCheckResult, SkillStatic, PlayerState, StoryMessage, WorldUnitStatic } from './types/game';
 import { loadGameSession, resetPlayerState, saveGameSession } from './utils/playerStorage';
 import { applyStateChanges } from './utils/applyStateChanges';
-import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getQuestById, getShopById, getUnlockedSkillsByLevel, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, scenario } from './data/staticData';
+import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getQuestById, getShopById, getUnlockedSkills, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, scenario } from './data/staticData';
 import { getPlayerStatBreakdown, resolveActionCheck } from './utils/gameChecks';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from './utils/travelIntent';
 import { sendPlayerAction } from './services/aiService';
@@ -267,7 +267,7 @@ export default function App() {
     appendSystemMessage(`你與${combatUnit?.name ?? '敵人'}拉開距離，戰鬥結束。`);
   };
 
-  const handleCombatAction = (skill?: NonNullable<PlayerGrowthStatic['unlockedSkill']>, sourcePlayer: PlayerState = player) => {
+  const handleCombatAction = (skill?: SkillStatic, sourcePlayer: PlayerState = player) => {
     const combat = sourcePlayer.combat;
     const unit = combat ? getWorldUnitById(combat.unitId) : undefined;
     if (!combat || !unit || sourcePlayer.isDead) return;
@@ -315,7 +315,7 @@ export default function App() {
       const nextPlayer = applyStateChanges(combatActionPlayer, {
         storyText: '', suggestedActions: [],
         stateChanges: {
-          expChange: monster.rewards.exp,
+          expChange: unit.expReward,
           goldChange: monster.rewards.gold,
           addItems: dropItems,
           defeatedMonsters: [{ monsterId: monster.id, quantity: 1 }],
@@ -330,7 +330,7 @@ export default function App() {
       delete victoryState.combat;
       delete victoryState.encounteredUnitId;
       updatePlayer(victoryState);
-      appendSystemMessage(`🏆 ${attackText}\n${monster.name}已被擊敗！獲得 ${monster.rewards.exp} EXP、${monster.rewards.gold} 金幣。${dropText}${questText ? `\n${questText}` : ''}`, checks);
+      appendSystemMessage(`🏆 ${attackText}\n${monster.name}已被擊敗！獲得 ${unit.expReward} EXP、${monster.rewards.gold} 金幣。${dropText}${questText ? `\n${questText}` : ''}`, checks);
       return;
     }
 
@@ -351,11 +351,11 @@ export default function App() {
   const handleAttack = () => handleCombatAction();
 
   const handleUseSkill = (skillId: string) => {
-    const skill = getUnlockedSkillsByLevel(player.level).find((entry) => entry.id === skillId);
+    const skill = getUnlockedSkills(player.classId, player.level).find((entry) => entry.id === skillId);
     if (!skill || !canPlayerAct(player) || player.mp < skill.costMp) return;
     if (skill.effect.kind === 'healing') {
       if (player.combat) return;
-      const caps = getPlayerResourceCaps(player.level, player.classId);
+      const caps = getPlayerResourceCaps(player);
       const restored = Math.min(skill.effect.hpRestore, Math.max(0, caps.maxHp - player.hp));
       if (restored <= 0) {
         appendSystemMessage(`${skill.name}目前無法恢復 HP，沒有消耗 MP。`);
@@ -377,7 +377,7 @@ export default function App() {
     const item = getItemById(itemId);
     const inventoryEntry = player.inventory.find((entry) => entry.itemId === itemId);
     if (!item || item.type !== 'consumable' || !inventoryEntry || inventoryEntry.quantity <= 0 || !canPlayerAct(player) || (player.combat && !item.usableInCombat)) return;
-    const caps = getPlayerResourceCaps(player.level, player.classId);
+    const caps = getPlayerResourceCaps(player);
     const hpRestore = Math.min(item.effect.hpRestore ?? 0, Math.max(0, caps.maxHp - player.hp));
     const mpRestore = Math.min(item.effect.mpRestore ?? 0, Math.max(0, caps.maxMp - player.mp));
     if (hpRestore <= 0 && mpRestore <= 0) {
@@ -514,7 +514,7 @@ export default function App() {
       ]);
       return;
     }
-    const requestedSkill = getUnlockedSkillsByLevel(player.level).find((skill) =>
+    const requestedSkill = getUnlockedSkills(player.classId, player.level).find((skill) =>
       (actionText.includes(skill.name) || actionText.includes(skill.id)) && /(?:施放|施展|使用|施法|發動)/u.test(actionText) &&
       !/(?:如何|怎麼|能否|可不可以|是否|請問|教我|詢問|不要|不想|無法|不能)/u.test(actionText)
     );
@@ -526,7 +526,7 @@ export default function App() {
         }]);
         return;
       }
-      const caps = getPlayerResourceCaps(player.level, player.classId);
+      const caps = getPlayerResourceCaps(player);
       const restored = Math.min(requestedSkill.effect.hpRestore, Math.max(0, caps.maxHp - player.hp));
       if (player.mp < requestedSkill.costMp || restored <= 0) {
         setMessages((prev) => [...prev, userMessage, {

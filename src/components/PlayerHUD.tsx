@@ -1,6 +1,6 @@
 import React from 'react';
 import type { PlayerState } from '../types/game';
-import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getNpcCategoryById, getPlayerGrowthByLevel, getPlayerResourceCaps, getQuestById, getShopForNpc, getUnlockedSkillsByLevel, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, questsDatabase } from '../data/staticData';
+import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, describeUnitBuild, getLevelBenchmark, getSpeciesById, getPlayerResourceCaps, getQuestById, getShopForNpc, getUnlockedSkills, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, questsDatabase } from '../data/staticData';
 import { getPlayerStatBreakdown, STAT_LABELS } from '../utils/gameChecks';
 import { canAcceptQuest, canTurnInQuest } from '../utils/questRules';
 import { canPlayerAct, isPlayerUnconscious } from '../utils/playerStatus';
@@ -25,10 +25,10 @@ interface PlayerHUDProps {
 }
 
 export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWarning, onTravel, onAcceptQuest, onStartCombat, onFleeCombat, onAttack, onUseSkill, onUseItem, onBuyItem, onSellItem, onEquipItem, onUseService, onTurnInQuest }) => {
-  const growth = getPlayerGrowthByLevel(player.level);
-  const { maxHp, maxMp } = getPlayerResourceCaps(player.level, player.classId);
+  const growth = getLevelBenchmark(player.level);
+  const { maxHp, maxMp } = getPlayerResourceCaps(player);
   const maxExp = growth?.requiredExp || 100;
-  const unlockedSkills = getUnlockedSkillsByLevel(player.level);
+  const unlockedSkills = getUnlockedSkills(player.classId, player.level);
 
   const currentMap = getMapById(player.currentMapId);
   const presentNpcs = getWorldUnitsAtMap(player.currentMapId).filter((unit) => unit.kind === 'npc');
@@ -46,6 +46,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
         <h3 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #444', paddingBottom: '6px' }}>👤 角色狀態</h3>
         <p style={{ margin: '4px 0' }}><strong>🕰️ 時間:</strong> {formatGameTime(player.gameTimeMinutes)}</p>
         <p style={{ margin: '4px 0' }}><strong>姓名:</strong> {player.name}</p>
+        <p style={{ margin: '4px 0' }}><strong>種族:</strong> {getSpeciesById(player.speciesId)?.name ?? player.speciesId}</p>
         <p style={{ margin: '4px 0' }}><strong>職業:</strong> {getCharacterClassById(player.classId)?.name ?? player.classId}</p>
         <p style={{ margin: '4px 0' }}><strong>傾向:</strong> {player.alignment}</p>
         {(player.isDead || isPlayerUnconscious(player)) && <p role="status" style={{ margin: '4px 0', color: '#ff8a80', fontWeight: 'bold' }}>{player.isDead ? '☠️ 已死亡' : '💫 昏迷中'}</p>}
@@ -88,7 +89,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
             <strong>{ability.label}</strong>
             <span style={{ textAlign: 'right' }}>
               <strong>{ability.statValue}</strong> <span style={{ color: '#aaa' }}>(修正 {ability.modifier >= 0 ? '+' : ''}{ability.modifier})</span>
-              <span style={{ display: 'block', color: '#888', fontSize: '10px' }}>基礎 {ability.baseStat} · 裝備 {ability.equipmentBonus >= 0 ? '+' : ''}{ability.equipmentBonus}</span>
+              <span style={{ display: 'block', color: '#888', fontSize: '10px' }}>基礎 {ability.baseStat} · 裝備 {ability.equipmentBonus >= 0 ? '+' : ''}{ability.equipmentBonus}{ability.checkBonus ? ` · 檢定 ${ability.checkBonus > 0 ? '+' : ''}${ability.checkBonus}` : ''}</span>
             </span>
           </div>
         ))}
@@ -151,7 +152,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
           const dispositionLabel = disposition === 'friendly' ? '友善' : disposition === 'hostile' ? '敵對' : '中立';
           return <div key={npc.id} style={{ marginBottom: '7px', fontSize: '12px' }}>
             <strong>{npc.name}・{npc.title}</strong>
-            <div style={{ color: '#aaa' }}>類別：{getNpcCategoryById(npc.categoryId)?.name ?? npc.categoryId} · 關係：{dispositionLabel} · HP {npcState?.currentHp ?? stats.hp}/{stats.hp} · ATK {stats.atk} · DEF {stats.def} · SPD {stats.spd}{npcState?.isDead ? ' · 已死亡' : ''}</div>
+            <div style={{ color: '#aaa' }}>{describeUnitBuild(unit)} · 關係：{dispositionLabel} · HP {npcState?.currentHp ?? stats.hp}/{stats.hp} · ATK {stats.atk} · DEF {stats.def} · SPD {stats.spd}{npcState?.isDead ? ' · 已死亡' : ''}</div>
             {!npcState?.isDead && disposition === 'hostile' && <button onClick={() => onStartCombat(npc.id)} disabled={!canPlayerAct(player) || !!player.combat} style={{ margin: '4px 0', padding: '4px 7px' }}>挑戰 {npc.name}</button>}
             {!npcState?.isDead && <div style={{ color: '#888' }}>持有：金幣 {npcState?.gold ?? 0} · {(npcState?.inventory ?? []).map((entry) => `${getItemById(entry.itemId)?.name ?? entry.itemId} ×${entry.quantity}`).join('、') || '無物品'}</div>}
             {(() => {

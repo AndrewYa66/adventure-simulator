@@ -6,10 +6,10 @@
     "alignment": "混亂邪惡",
     "defaultDisposition": "hostile",
     "tier": "普通 (Common)",
-    "recommendedLevel": 1,
-    "stats": { "hp": 25, "atk": 6, "def": 2, "spd": 8 },
+    "speciesId": "goblin",
+    "classId": "scout",
+    "level": 1,
     "rewards": {
-      "exp": 20,
       "gold": 5,
       "dropItems": [{ "itemId": "ITEM-002", "chance": 0.8 }]
     },
@@ -25,10 +25,11 @@
     "alignment": "混亂邪惡",
     "defaultDisposition": "hostile",
     "tier": "普通 (Common)",
-    "recommendedLevel": 2,
-    "stats": { "hp": 42, "atk": 9, "def": 4, "spd": 5 },
+    "speciesId": "goblin",
+    "classId": "warrior",
+    "level": 2,
+    "statAdjustments": { "spd": -4 },
     "rewards": {
-      "exp": 28,
       "gold": 9,
       "dropItems": [{ "itemId": "ITEM-002", "chance": 0.65 }, { "itemId": "ITEM-001", "chance": 0.12 }]
     },
@@ -44,12 +45,12 @@
     "alignment": "混亂邪惡",
     "defaultDisposition": "hostile",
     "tier": "頭目 (Boss)",
-    "recommendedLevel": 2,
+    "speciesId": "goblin",
+    "classId": "chieftain",
+    "level": 2,
     "isBoss": true,
     "requiredQuestId": "QST-002",
-    "stats": { "hp": 78, "atk": 10, "def": 4, "spd": 8 },
     "rewards": {
-      "exp": 65,
       "gold": 30,
       "dropItems": [{ "itemId": "ITEM-004", "chance": 1 }]
     },
@@ -75,10 +76,9 @@
     "alignment": "絕對中立",
     "defaultDisposition": "neutral",
     "tier": "普通 (Common)",
-    "recommendedLevel": 1,
-    "stats": { "hp": 30, "atk": 7, "def": 2, "spd": 11 },
+    "speciesId": "beast",
+    "level": 1,
     "rewards": {
-      "exp": 18,
       "gold": 3,
       "dropItems": []
     },

@@ -1,7 +1,8 @@
 import type { GameSession, PlayerState, StoryMessage } from '../types/game';
-import { createDefaultNpcWorldState, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getQuestById, getWorldUnitById, npcsDatabase, PLAYER_UNIT_ID, scenario } from '../data/staticData';
+import { createDefaultNpcWorldState, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getQuestById, getSpeciesById, getUnitAbilities, getWorldUnitById, MAX_UNIT_LEVEL, npcsDatabase, PLAYER_UNIT_ID, scenario } from '../data/staticData';
 import { createInitialPlayer } from './playerInit';
 import { isValidGameTime } from './gameTime';
+import { isValidSpeciesClassCombo } from './unitGrowth';
 
 const PLAYER_STORAGE_KEY = 'TRPG_PLAYER_STATE';
 const SESSION_STORAGE_KEY = 'TRPG_GAME_SESSION';
@@ -30,16 +31,20 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
       !isRecord(value.storyFlags) || !Object.values(value.storyFlags).every((flag) => typeof flag === 'boolean') ||
       !Array.isArray(value.activeQuests)) return null;
 
-  const classId = typeof value.classId === 'string' && getCharacterClassById(value.classId) ? value.classId : scenario.defaultPlayer.classId;
-  const resourceCaps = getPlayerResourceCaps(value.level as number, classId);
-  if ((value.hp as number) > resourceCaps.maxHp || (value.mp as number) > resourceCaps.maxMp) return null;
+  const classId = typeof value.classId === 'string' && getCharacterClassById(value.classId)?.playerSelectable ? value.classId : scenario.defaultPlayer.classId;
+  // 舊存檔沒有種族時補為劇本預設種族；無效組合同樣回到預設種族。
+  const savedSpecies = typeof value.speciesId === 'string' ? getSpeciesById(value.speciesId) : undefined;
+  const speciesId = savedSpecies && isValidSpeciesClassCombo(savedSpecies, getCharacterClassById(classId)) ? savedSpecies.id : scenario.defaultPlayer.speciesId;
+  const level = Math.min(value.level as number, MAX_UNIT_LEVEL);
+  // 數值基準重新校準後，舊存檔的 HP/MP 可能略高於新上限；夾回上限而非整份存檔作廢。
+  const resourceCaps = getPlayerResourceCaps({ speciesId, classId, level });
   const abilityKeys = ['str', 'dex', 'con', 'int', 'wis', 'cha'] as const;
   const savedAbilities = isRecord(value.abilities) ? value.abilities : {};
-  const abilityDefaults = getCharacterClassById(classId)?.baseAbilities ?? { str: 12, dex: 12, con: 12, int: 10, wis: 10, cha: 10 };
+  const abilityDefaults = getUnitAbilities({ speciesId, classId })!;
   const abilities = Object.fromEntries(abilityKeys.map((key) => {
     const score = savedAbilities[key];
     return [key, Number.isInteger(score) && (score as number) >= 1 && (score as number) <= 30 ? score as number : abilityDefaults[key]];
-  })) as typeof abilityDefaults;
+  })) as unknown as typeof abilityDefaults;
 
   const inventory = value.inventory.flatMap((entry) => {
     if (!isRecord(entry) || typeof entry.itemId !== 'string' || !getItemById(entry.itemId) ||
@@ -89,10 +94,9 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
       ? value.npcStates[combatUnitId!] as Record<string, unknown> : undefined;
     if (!isRecord(value.combat) || !combatUnitId || !combatUnit || !combatUnitIsPresent ||
         !Number.isInteger(value.combat.currentHp) || (value.combat.currentHp as number) <= 0 ||
-        (value.combat.currentHp as number) > combatUnit.stats.hp ||
         !Number.isInteger(value.combat.round) || (value.combat.round as number) < 1 ||
         (savedCombatNpcState?.isDead === true || savedCombatNpcState?.currentHp === 0)) return null;
-    combat = { unitId: combatUnitId, currentHp: value.combat.currentHp as number, round: value.combat.round as number };
+    combat = { unitId: combatUnitId, currentHp: Math.min(value.combat.currentHp as number, combatUnit.stats.hp), round: value.combat.round as number };
   }
   const previousMapId = typeof value.previousMapId === 'string' &&
     getMapById(value.currentMapId)?.connectedMapIds.includes(value.previousMapId)
@@ -111,7 +115,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     savedEncounteredNpcState?.isDead !== true && savedEncounteredNpcState?.currentHp !== 0
     ? savedEncounteredUnitId
     : undefined;
-  const hp = Math.max(0, value.hp as number);
+  const hp = Math.min(resourceCaps.maxHp, Math.max(0, value.hp as number));
   const statusEffects = Array.isArray(value.statusEffects)
     ? value.statusEffects.flatMap((effect) => isRecord(effect) && effect.id === 'unconscious' &&
       Number.isInteger(effect.remainingTurns) && (effect.remainingTurns as number) > 0
@@ -132,8 +136,8 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     return [npc.id, {
       gold: Number.isSafeInteger(savedState.gold) && (savedState.gold as number) >= 0 ? savedState.gold as number : 0,
       inventory: savedInventory,
-      currentHp: Number.isInteger(savedState.currentHp) && (savedState.currentHp as number) >= 0 && (savedState.currentHp as number) <= maxHp
-        ? savedState.currentHp as number : maxHp,
+      currentHp: Number.isInteger(savedState.currentHp) && (savedState.currentHp as number) >= 0
+        ? Math.min(savedState.currentHp as number, maxHp) : maxHp,
       isDead: savedState.isDead === true || savedState.currentHp === 0
     }];
   }));
@@ -153,6 +157,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
   return {
     unitId: PLAYER_UNIT_ID,
     name: value.name.trim(),
+    speciesId,
     classId,
     alignment: ['守序善良', '中立善良', '混亂善良', '守序中立', '絕對中立', '混亂中立', '守序邪惡', '中立邪惡', '混亂邪惡'].includes(String(value.alignment))
       ? value.alignment as PlayerState['alignment']
@@ -161,10 +166,10 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     abilities,
     isDead,
     statusEffects,
-    level: value.level as number,
+    level,
     exp: value.exp as number,
     hp,
-    mp: Math.max(0, value.mp as number),
+    mp: Math.min(resourceCaps.maxMp, Math.max(0, value.mp as number)),
     gold: value.gold as number,
     npcStates,
     transactionHistory,
