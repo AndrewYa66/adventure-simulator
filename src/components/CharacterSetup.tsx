@@ -8,9 +8,11 @@ const alignments: CharacterAlignment[] = [
 
 interface CharacterSetupProps {
   onCreate: (name: string, classId: string, alignment: CharacterAlignment) => void;
+  /** 提供時顯示「取消」（在同一世界接續新角色時可返回）。 */
+  onCancel?: () => void;
 }
 
-export function CharacterSetup({ onCreate }: CharacterSetupProps) {
+export function CharacterSetup({ onCreate, onCancel }: CharacterSetupProps) {
   const [name, setName] = useState(scenario.defaultPlayer.name);
   const [classId, setClassId] = useState(scenario.defaultPlayer.classId);
   const [alignment, setAlignment] = useState<CharacterAlignment>(scenario.defaultPlayer.alignment);
@@ -50,6 +52,7 @@ export function CharacterSetup({ onCreate }: CharacterSetupProps) {
       <h3>初始持有物</h3>
       <div style={{ fontSize: '13px', color: '#ccc' }}>{(characterClass.startingItems ?? []).map((item) => `${getItemById(item.itemId)?.name ?? item.itemId} ×${item.quantity}`).join('、') || '無'}</div>
       <button type="submit" style={{ width: '100%', marginTop: '20px', padding: '11px', background: '#2e7d32', color: 'white', border: 0, borderRadius: '5px', cursor: 'pointer' }}>開始冒險</button>
+      {onCancel && <button type="button" onClick={onCancel} style={{ width: '100%', marginTop: '8px', padding: '9px', background: '#333', color: '#eee', border: '1px solid #555', borderRadius: '5px', cursor: 'pointer' }}>取消</button>}
     </form>
   </div>;
 }

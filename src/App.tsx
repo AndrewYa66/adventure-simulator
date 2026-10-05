@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
-import type { ActionCheckResult, SkillStatic, PlayerState, StoryMessage, WorldUnitStatic } from './types/game';
-import { loadGameSession, resetPlayerState, saveGameSession } from './utils/playerStorage';
+import { useEffect, useState, useSyncExternalStore } from 'react';
+import type { ActionCheckResult, CharacterHistoryEntry, SaveSlotId, SkillStatic, PlayerState, StoryMessage, WorldUnitStatic } from './types/game';
+import { AUTO_SLOT_ID, clearLegacySaves, continueWorldWithCharacter, createHistoryEntry, createWorld, deleteSlot, deleteWorld, exportWorld, getLastWriteFailed, importWorld, loadSaveIndex, readSlot, setActiveWorld, subscribeSaveStatus, writeSlot, type LoadedSlot } from './utils/saveStorage';
+import { SaveManager } from './components/SaveManager';
 import { applyStateChanges } from './utils/applyStateChanges';
 import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getQuestById, getShopById, getUnlockedSkills, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, scenario } from './data/staticData';
 import { getPlayerStatBreakdown, resolveActionCheck } from './utils/gameChecks';
@@ -120,8 +121,34 @@ function createOpeningMessage(id: string, text: string): StoryMessage {
   return { id, sender: 'ai', text, options: [...scenario.opening.suggestedActions], timestamp: new Date().toLocaleTimeString() };
 }
 
+/** 讀檔後的對話：開頭附上恢復摘要（取代舊的摘要）。 */
+function withRestoreNotice(slot: LoadedSlot): StoryMessage[] {
+  const previous = slot.messages.filter((message) => message.id !== 'session-restore-notice');
+  return [createRestoreNotice(slot.player, slot.savedAt, previous.length), ...previous];
+}
+
+/** 啟動時讀取目前世界的自動存檔；沒有可用世界時準備建立新世界。 */
+function loadInitialState() {
+  clearLegacySaves();
+  const index = loadSaveIndex();
+  const slot = index.activeWorldId ? readSlot(index.activeWorldId, AUTO_SLOT_ID) : null;
+  if (index.activeWorldId && slot) {
+    return { worldId: index.activeWorldId, player: slot.player, messages: withRestoreNotice(slot), characterHistory: slot.characterHistory };
+  }
+  return { worldId: undefined, player: createInitialPlayer(), messages: [createOpeningMessage('1', scenario.opening.introText)], characterHistory: [] };
+}
+
+function downloadJson(fileName: string, data: unknown) {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function App() {
-  const [initialSession] = useState(loadGameSession);
+  const [initialSession] = useState(loadInitialState);
   const [modelSettings, setModelSettings] = useState<AIModelSettings>(loadAIModelSettings);
   const [apiKeys, setApiKeys] = useState<Record<AIProvider, string>>(() => {
     try { return { gemini: localStorage.getItem('TRPG_GEMINI_KEY') || '', openai: '' }; }
@@ -132,20 +159,26 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [storageWarning, setStorageWarning] = useState(false);
   const [player, setPlayer] = useState<PlayerState>(initialSession.player);
-  const [isCharacterSetupOpen, setIsCharacterSetupOpen] = useState(!initialSession.player.setupComplete);
+  const [activeWorldId, setActiveWorldId] = useState<string | undefined>(initialSession.worldId);
+  const [characterHistory, setCharacterHistory] = useState<CharacterHistoryEntry[]>(initialSession.characterHistory);
+  // new-world：建立新世界的第一位角色；continue：在目前世界接續新角色。
+  const [setupMode, setSetupMode] = useState<'new-world' | 'continue' | null>(initialSession.worldId ? null : 'new-world');
+  const [isSaveManagerOpen, setIsSaveManagerOpen] = useState(false);
+  const autosaveFailed = useSyncExternalStore(subscribeSaveStatus, getLastWriteFailed);
 
-  const [messages, setMessages] = useState<StoryMessage[]>(initialSession.resumed
-    ? [createRestoreNotice(initialSession.player, initialSession.savedAt!, initialSession.messages.filter((message) => message.id !== 'session-restore-notice').length), ...initialSession.messages.filter((message) => message.id !== 'session-restore-notice')]
-    : initialSession.messages.length ? initialSession.messages : [createOpeningMessage('1', scenario.opening.introText)]);
+  const [messages, setMessages] = useState<StoryMessage[]>(initialSession.messages);
   const [loading, setLoading] = useState(false);
 
   const updatePlayer = (nextPlayer: PlayerState) => {
     setPlayer(nextPlayer);
   };
 
+  // 自動存檔：每次狀態變更（且非 AI 回合進行中）覆寫目前世界的自動存檔欄位。
   useEffect(() => {
-    if (!loading && !saveGameSession(player, messages)) console.warn('遊戲快照保存失敗。');
-  }, [player, messages, loading]);
+    if (loading || !activeWorldId) return;
+    const saved = writeSlot(activeWorldId, AUTO_SLOT_ID, player, messages, characterHistory);
+    if (!saved) console.warn('自動存檔失敗，瀏覽器儲存空間可能不足。');
+  }, [player, messages, characterHistory, loading, activeWorldId]);
 
   const handleSaveAISettings = (settings: AIModelSettings, keys: Record<AIProvider, string>) => {
     setModelSettings(settings);
@@ -158,21 +191,83 @@ export default function App() {
     }
   };
 
-  const handleResetPlayer = () => {
-    if (!window.confirm('確定要清除目前角色存檔並重新開始嗎？')) return;
-    updatePlayer(resetPlayerState());
-    setIsCharacterSetupOpen(true);
+  /** 建立新世界：目前世界保留在存檔中，角色建立後才寫入新世界。 */
+  const handleNewWorld = () => {
+    setIsSaveManagerOpen(false);
+    setActiveWorld(undefined);
+    setActiveWorldId(undefined);
+    setCharacterHistory([]);
+    updatePlayer(createInitialPlayer());
     setMessages([createOpeningMessage(Date.now().toString(), scenario.opening.resetText)]);
+    setSetupMode('new-world');
   };
 
   const handleCreateCharacter = (name: string, classId: string, alignment: CharacterAlignment) => {
-    const newPlayer = createInitialPlayer(name, classId, alignment, true);
-    updatePlayer(newPlayer);
-    setIsCharacterSetupOpen(false);
+    const newCharacter = createInitialPlayer(name, classId, alignment, true);
     const text = scenario.opening.newCharacterText
       .replaceAll('{name}', name)
       .replaceAll('{className}', getCharacterClassById(classId)?.name ?? classId);
-    setMessages([createOpeningMessage(`${Date.now()}`, text)]);
+    const opening = createOpeningMessage(`${Date.now()}`, text);
+    if (setupMode === 'continue' && activeWorldId) {
+      // 同一世界接續：世界狀態保留，前一位角色列入歷代紀錄；不繼承等級、背包與任務。
+      const previous = player;
+      setCharacterHistory((history) => [...history, createHistoryEntry(previous)]);
+      updatePlayer(continueWorldWithCharacter(previous, newCharacter));
+      setMessages([{
+        id: `${Date.now()}-legacy`, sender: 'system', timestamp: new Date().toLocaleTimeString(),
+        text: `📜 ${previous.name}（Lv.${previous.level}）的故事已結束，其事蹟將在這個世界流傳。世界的時間與變化都保留了下來。`
+      }, opening]);
+    } else {
+      const world = createWorld(newCharacter, [opening]);
+      setActiveWorldId(world?.id);
+      setCharacterHistory([]);
+      updatePlayer(newCharacter);
+      setMessages([opening]);
+    }
+    setSetupMode(null);
+  };
+
+  // ---------- 存檔管理 ----------
+  const handleSaveManual = (slotId: SaveSlotId) => {
+    if (!activeWorldId) return '目前沒有進行中的世界。';
+    return writeSlot(activeWorldId, slotId, player, messages, characterHistory)
+      ? '已存檔。' : '存檔失敗：瀏覽器儲存空間可能不足，請先匯出備份並刪除不需要的存檔。';
+  };
+
+  const handleLoadSlot = (worldId: string, slotId: SaveSlotId) => {
+    const slot = readSlot(worldId, slotId);
+    if (!slot) return '存檔無效或已損壞，未讀取。';
+    setActiveWorld(worldId);
+    setActiveWorldId(worldId);
+    setCharacterHistory(slot.characterHistory);
+    updatePlayer(slot.player);
+    setMessages(withRestoreNotice(slot));
+    setSetupMode(null);
+    setIsSaveManagerOpen(false);
+    return '已讀取存檔。';
+  };
+
+  const handleDeleteSlot = (worldId: string, slotId: SaveSlotId) => {
+    deleteSlot(worldId, slotId);
+    return '已刪除存檔欄位。';
+  };
+
+  const handleDeleteWorld = (worldId: string) => {
+    deleteWorld(worldId);
+    if (worldId === activeWorldId) handleNewWorld();
+    return '已刪除世界。';
+  };
+
+  const handleExportWorld = (worldId: string) => {
+    const data = exportWorld(worldId);
+    if (!data) return '找不到可匯出的有效存檔。';
+    downloadJson(`${data.world.name}-${new Date().toISOString().slice(0, 10)}.json`, data);
+    return `已匯出「${data.world.name}」。`;
+  };
+
+  const handleImportWorld = (text: string) => {
+    const result = importWorld(text);
+    return result.ok ? `已匯入「${result.world.name}」，可在「其他世界」切換。` : `匯入失敗：${result.reason}現有存檔未受影響。`;
   };
 
   const movePlayerTo = (mapId: string, sourcePlayer: PlayerState = player) => {
@@ -526,7 +621,7 @@ export default function App() {
     }
 
     if (player.combat || !canPlayerAct(player)) {
-      appendSystemMessage(player.isDead ? '角色已死亡，無法繼續行動。請重設角色開始新的冒險。' : '角色目前昏迷，無法採取行動。');
+      appendSystemMessage(player.isDead ? '角色已死亡，無法繼續行動。可從右側選擇「以新角色接續這個世界」，或在存檔管理讀取存檔。' : '角色目前昏迷，無法採取行動。');
       return;
     }
     const explicitSelfDamage = parseExplicitSelfDamage(actionText);
@@ -625,7 +720,7 @@ export default function App() {
 
     try {
       const historyTexts = messages.map((m) => `${m.sender === 'user' ? '玩家' : 'GM'}: ${m.text}`);
-      const aiResponse = await sendPlayerAction(modelSettings, apiKey, player, actionText, historyTexts);
+      const aiResponse = await sendPlayerAction(modelSettings, apiKey, player, actionText, historyTexts, characterHistory);
       let storyText = aiResponse.storyText;
       let resultToApply = aiResponse;
       let checkResult: ActionCheckResult | undefined;
@@ -658,7 +753,7 @@ export default function App() {
         : '';
       if (encounterAllowed && requestedMonster) nextPlayer = { ...nextPlayer, encounteredUnitId: requestedMonster.id };
       const deathNotice = !player.isDead && nextPlayer.isDead
-        ? '\n\n☠️ 你的生命值降至 0，角色死亡。這段冒險已結束。'
+        ? '\n\n☠️ 你的生命值降至 0，角色死亡。這段冒險已結束，可從右側以新角色接續這個世界。'
         : '';
       const acceptedQuests = nextPlayer.activeQuests.filter((entry) => entry.status === 'in_progress' &&
         !player.activeQuests.some((previous) => previous.questId === entry.questId));
@@ -776,7 +871,7 @@ export default function App() {
         inputDisabled={player.isDead || isPlayerUnconscious(player)}
         onTravel={handleTravel}
       />
-      {isSidebarOpen && <PlayerHUD player={player} onReset={handleResetPlayer} storageWarning={storageWarning} onTravel={handleTravel} onAcceptQuest={handleAcceptQuest} onTurnInQuest={handleTurnInQuest} onStartCombat={handleStartCombat} onFleeCombat={handleFleeCombat} onAttack={handleAttack} onUseSkill={handleUseSkill} onUseItem={handleUseItem} onBuyItem={handleBuyItem} onSellItem={handleSellItem} onEquipItem={handleEquipItem} onUseService={handleUseService} />}
+      {isSidebarOpen && <PlayerHUD player={player} onOpenSaveManager={() => setIsSaveManagerOpen(true)} onContinueWithNewCharacter={activeWorldId ? () => setSetupMode('continue') : undefined} storageWarning={storageWarning || autosaveFailed} onTravel={handleTravel} onAcceptQuest={handleAcceptQuest} onTurnInQuest={handleTurnInQuest} onStartCombat={handleStartCombat} onFleeCombat={handleFleeCombat} onAttack={handleAttack} onUseSkill={handleUseSkill} onUseItem={handleUseItem} onBuyItem={handleBuyItem} onSellItem={handleSellItem} onEquipItem={handleEquipItem} onUseService={handleUseService} />}
       {isKeyModalOpen && <ApiKeyModal
         isOpen={true}
         currentSettings={modelSettings}
@@ -784,7 +879,17 @@ export default function App() {
         onSave={handleSaveAISettings}
         onClose={() => setIsKeyModalOpen(false)}
       />}
-      {isCharacterSetupOpen && <CharacterSetup onCreate={handleCreateCharacter} />}
+      {setupMode && !isSaveManagerOpen && <CharacterSetup onCreate={handleCreateCharacter} onCancel={setupMode === 'continue'
+        ? () => setSetupMode(null)
+        // 建立新世界時若已有其他世界，可取消並回到存檔管理切換世界。
+        : loadSaveIndex().worlds.length > 0 ? () => { setSetupMode(null); setIsSaveManagerOpen(true); } : undefined} />}
+      {isSaveManagerOpen && <SaveManager activeWorldId={activeWorldId} busy={loading} onSaveManual={handleSaveManual} onLoad={handleLoadSlot}
+        onDeleteSlot={handleDeleteSlot} onDeleteWorld={handleDeleteWorld} onExport={handleExportWorld} onImport={handleImportWorld}
+        onNewWorld={handleNewWorld} onClose={() => {
+          setIsSaveManagerOpen(false);
+          // 沒有進行中的世界時不能直接遊玩，回到建立角色。
+          if (!activeWorldId) setSetupMode('new-world');
+        }} />}
     </div>
   );
 }

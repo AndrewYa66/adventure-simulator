@@ -119,10 +119,18 @@ sendPlayerAction(
 | `TRPG_AI_MODEL_SETTINGS` | `localStorage` | 選定的服務與模型 ID。 |
 | `TRPG_GEMINI_KEY` | `localStorage` | Gemini API Key，沿用舊版設定。 |
 | OpenAI API Key | 僅目前分頁的 React 記憶體 | 不寫入 `localStorage`；重新載入後須重新輸入。 |
-| `TRPG_GAME_SESSION` | `localStorage` | 遊戲快照 `{ schemaVersion, savedAt, player, messages }`。 |
-| `TRPG_PLAYER_STATE` | `localStorage` | 玩家存檔備份 `{ schemaVersion, player }`，快照損毀時使用。 |
+| `TRPG_SAVE_INDEX` | `localStorage` | 存檔索引 `{ schemaVersion, activeWorldId, worlds: [{ id, name, scenarioId, createdAt, updatedAt }] }`。 |
+| `TRPG_WORLD_<世界ID>_<欄位>` | `localStorage` | 存檔欄位 `{ schemaVersion, savedAt, world, character, messages }`；欄位為 `auto`、`manual-1`～`manual-3`。 |
 
-存檔帶有 `schemaVersion`（`playerStorage.ts` 的 `SAVE_SCHEMA_VERSION`，目前為 2）。開發階段每次變更存檔格式就將版本加一；版本不符、缺少欄位或格式無效的存檔直接捨棄並重新建立角色，不提供舊格式遷移。正式上線後才開始為舊版本撰寫遷移。
+## 存檔架構（世界與角色兩層）
+
+- **兩層存檔**：每個存檔欄位分為 `world`（世界存檔：`gameTimeMinutes`、`unitInstances`、`storyFlags` 與歷代角色紀錄 `characterHistory`）與 `character`（角色存檔：其餘玩家欄位，包含能力、背包、金幣、任務、戰鬥、單位對此角色的關係覆寫等）。哪些欄位屬於世界層由 `types/game.ts` 的 `WORLD_STATE_KEYS` 定義。執行期仍合併為 `PlayerState`，只在存讀檔時拆分與合併（`utils/saveStorage.ts`）；O29 建立 `worldState` 時再於執行期分離。
+- **存檔欄位**：每個世界一個自動存檔（狀態變更且非 AI 回合進行中時覆寫）與 3 個手動存檔。每個世界只有一條時間線：讀取手動存檔即取代目前進度，之後的自動存檔從該時間點繼續。可有多個世界，存檔索引記錄目前世界；切換世界即讀取該世界的自動存檔。
+- **新角色接續**：角色死亡後可在同一世界建立新角色。世界層欄位保留，前一位角色以 `characterHistory`（名稱、種族、職階、等級、結束時間與地區、攜帶物快照）記錄並提供給 AI 作為傳聞素材（最多 5 位）；新角色不繼承等級、背包、任務與單位關係。死亡遺物（O26）尚未實作，攜帶物快照留待之後使用。
+- **匯出／匯入**：存檔管理可將一個世界的所有欄位匯出為 JSON（`format: "adventure-simulator-world"`）。匯入時驗證格式、版本、劇本與每個欄位內容，任何欄位無效即整份拒絕；一律以新世界 ID 匯入，不覆蓋任何現有存檔，寫入中途失敗會移除已寫入的欄位。
+- **容量管理**：存檔管理顯示本遊戲在 localStorage 的估計用量（以約 5 MB 上限計），達 80% 時警示；寫入失敗（例如容量不足）時 HUD 提示匯出備份，其他欄位不受影響。事件紀錄壓縮與 IndexedDB 評估留待 O29 事件紀錄出現後處理。
+
+存檔帶有 `schemaVersion`（`saveStorage.ts` 的 `SAVE_SCHEMA_VERSION`，目前為 3）。開發階段每次變更存檔格式就將版本加一；版本不符、缺少欄位或格式無效的存檔直接捨棄，不提供舊格式遷移；舊版單一快照（`TRPG_GAME_SESSION`、`TRPG_PLAYER_STATE`）在啟動時移除。正式上線後才開始為舊版本撰寫遷移。
 
 ## 金鑰安全限制
 

@@ -1,24 +1,10 @@
-import type { GameSession, PlayerState, StoryMessage } from '../types/game';
+import type { PlayerState, StoryMessage } from '../types/game';
 import { createDefaultUnitInstance, getBaseExpForLevel, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getQuestById, getSpeciesById, getUnitAbilities, getUnitLevelCap, getWorldUnitById, MAX_UNIT_LEVEL, PLAYER_UNIT_ID, scenario, unitTemplatesDatabase } from '../data/staticData';
-import { createInitialPlayer } from './playerInit';
 import { isValidGameTime } from './gameTime';
 import { isValidSpeciesClassCombo } from './unitGrowth';
 import { createCombat } from './combatState';
 
-const PLAYER_STORAGE_KEY = 'TRPG_PLAYER_STATE';
-const SESSION_STORAGE_KEY = 'TRPG_GAME_SESSION';
-/**
- * 存檔格式版本；開發階段每次變更存檔格式就加一，版本不符的存檔直接捨棄並重新建立角色，不撰寫遷移程式。
- * 正式上線後才開始為舊版本提供遷移。
- */
-export const SAVE_SCHEMA_VERSION = 2;
-
-export interface LoadedGameSession {
-  player: PlayerState;
-  messages: StoryMessage[];
-  resumed: boolean;
-  savedAt?: number;
-}
+/** 存檔內容驗證：拒絕無效 ID、數值範圍與不在場的戰鬥目標；存檔的讀寫見 saveStorage.ts。 */
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -206,68 +192,9 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
   };
 }
 
-function isStoryMessage(value: unknown): value is StoryMessage {
+export function isStoryMessage(value: unknown): value is StoryMessage {
   return isRecord(value) && typeof value.id === 'string' &&
     ['ai', 'user', 'system'].includes(String(value.sender)) && typeof value.text === 'string' &&
     typeof value.timestamp === 'string' && (value.options === undefined ||
       (Array.isArray(value.options) && value.options.every((option) => typeof option === 'string')));
-}
-
-export function loadGameSession(): LoadedGameSession {
-  try {
-    const saved = localStorage.getItem(SESSION_STORAGE_KEY);
-    if (saved) {
-      const value: unknown = JSON.parse(saved);
-      if (isRecord(value) && value.schemaVersion === SAVE_SCHEMA_VERSION && Number.isFinite(value.savedAt) && Array.isArray(value.messages) &&
-          value.messages.every(isStoryMessage)) {
-        const player = normalizePlayerState(value.player);
-        if (player) return { player, messages: (value.messages as StoryMessage[]).slice(-100), resumed: true, savedAt: value.savedAt as number };
-      }
-    }
-  } catch {
-    // Fall back to the last valid player-only save below.
-  }
-  return { player: loadPlayerState(), messages: [], resumed: false };
-}
-
-export function saveGameSession(player: PlayerState, messages: StoryMessage[]): boolean {
-  try {
-    const snapshot: GameSession = { schemaVersion: SAVE_SCHEMA_VERSION, savedAt: Date.now(), player, messages: messages.slice(-100) };
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(snapshot));
-    return savePlayerState(player);
-  } catch {
-    return false;
-  }
-}
-
-export function loadPlayerState(): PlayerState {
-  try {
-    const saved = localStorage.getItem(PLAYER_STORAGE_KEY);
-    if (!saved) return createInitialPlayer();
-    const value: unknown = JSON.parse(saved);
-    if (!isRecord(value) || value.schemaVersion !== SAVE_SCHEMA_VERSION) return createInitialPlayer();
-    return normalizePlayerState(value.player) ?? createInitialPlayer();
-  } catch {
-    return createInitialPlayer();
-  }
-}
-
-export function savePlayerState(player: PlayerState): boolean {
-  try {
-    localStorage.setItem(PLAYER_STORAGE_KEY, JSON.stringify({ schemaVersion: SAVE_SCHEMA_VERSION, player }));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function resetPlayerState(): PlayerState {
-  const player = createInitialPlayer();
-  try {
-    localStorage.removeItem(SESSION_STORAGE_KEY);
-    savePlayerState(player);
-  } catch {
-    // Keep the in-memory reset even when browser storage is unavailable.
-  }
-  return player;
 }

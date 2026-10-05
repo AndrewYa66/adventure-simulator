@@ -373,13 +373,73 @@ export interface ActionCheckResult {
   label?: string;
 }
 
-export interface GameSession {
-  /** 見 playerStorage 的 SAVE_SCHEMA_VERSION。 */
+// ==========================================
+// 3. 存檔架構 (O37)：世界存檔 + 角色存檔
+// ==========================================
+
+/** 歸入世界存檔的欄位；其餘 PlayerState 欄位屬於角色存檔。執行期仍合併為 PlayerState，只在存檔時拆分。 */
+export const WORLD_STATE_KEYS = ['gameTimeMinutes', 'unitInstances', 'storyFlags'] as const;
+export type WorldStateKey = typeof WORLD_STATE_KEYS[number];
+
+/** 已結束的歷代角色紀錄；供 AI 傳聞與 NPC 對話素材，死亡遺物（O26）之後由此擴充。 */
+export interface CharacterHistoryEntry {
+  name: string;
+  speciesId: string;
+  classId: string;
+  alignment: CharacterAlignment;
+  level: number;
+  /** 結束時的遊戲時間（分鐘）。 */
+  endedAtMinutes: number;
+  mapId: string;
+  reason: 'death';
+  /** 結束時的攜帶物快照，留待 O26 死亡遺物使用。 */
+  inventory: { itemId: string; quantity: number }[];
+  gold: number;
+}
+
+/** 世界存檔：同一世界中跨角色保留的狀態。 */
+export interface WorldSave extends Pick<PlayerState, WorldStateKey> {
+  characterHistory: CharacterHistoryEntry[];
+}
+
+/** 角色存檔：目前在世角色的能力、背包、任務等。 */
+export type CharacterSave = Omit<PlayerState, WorldStateKey>;
+
+/** 一個存檔欄位（自動或手動）的完整內容。 */
+export interface SaveSlotData {
   schemaVersion: number;
   savedAt: number;
-  player: PlayerState;
+  world: WorldSave;
+  character: CharacterSave;
   messages: StoryMessage[];
 }
+
+export type SaveSlotId = 'auto' | 'manual-1' | 'manual-2' | 'manual-3';
+
+/** 存檔索引中的世界摘要。 */
+export interface WorldIndexEntry {
+  id: string;
+  name: string;
+  scenarioId: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface SaveIndex {
+  schemaVersion: number;
+  activeWorldId?: string;
+  worlds: WorldIndexEntry[];
+}
+
+/** 匯出檔格式：一個世界的所有存檔欄位。 */
+export interface WorldExportFile {
+  format: 'adventure-simulator-world';
+  schemaVersion: number;
+  exportedAt: number;
+  world: WorldIndexEntry;
+  slots: Partial<Record<SaveSlotId, SaveSlotData>>;
+}
+
 
 /** AI 結構化回應 (Gemini 回傳格式) */
 export interface AIResponsePayload {

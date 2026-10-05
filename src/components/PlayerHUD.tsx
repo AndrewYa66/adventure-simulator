@@ -9,7 +9,9 @@ import { formatGameTime } from '../utils/gameTime';
 
 interface PlayerHUDProps {
   player: PlayerState;
-  onReset: () => void;
+  onOpenSaveManager: () => void;
+  /** 角色死亡後在同一世界建立新角色；沒有進行中的世界時不提供。 */
+  onContinueWithNewCharacter?: () => void;
   storageWarning: boolean;
   onTravel: (mapId: string) => void;
   onAcceptQuest: (questId: string) => void;
@@ -25,7 +27,7 @@ interface PlayerHUDProps {
   onTurnInQuest: (questId: string) => void;
 }
 
-export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWarning, onTravel, onAcceptQuest, onStartCombat, onFleeCombat, onAttack, onUseSkill, onUseItem, onBuyItem, onSellItem, onEquipItem, onUseService, onTurnInQuest }) => {
+export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager, onContinueWithNewCharacter, storageWarning, onTravel, onAcceptQuest, onStartCombat, onFleeCombat, onAttack, onUseSkill, onUseItem, onBuyItem, onSellItem, onEquipItem, onUseService, onTurnInQuest }) => {
   const growth = getLevelBenchmark(player.level);
   const { maxHp, maxMp } = getPlayerResourceCaps(player);
   const maxExp = growth?.requiredExp || 100;
@@ -62,9 +64,12 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
         <p style={{ margin: '4px 0' }}><strong>📍 位置:</strong> {currentMap?.name || player.currentMapId}</p>
       </div>
 
-      {storageWarning && <p role="status" style={{ color: '#ffb74d', margin: 0, fontSize: '12px' }}>瀏覽器儲存不可用，變更可能無法保存。</p>}
-      <button onClick={onReset} style={{ padding: '7px 10px', backgroundColor: '#5d3030', color: '#fff', border: '1px solid #844', borderRadius: '4px', cursor: 'pointer' }}>
-        清除存檔並重新開始
+      {storageWarning && <p role="status" style={{ color: '#ffb74d', margin: 0, fontSize: '12px' }}>瀏覽器儲存不可用或空間不足，變更可能無法保存；請開啟存檔管理匯出備份。</p>}
+      {player.isDead && onContinueWithNewCharacter && <button onClick={onContinueWithNewCharacter} style={{ padding: '7px 10px', backgroundColor: '#2e5d32', color: '#fff', border: '1px solid #4a8', borderRadius: '4px', cursor: 'pointer' }}>
+        以新角色接續這個世界
+      </button>}
+      <button onClick={onOpenSaveManager} style={{ padding: '7px 10px', backgroundColor: '#333', color: '#fff', border: '1px solid #666', borderRadius: '4px', cursor: 'pointer' }}>
+        💾 存檔管理（存讀檔、匯出入、新世界）
       </button>
 
       {/* 血條與魔力條 */}
