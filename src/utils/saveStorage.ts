@@ -6,19 +6,21 @@ import type {
   SaveSlotData,
   SaveSlotId,
   StoryMessage,
+  UnitInstance,
   WorldExportFile,
   WorldIndexEntry,
   WorldSave
 } from '../types/game';
 import { WORLD_STATE_KEYS } from '../types/game';
-import { getCharacterClassById, getItemById, getMapById, getSpeciesById, scenario } from '../data/staticData';
+import { createDefaultUnitInstance, getCharacterClassById, getItemById, getMapById, getSpeciesById, scenario, unitTemplatesDatabase } from '../data/staticData';
+import { findLatestPlayerDeath } from './worldEvents';
 import { isStoryMessage, normalizePlayerState } from './playerStorage';
 
 /**
  * 存檔格式版本；開發階段每次變更存檔格式就加一，版本不符的存檔直接捨棄，不撰寫遷移程式。
  * 正式上線後才開始為舊版本提供遷移。
  */
-export const SAVE_SCHEMA_VERSION = 3;
+export const SAVE_SCHEMA_VERSION = 4;
 
 export const AUTO_SLOT_ID: SaveSlotId = 'auto';
 export const MANUAL_SLOT_IDS: SaveSlotId[] = ['manual-1', 'manual-2', 'manual-3'];
@@ -64,6 +66,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // 世界／角色兩層的拆分與合併
 // ------------------------------------------
 
+const canonicalInstance = (instance: UnitInstance) => JSON.stringify([instance.level, instance.exp, instance.gold, instance.inventory, instance.currentHp, instance.isDead ?? false, instance.diedAtMinutes]);
+
+/** 存檔只保存與樣板預設不同的單位實例；讀檔時缺少的實例由樣板補上（靜態資料新增的單位也因此出現在舊存檔）。 */
+export function compactUnitInstances(instances: Record<string, UnitInstance>): Record<string, UnitInstance> {
+  const defaults = new Map(unitTemplatesDatabase().map((template) => [template.id, canonicalInstance(createDefaultUnitInstance(template))]));
+  return Object.fromEntries(Object.entries(instances).filter(([unitId, instance]) => defaults.get(unitId) !== canonicalInstance(instance)));
+}
+
 /** 將執行期的合併狀態拆成世界存檔與角色存檔。 */
 export function splitPlayerState(player: PlayerState, characterHistory: CharacterHistoryEntry[]): { world: WorldSave; character: CharacterSave } {
   const character = { ...player } as Partial<PlayerState>;
@@ -71,8 +81,9 @@ export function splitPlayerState(player: PlayerState, characterHistory: Characte
   return {
     world: {
       gameTimeMinutes: player.gameTimeMinutes,
-      unitInstances: player.unitInstances,
+      unitInstances: compactUnitInstances(player.unitInstances),
       storyFlags: player.storyFlags,
+      world: player.world,
       characterHistory: characterHistory.slice(-MAX_CHARACTER_HISTORY)
     },
     character: character as CharacterSave
@@ -85,7 +96,8 @@ function normalizeCharacterHistory(value: unknown): CharacterHistoryEntry[] | nu
     if (!isRecord(entry) || typeof entry.name !== 'string' || typeof entry.speciesId !== 'string' || !getSpeciesById(entry.speciesId) ||
         typeof entry.classId !== 'string' || !getCharacterClassById(entry.classId) || typeof entry.alignment !== 'string' ||
         !Number.isInteger(entry.level) || !Number.isSafeInteger(entry.endedAtMinutes) || typeof entry.mapId !== 'string' ||
-        !getMapById(entry.mapId) || entry.reason !== 'death' || !Number.isSafeInteger(entry.gold) || !Array.isArray(entry.inventory)) return [];
+        !getMapById(entry.mapId) || entry.reason !== 'death' || !Number.isSafeInteger(entry.gold) || !Array.isArray(entry.inventory) ||
+        (entry.deathEventId !== undefined && typeof entry.deathEventId !== 'string') || (entry.deathSummary !== undefined && typeof entry.deathSummary !== 'string')) return [];
     const inventory = entry.inventory.flatMap((item) => isRecord(item) && typeof item.itemId === 'string' && getItemById(item.itemId) &&
       Number.isInteger(item.quantity) && (item.quantity as number) > 0 ? [{ itemId: item.itemId, quantity: item.quantity as number }] : []);
     return [{ ...(entry as unknown as CharacterHistoryEntry), inventory }];
@@ -325,9 +337,11 @@ export function getStorageUsage(): StorageUsage {
 
 /** 角色結束時的歷代紀錄。 */
 export function createHistoryEntry(player: PlayerState): CharacterHistoryEntry {
+  const death = player.isDead ? findLatestPlayerDeath(player) : undefined;
   return {
     name: player.name, speciesId: player.speciesId, classId: player.classId, alignment: player.alignment, level: player.level,
     endedAtMinutes: player.gameTimeMinutes, mapId: player.currentMapId, reason: 'death',
+    ...(death ? { deathEventId: death.id, deathSummary: death.summary } : {}),
     inventory: player.inventory.map((entry) => ({ ...entry })), gold: player.gold
   };
 }

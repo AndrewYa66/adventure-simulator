@@ -1,0 +1,42 @@
+[
+  {
+    "id": "EVT-001",
+    "title": "村長遇害後的戒備",
+    "trigger": "auto",
+    "requires": { "unitsDead": ["NPC-001"] },
+    "effects": {
+      "setFlags": ["村長身亡"],
+      "worldModifiers": [
+        { "scope": "unit:NPC-005", "stat": "def", "op": "add", "value": 3 },
+        { "scope": "unit:NPC-005", "stat": "atk", "op": "add", "value": 2 }
+      ]
+    },
+    "knownBy": "region",
+    "summary": "村長埃爾德死後，巡守隊長羅恩接手村務並加強了橡木村的戒備。"
+  },
+  {
+    "id": "EVT-002",
+    "title": "哥布林群龍無首",
+    "trigger": "auto",
+    "requires": { "unitsDead": ["MON-003"] },
+    "effects": {
+      "setFlags": ["哥布林酋長已死"],
+      "worldModifiers": [
+        { "scope": "species:goblin", "stat": "atk", "op": "multiply", "value": 0.9, "durationMinutes": 10080 }
+      ]
+    },
+    "knownBy": "world",
+    "summary": "格羅姆・裂牙死後，哥布林失去首領、士氣低落，攻勢減弱了一段時間。"
+  },
+  {
+    "id": "EVT-003",
+    "title": "村民提高警覺",
+    "trigger": "aiProposal",
+    "requires": { "mapIds": ["MAP-001"], "unitsAlive": ["NPC-001"] },
+    "excludes": { "flags": ["村民提高警覺"] },
+    "effects": { "setFlags": ["村民提高警覺"] },
+    "knownBy": "region",
+    "summary": "哥布林在古道出沒的消息在村中傳開，村民開始結伴出入、夜裡緊閉門戶。",
+    "aiHint": "玩家在橡木村明確向村長或村民警告哥布林的威脅，且對方採信時。"
+  }
+]

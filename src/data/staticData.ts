@@ -2,6 +2,7 @@ import type {
   AbilityScores,
   ItemStatic,
   CharacterClassStatic,
+  EventStatic,
   LevelBenchmarkStatic,
   MapStatic,
   MonsterStatic,
@@ -16,9 +17,11 @@ import type {
   UnitBuild,
   UnitDisposition,
   UnitStatBlock,
+  WorldModifier,
   WorldUnitStatic
 } from '../types/game';
 import { computeExpReward, computeUnitAbilities, computeUnitStats, isValidSpeciesClassCombo, UNIT_STAT_KEYS } from '../utils/unitGrowth';
+import { applyWorldModifiers, parseModifierScope } from '../utils/worldModifiers';
 
 import rawItems from './items.json';
 import rawCharacterClasses from './character_classes.json';
@@ -31,6 +34,7 @@ import rawShops from './shops.json';
 import rawSkills from './skills.json';
 import rawSpecies from './species.json';
 import rawScenario from './scenario.json';
+import rawEvents from './events.json';
 
 // 進行靜態型別轉型，確保導出的資料陣列完全符合 DTO 規範
 export const itemsDatabase: ItemStatic[] = rawItems as ItemStatic[];
@@ -44,6 +48,7 @@ export const shopsDatabase: ShopStatic[] = rawShops as ShopStatic[];
 export const skillsDatabase: SkillStatic[] = rawSkills as SkillStatic[];
 export const speciesDatabase: SpeciesStatic[] = rawSpecies as SpeciesStatic[];
 export const scenario: ScenarioStatic = rawScenario as ScenarioStatic;
+export const eventsDatabase: EventStatic[] = rawEvents as EventStatic[];
 
 /** 玩家的穩定單位 ID；NPC/魔物資料不得使用此 ID。 */
 export const PLAYER_UNIT_ID = 'PLAYER-001';
@@ -101,13 +106,18 @@ export const getUnitAbilities = (build: Pick<UnitBuild, 'speciesId' | 'classId'>
   return species ? computeUnitAbilities(species, build.classId ? getCharacterClassById(build.classId) : undefined) : undefined;
 };
 
-type PlayerBuildSource =Pick<PlayerState, 'speciesId' | 'classId' | 'level'>;
+/** 玩家數值來源；帶有世界狀態時一併套用世界修正（種族、所在地區或玩家單位）。 */
+type PlayerBuildSource = Pick<PlayerState, 'speciesId' | 'classId' | 'level'> & Partial<Pick<PlayerState, 'unitId' | 'currentMapId' | 'world' | 'gameTimeMinutes'>>;
 
 const FALLBACK_STATS: UnitStatBlock = { hp: 1, mp: 0, atk: 0, def: 0, spd: 0 };
 
 /** 玩家未含裝備的數值；與 NPC/魔物同一公式。 */
-export const getPlayerBaseStats = (player: PlayerBuildSource): UnitStatBlock =>
-  getUnitBuildStats({ speciesId: player.speciesId, classId: player.classId, level: player.level }) ?? FALLBACK_STATS;
+export const getPlayerBaseStats = (player: PlayerBuildSource): UnitStatBlock => {
+  const stats = getUnitBuildStats({ speciesId: player.speciesId, classId: player.classId, level: player.level }) ?? FALLBACK_STATS;
+  return player.world ? applyWorldModifiers(stats, {
+    unitId: player.unitId ?? PLAYER_UNIT_ID, speciesId: player.speciesId, mapIds: player.currentMapId ? [player.currentMapId] : []
+  }, player.world.modifiers, player.gameTimeMinutes) : stats;
+};
 
 export const getPlayerResourceCaps = (player: PlayerBuildSource) => {
   const stats = getPlayerBaseStats(player);
@@ -166,28 +176,35 @@ const toUnitBase = (unit: NpcStatic | MonsterStatic) => ({
 /** 所有 NPC/魔物單位樣板（UnitTemplate）。 */
 export const unitTemplatesDatabase = (): (NpcStatic | MonsterStatic)[] => [...npcsDatabase, ...monstersDatabase];
 
-type UnitInstanceSource = Record<string, Pick<UnitInstance, 'level'>> | undefined;
+/** 單位查詢的世界狀態來源；可直接傳入 PlayerState（執行期合併狀態）。 */
+export interface UnitWorldSource {
+  unitInstances?: Record<string, Pick<UnitInstance, 'level'>>;
+  world?: { modifiers: WorldModifier[] };
+  gameTimeMinutes?: number;
+}
 
 /**
  * Shared lookup adapter. Legacy NPC/monster records and their IDs remain unchanged.
- * 傳入存檔的 unitInstances 時，數值與擊倒獎勵依實例目前等級計算；否則使用樣板等級。
+ * 傳入世界狀態時，數值與擊倒獎勵依實例目前等級計算並套用世界修正；否則使用樣板等級與靜態數值。
  */
-export const getWorldUnitById = (id: string, instances?: UnitInstanceSource): WorldUnitStatic | undefined => {
+export const getWorldUnitById = (id: string, source?: UnitWorldSource): WorldUnitStatic | undefined => {
+  const instances = source?.unitInstances;
   const npc = getNpcById(id);
   const monster = getMonsterById(id);
   if (Boolean(npc) === Boolean(monster)) return undefined;
   const template = (npc ?? monster)!;
   const level = instances?.[id]?.level ?? template.level;
   const build = { ...template, level };
-  const stats = getUnitBuildStats(build);
-  if (!stats) return undefined;
+  const baseStats = getUnitBuildStats(build);
+  if (!baseStats) return undefined;
   const expReward = getUnitExpReward(build);
+  const mapIds = npc ? [npc.mapId] : mapsDatabase.filter((map) => map.monstersPresent.includes(monster!.id)).map((map) => map.id);
+  const stats = applyWorldModifiers(baseStats, { unitId: id, speciesId: template.speciesId, mapIds }, source?.world?.modifiers, source?.gameTimeMinutes);
 
   if (npc) {
-    return { ...toUnitBase(npc), level, kind: 'npc', title: npc.title, stats, expReward, mapIds: [npc.mapId], source: npc };
+    return { ...toUnitBase(npc), level, kind: 'npc', title: npc.title, stats, expReward, mapIds, source: npc };
   }
 
-  const mapIds = mapsDatabase.filter((map) => map.monstersPresent.includes(monster!.id)).map((map) => map.id);
   return { ...toUnitBase(monster!), level, kind: 'monster', stats, expReward, mapIds, source: monster! };
 };
 
@@ -224,12 +241,12 @@ export const createDefaultUnitInstances = (): Record<string, UnitInstance> =>
   Object.fromEntries(unitTemplatesDatabase().map((template) => [template.id, createDefaultUnitInstance(template)]));
 
 /** Return the normalized units referenced by a map, preserving NPC and monster order. */
-export const getWorldUnitsAtMap = (mapId: string, instances?: UnitInstanceSource): WorldUnitStatic[] => {
+export const getWorldUnitsAtMap = (mapId: string, source?: UnitWorldSource): WorldUnitStatic[] => {
   const map = getMapById(mapId);
   if (!map) return [];
   return [...map.npcsPresent, ...map.monstersPresent]
     .flatMap((unitId) => {
-      const unit = getWorldUnitById(unitId, instances);
+      const unit = getWorldUnitById(unitId, source);
       return unit ? [unit] : [];
     });
 };
@@ -241,6 +258,15 @@ export const getWorldUnitDisposition = (
 ): UnitDisposition | undefined => {
   const unit = getWorldUnitById(unitId);
   return unit ? player.unitDispositionOverrides[unitId] ?? unit.defaultDisposition : undefined;
+};
+
+export const getEventById = (id: string): EventStatic | undefined =>
+  eventsDatabase.find((event) => event.id === id);
+
+/** 單位顯示名稱：NPC 為「職稱 + 名字」；找不到時回傳 ID。 */
+export const getUnitDisplayName = (unitId: string): string => {
+  const unit = getWorldUnitById(unitId);
+  return unit ? `${unit.kind === 'npc' ? unit.title : ''}${unit.name}` : unitId;
 };
 
 export const getQuestById = (id: string): QuestStatic | undefined => {
@@ -391,5 +417,54 @@ export function validateWorldUnitData(): string[] {
   return issues;
 }
 
+/** 驗證靜態事件：ID 唯一、引用可解析、效果與世界修正格式正確。 */
+export function validateEventData(): string[] {
+  const issues: string[] = [];
+  const seen = new Set<string>();
+  const unitExists = (id: string) => unitTemplatesDatabase().some((unit) => unit.id === id);
+  for (const event of eventsDatabase) {
+    const label = `事件 ${event.id}`;
+    if (!/^EVT-\d{3,}$/.test(event.id)) issues.push(`${label}: ID 格式應為 EVT-xxx`);
+    if (seen.has(event.id)) issues.push(`事件 ID 重複：${event.id}`);
+    seen.add(event.id);
+    if (!event.title?.trim() || !event.summary?.trim()) issues.push(`${label}: 缺少標題或描述`);
+    if (!['auto', 'aiProposal'].includes(event.trigger)) issues.push(`${label}: 無效觸發方式 ${event.trigger}`);
+    if (!['witnesses', 'region', 'world'].includes(event.knownBy)) issues.push(`${label}: 無效傳播範圍 ${event.knownBy}`);
+    if (event.trigger === 'auto' && !event.requires?.flags?.length && !event.requires?.unitsDead?.length && !event.requires?.unitsAlive?.length) {
+      issues.push(`${label}: 自動事件至少需要一個旗標或單位條件，避免開局即觸發`);
+    }
+    if (event.trigger === 'aiProposal' && !event.aiHint?.trim()) issues.push(`${label}: AI 提議事件需說明使用時機（aiHint）`);
+    if (!event.effects || typeof event.effects !== 'object') {
+      issues.push(`${label}: 缺少效果`);
+      continue;
+    }
+    for (const unitId of [...(event.requires?.unitsAlive ?? []), ...(event.requires?.unitsDead ?? [])]) {
+      if (!unitExists(unitId)) issues.push(`${label}: 找不到單位 ${unitId}`);
+    }
+    for (const mapId of event.requires?.mapIds ?? []) {
+      if (!getMapById(mapId)) issues.push(`${label}: 找不到地圖 ${mapId}`);
+    }
+    for (const flag of [...(event.requires?.flags ?? []), ...(event.excludes?.flags ?? []), ...(event.effects.setFlags ?? []), ...(event.effects.clearFlags ?? [])]) {
+      if (typeof flag !== 'string' || !flag.trim()) issues.push(`${label}: 旗標名稱無效`);
+    }
+    for (const modifier of event.effects.worldModifiers ?? []) {
+      const scope = parseModifierScope(modifier.scope);
+      if (!scope) issues.push(`${label}: 無效的修正對象 ${modifier.scope}`);
+      else if (scope.kind === 'unit' && !unitExists(scope.id)) issues.push(`${label}: 找不到修正單位 ${scope.id}`);
+      else if (scope.kind === 'species' && !getSpeciesById(scope.id)) issues.push(`${label}: 找不到修正種族 ${scope.id}`);
+      else if (scope.kind === 'map' && !getMapById(scope.id)) issues.push(`${label}: 找不到修正地圖 ${scope.id}`);
+      if (!UNIT_STAT_KEYS.includes(modifier.stat)) issues.push(`${label}: 無效的修正數值 ${modifier.stat}`);
+      if (!['add', 'multiply'].includes(modifier.op)) issues.push(`${label}: 無效的修正方式 ${modifier.op}`);
+      if (modifier.op === 'add' && !Number.isInteger(modifier.value)) issues.push(`${label}: 加減修正必須為整數`);
+      if (modifier.op === 'multiply' && !(modifier.value > 0 && modifier.value <= 3)) issues.push(`${label}: 倍率修正必須介於 0 與 3 之間`);
+      if (modifier.durationMinutes !== undefined && !(Number.isSafeInteger(modifier.durationMinutes) && modifier.durationMinutes > 0)) issues.push(`${label}: 修正持續時間無效`);
+    }
+  }
+  for (const species of speciesDatabase) {
+    if (species.respawnDays !== undefined && !(Number.isInteger(species.respawnDays) && species.respawnDays > 0)) issues.push(`種族 ${species.id}: respawnDays 必須為正整數`);
+  }
+  return issues;
+}
+
 /** 全部靜態資料驗證；建置前由 scripts/validate-data.mjs 執行，有錯誤即中止建置。 */
-export const validateGameData = (): string[] => [...validateGrowthData(), ...validateWorldUnitData()];
+export const validateGameData = (): string[] => [...validateGrowthData(), ...validateWorldUnitData(), ...validateEventData()];

@@ -52,7 +52,8 @@
     "statMultipliers": { "hp": 0.3, "mp": 0.5, "atk": 0.6, "def": 0.4, "spd": 0.85 },
     "abilityModifiers": { "dex": 2, "str": -2, "cha": -2 },
     "expRewardMultiplier": 1,
-    "traits": ["夜視", "群體作戰"]
+    "traits": ["夜視", "群體作戰"],
+    "respawnDays": 3
   },
   {
     "id": "orc",
@@ -74,6 +75,7 @@
     "statMultipliers": { "hp": 0.3, "mp": 0, "atk": 0.7, "def": 0.4, "spd": 1.1 },
     "abilityModifiers": { "str": 2, "dex": 2, "int": -6, "cha": -6 },
     "expRewardMultiplier": 0.9,
-    "traits": ["本能行動"]
+    "traits": ["本能行動"],
+    "respawnDays": 2
   }
 ]

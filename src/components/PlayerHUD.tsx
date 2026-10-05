@@ -34,7 +34,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
   const unlockedSkills = getUnlockedSkills(player.classId, player.level);
 
   const currentMap = getMapById(player.currentMapId);
-  const presentNpcs = getWorldUnitsAtMap(player.currentMapId, player.unitInstances).filter((unit) => unit.kind === 'npc');
+  const presentNpcs = getWorldUnitsAtMap(player.currentMapId, player).filter((unit) => unit.kind === 'npc');
   const weapon = player.equipped.weaponItemId ? getItemById(player.equipped.weaponItemId) : null;
   const armor = player.equipped.armorItemId ? getItemById(player.equipped.armorItemId) : null;
   const combatStats = (['atk', 'def', 'spd'] as const).map((stat) => ({
@@ -202,7 +202,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
       <div>
         <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #444' }}>👹 遭遇</h4>
         {player.combat ? (() => {
-          const unit = getWorldUnitById(player.combat.targetUnitId, player.unitInstances);
+          const unit = getWorldUnitById(player.combat.targetUnitId, player);
           return <div>
             <div style={{ marginBottom: '6px' }}>{unit?.name || player.combat.targetUnitId} HP {getCombatTarget(player.combat)?.currentHp ?? 0}/{unit?.stats.hp}</div>
             <div style={{ color: '#aaa', fontSize: '11px', marginBottom: '8px' }}>第 {player.combat.round} 回合</div>
@@ -211,7 +211,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
             <button onClick={onFleeCombat} disabled={!canPlayerAct(player)} style={{ padding: '6px 10px', cursor: canPlayerAct(player) ? 'pointer' : 'not-allowed' }}>脫離戰鬥</button>
           </div>;
         })() : (() => {
-          const unit = player.encounteredUnitId ? getWorldUnitById(player.encounteredUnitId, player.unitInstances) : undefined;
+          const unit = player.encounteredUnitId ? getWorldUnitById(player.encounteredUnitId, player) : undefined;
           const monster = unit?.kind === 'monster' ? unit : undefined;
           const disposition = monster ? getWorldUnitDisposition(player, monster.id) : undefined;
           const dispositionLabel = disposition === 'friendly' ? '友善' : disposition === 'hostile' ? '敵對' : '中立';
@@ -233,7 +233,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
           const inventoryCount = (itemId: string) => player.inventory.find((item) => item.itemId === itemId)?.quantity ?? 0;
           return <div key={quest.id} style={{ marginBottom: '8px', fontSize: '12px' }}>
             <strong>{quest.title}</strong>
-            <div>{status === 'completed' ? '已完成' : status === 'in_progress' ? '進行中' : quest.objective}</div>
+            <div style={status === 'failed' ? { color: '#ef9a9a' } : undefined}>{status === 'completed' ? '已完成' : status === 'in_progress' ? '進行中' : status === 'failed' ? '已失敗（委託人已死亡）' : quest.objective}</div>
             {status && <div style={{ marginTop: '4px', color: '#bbb' }}>
               {(quest.requirements.defeatMonsters ?? []).map((requirement) => {
                 const count = active?.progress?.defeatedMonsters[requirement.monsterId] ?? 0;
@@ -251,6 +251,8 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
             </div>}
             {!status && (canAcceptQuest(player, quest)
               ? <button onClick={() => onAcceptQuest(quest.id)} style={{ marginTop: '4px', padding: '4px 7px', cursor: 'pointer' }}>接取任務</button>
+              : player.unitInstances[quest.questGiverId]?.isDead
+                ? <div style={{ marginTop: '4px', color: '#888' }}>委託人已死亡，無法接取</div>
               : getWorldUnitDisposition(player, quest.questGiverId) === 'hostile'
                 ? <div style={{ marginTop: '4px', color: '#ef9a9a' }}>任務給予者目前敵對，無法接取</div>
                 : <div style={{ marginTop: '4px', color: '#888' }}>需在 {getMapById(quest.mapId)?.name ?? quest.mapId} 找到 {quest.questGiver}</div>)}
@@ -258,6 +260,16 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
           </div>;
         })}
       </div>
+
+      <details>
+        <summary style={{ cursor: 'pointer', fontWeight: 'bold' }}>🌍 世界紀錄（{player.world.events.length} 件）</summary>
+        {player.world.events.length === 0 && <div style={{ color: '#888', fontSize: '12px', marginTop: '4px' }}>這個世界還沒有發生重大事件。</div>}
+        {player.world.events.slice(-8).reverse().map((event) => <div key={event.id} style={{ color: '#bbb', fontSize: '12px', marginTop: '6px' }}>
+          <div style={{ color: '#888' }}>{formatGameTime(event.gameTimeMinutes)} · {getMapById(event.mapId)?.name ?? event.mapId}</div>
+          {event.summary}
+        </div>)}
+        {player.world.modifiers.length > 0 && <div style={{ color: '#888', fontSize: '11px', marginTop: '8px' }}>生效中的世界修正：{player.world.modifiers.length} 項</div>}
+      </details>
     </aside>
   );
 };

@@ -172,7 +172,7 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
     transactionHistory,
     unitDispositionOverrides,
     inventory,
-    storyFlags: { ...player.storyFlags, ...(changes.setFlags ?? {}) },
+    storyFlags: player.storyFlags,
     defeatedMonsters,
     activeQuests,
     currentMapId: player.currentMapId

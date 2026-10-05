@@ -71,6 +71,8 @@ export interface SpeciesStatic {
   checkBonuses?: CheckBonuses;
   expRewardMultiplier: number;
   traits: string[];
+  /** 世界規則：此種族的非唯一個體死亡後經過幾天由新個體補上；未設定代表不重生。具名 NPC 與頭目不重生。 */
+  respawnDays?: number;
 }
 
 /** 職階靜態資料 (來自 character_classes.json)：提供成長倍率、能力值修正、檢定加值與技能。 */
@@ -202,6 +204,8 @@ export interface UnitInstance {
   inventory: { itemId: string; quantity: number }[];
   currentHp?: number;
   isDead?: boolean;
+  /** 死亡時的遊戲時間（分鐘）；供重生規則使用。 */
+  diedAtMinutes?: number;
 }
 
 export interface TransactionRecord {
@@ -230,6 +234,32 @@ export interface ScenarioStatic {
   inputPlaceholder: string;
   /** 不屬於此世界觀、玩家不可憑空取出的物品詞彙。 */
   anachronisticItemTerms: string[];
+}
+
+/** 世界修正的作用對象：`unit:<ID>`、`species:<ID>`、`map:<ID>`（位於該地區的單位）。 */
+export type WorldModifierScope = `unit:${string}` | `species:${string}` | `map:${string}`;
+
+/** 事件的傳播範圍：目擊者、本地區、全世界（同勢力待 O38）。 */
+export type EventKnownBy = 'witnesses' | 'region' | 'world';
+
+/** 靜態事件 (來自 events.json)：條件與效果由資料定義，前端驗證條件後套用並寫入事件紀錄。 */
+export interface EventStatic {
+  id: string;
+  title: string;
+  /** auto：條件成立時由遊戲自動觸發；aiProposal：只能由 AI 提議，前端驗證條件後套用。 */
+  trigger: 'auto' | 'aiProposal';
+  requires?: { flags?: string[]; unitsAlive?: string[]; unitsDead?: string[]; mapIds?: string[] };
+  excludes?: { flags?: string[] };
+  effects: {
+    setFlags?: string[];
+    clearFlags?: string[];
+    worldModifiers?: { scope: WorldModifierScope; stat: UnitStatKey; op: 'add' | 'multiply'; value: number; durationMinutes?: number }[];
+  };
+  knownBy: EventKnownBy;
+  /** 公開的事件描述（發生了什麼）。 */
+  summary: string;
+  /** AI 提議事件的使用時機。 */
+  aiHint?: string;
 }
 
 /** 地圖靜態資料 (來自 maps.json) */
@@ -291,6 +321,56 @@ export interface CombatState {
   targetUnitId: string;
 }
 
+export type DeathCause = 'combat' | 'self_inflicted' | 'misadventure' | 'unknown';
+
+/**
+ * 世界事件紀錄（只增不改）：世界的永久變動經由事件入口套用並寫入此紀錄。
+ * summary 是公開結果（未在場者也會聽說）；detail 是經過與兇手等細節，只有目擊者知道。
+ */
+export interface WorldEvent {
+  id: string;
+  type: 'unit_death' | 'unit_respawn' | 'quest_failed' | 'scenario_event';
+  gameTimeMinutes: number;
+  mapId: string;
+  summary: string;
+  detail?: string;
+  knownBy: EventKnownBy;
+  /** 事件發生時在場且存活的 NPC/魔物（目擊者）。 */
+  witnessUnitIds: string[];
+  /** 觸發原因，例如「戰鬥」「條件成立自動觸發」「AI 提議」。 */
+  cause: string;
+  death?: { victimUnitId: string; victimName: string; cause: DeathCause; killerUnitId?: string; killerName?: string };
+  /** 靜態事件 ID（scenario_event）。 */
+  eventId?: string;
+  /** 造成的改變。 */
+  changes?: { setFlags?: string[]; clearFlags?: string[]; modifierIds?: string[]; questIds?: string[]; unitIds?: string[] };
+}
+
+/** 世界修正：一律為相對值（加減或倍率），疊加在公式數值之上，靜態數值調整後仍自動生效。 */
+export interface WorldModifier {
+  id: string;
+  scope: WorldModifierScope;
+  stat: UnitStatKey;
+  op: 'add' | 'multiply';
+  value: number;
+  sourceEventId: string;
+  expiresAtMinutes?: number;
+}
+
+/** 執行期世界狀態（屬於世界存檔）；單位實例、時間與旗標見 PlayerState 的其他世界層欄位。 */
+export interface WorldRuntimeState {
+  /** 事件紀錄；超過上限時最舊的事件壓縮進 chronicle。 */
+  events: WorldEvent[];
+  /** 世界編年史：壓縮後的舊事件摘要，每行一件。 */
+  chronicle: string[];
+  nextEventSeq: number;
+  modifiers: WorldModifier[];
+  /** 已觸發過的靜態事件 ID（每個事件只觸發一次）。 */
+  firedEventIds: string[];
+  /** 地區延後結算：玩家所在地區才結算，記錄上次補貨的遊戲日。 */
+  regions: Record<string, { lastRestockDay: number }>;
+}
+
 /** 玩家動態存檔狀態 (寫入 LocalStorage) */
 export interface PlayerState {
   /** 玩家穩定單位 ID，固定為 PLAYER_UNIT_ID。 */
@@ -338,11 +418,13 @@ export interface PlayerState {
   // 當前進行中的任務
   activeQuests: {
     questId: string;
-    status: 'in_progress' | 'completed';
+    status: 'in_progress' | 'completed' | 'failed';
     progress?: { defeatedMonsters: Record<string, number> };
   }[];
   /** 進行中的戰鬥；怪物仍以專屬資料決定掉落與特殊招式。 */
   combat?: CombatState;
+  /** 世界狀態：事件紀錄、世界修正與地區結算（世界層）。 */
+  world: WorldRuntimeState;
 }
 
 /** 對話視窗訊息 */
@@ -378,7 +460,7 @@ export interface ActionCheckResult {
 // ==========================================
 
 /** 歸入世界存檔的欄位；其餘 PlayerState 欄位屬於角色存檔。執行期仍合併為 PlayerState，只在存檔時拆分。 */
-export const WORLD_STATE_KEYS = ['gameTimeMinutes', 'unitInstances', 'storyFlags'] as const;
+export const WORLD_STATE_KEYS = ['gameTimeMinutes', 'unitInstances', 'storyFlags', 'world'] as const;
 export type WorldStateKey = typeof WORLD_STATE_KEYS[number];
 
 /** 已結束的歷代角色紀錄；供 AI 傳聞與 NPC 對話素材，死亡遺物（O26）之後由此擴充。 */
@@ -392,6 +474,9 @@ export interface CharacterHistoryEntry {
   endedAtMinutes: number;
   mapId: string;
   reason: 'death';
+  /** 死亡事件 ID 與其公開描述；死因細節見事件紀錄。 */
+  deathEventId?: string;
+  deathSummary?: string;
   /** 結束時的攜帶物快照，留待 O26 死亡遺物使用。 */
   inventory: { itemId: string; quantity: number }[];
   gold: number;
@@ -465,7 +550,6 @@ export interface AIResponsePayload {
     goldChange?: number;
     addItems?: { itemId: string; quantity: number }[];
     removeItems?: { itemId: string; quantity: number }[];
-    setFlags?: Record<string, boolean>;
     questUpdates?: { questId: string; status: 'completed' }[];
     questAcceptances?: string[];
     npcItemTransfers?: { npcId: string; itemId: string; quantity: number }[];
@@ -473,4 +557,6 @@ export interface AIResponsePayload {
     unitDispositionChanges?: { unitId: string; disposition: UnitDisposition }[];
   };
   failureStateChanges?: AIResponsePayload['stateChanges'];
+  /** 提議觸發的靜態事件 ID；只可選遊戲提供的候選，前端驗證條件後套用。劇情旗標只能經由事件設定。 */
+  eventProposals?: string[];
 }

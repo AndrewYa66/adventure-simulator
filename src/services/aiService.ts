@@ -6,6 +6,7 @@ import { getAvailableServices } from '../utils/tradeRules';
 import { getPlayerWorldUnit } from '../utils/worldUnits';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from '../utils/travelIntent';
 import { formatGameTime } from '../utils/gameTime';
+import { getProposableEvents, getWorldContextForAI } from '../utils/worldEvents';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -102,7 +103,6 @@ function parseAIResponse(value: unknown): AIResponsePayload | null {
     ))) return false;
     if (changes.defeatedMonsters !== undefined && !isMonsterDefeatList(changes.defeatedMonsters)) return false;
     if (changes.unitDispositionChanges !== undefined && !isUnitDispositionChangeList(changes.unitDispositionChanges)) return false;
-    if (changes.setFlags !== undefined && (!isRecord(changes.setFlags) || !Object.values(changes.setFlags).every((flag) => typeof flag === 'boolean'))) return false;
     if (changes.questUpdates !== undefined && (!Array.isArray(changes.questUpdates) || !changes.questUpdates.every((quest) =>
       isRecord(quest) && typeof quest.questId === 'string' && quest.status === 'completed'
     ))) return false;
@@ -116,13 +116,19 @@ function parseAIResponse(value: unknown): AIResponsePayload | null {
   if (isRecord(value.stateChanges) && value.stateChanges.defeatedMonsters !== undefined &&
       (!isRecord(value.checkRequest) || value.checkRequest.stat !== 'atk')) return null;
   if (isRecord(value.failureStateChanges) &&
-      ['expChange', 'addItems', 'npcItemTransfers', 'defeatedMonsters', 'unitDispositionChanges', 'questUpdates', 'questAcceptances', 'setFlags'].some((field) => field in (value.failureStateChanges as Record<string, unknown>))) return null;
+      ['expChange', 'addItems', 'npcItemTransfers', 'defeatedMonsters', 'unitDispositionChanges', 'questUpdates', 'questAcceptances'].some((field) => field in (value.failureStateChanges as Record<string, unknown>))) return null;
+
+  if (value.eventProposals !== undefined && value.eventProposals !== null &&
+      (!Array.isArray(value.eventProposals) || !value.eventProposals.every((eventId) => typeof eventId === 'string'))) return null;
 
   const storyText = getReadableNarrative(value.storyText);
   if (storyText === FORMAT_FALLBACK) return null;
   const stateChanges = isRecord(value.stateChanges) ? { ...value.stateChanges } : value.stateChanges;
+  // 劇情旗標只能經由事件設定；舊格式的 setFlags 一律忽略。
+  if (isRecord(stateChanges)) delete stateChanges.setFlags;
   const travelRequest = value.travelRequest ?? null;
-  return { ...value, storyText, stateChanges, travelRequest } as unknown as AIResponsePayload;
+  const eventProposals = (value.eventProposals as string[] | null | undefined) ?? [];
+  return { ...value, storyText, stateChanges, travelRequest, eventProposals } as unknown as AIResponsePayload;
 }
 
 /**
@@ -221,7 +227,7 @@ export async function sendPlayerAction(
       : [];
   }) ?? [];
   const previousMap = playerState.previousMapId ? getMapById(playerState.previousMapId) : undefined;
-  const currentUnits = getWorldUnitsAtMap(playerState.currentMapId, playerState.unitInstances);
+  const currentUnits = getWorldUnitsAtMap(playerState.currentMapId, playerState);
   const presentNpcs = currentUnits.flatMap((unit) => unit.kind === 'npc' ? [{
     id: unit.id,
     name: unit.name,
@@ -244,8 +250,10 @@ export async function sendPlayerAction(
       quest.questId === unit.source.requiredQuestId && quest.status === 'in_progress'
     )) ? [{ id: unit.id, name: unit.name, build: describeUnitBuild(unit), disposition: getWorldUnitDisposition(playerState, unit.id) }] : []);
   const availableServices = getAvailableServices(playerState);
-  const encounteredUnit = playerState.encounteredUnitId ? getWorldUnitById(playerState.encounteredUnitId, playerState.unitInstances) : undefined;
+  const encounteredUnit = playerState.encounteredUnitId ? getWorldUnitById(playerState.encounteredUnitId, playerState) : undefined;
   const playerUnit = getPlayerWorldUnit(playerState);
+  const worldContext = getWorldContextForAI(playerState);
+  const proposableEvents = getProposableEvents(playerState).map((event) => ({ id: event.id, title: event.title, summary: event.summary, when: event.aiHint }));
 
   if (!cleanApiKey) {
     throw new Error('所選模型的 API Key 尚未設定。請開啟模型設定。');
@@ -261,7 +269,7 @@ ${scenario.gmRole}
 - HP: ${playerState.hp} | MP: ${playerState.mp} | 金幣: ${playerState.gold}
 - 生命狀態: ${playerState.isDead ? '死亡；冒險已結束' : playerState.statusEffects.some((effect) => effect.id === 'unconscious') ? '昏迷；無法採取行動' : '存活'}
 - 遊戲時間: ${formatGameTime(playerState.gameTimeMinutes)}（本回合行動前；時間由遊戲依行動類型推進，敘事中的時刻與晝夜須與此一致，不可自行跳過時間）
-- 歷代角色（同一世界中已故的前任冒險者，最多 5 位；可作為傳聞、NPC 回憶與遺跡素材，不可復活、不可讓玩家取得其物品，也不可與目前玩家混淆）: ${JSON.stringify(characterHistory.slice(-5).map((entry) => ({ name: entry.name, build: describeUnitBuild(entry), diedAt: formatGameTime(entry.endedAtMinutes), place: getMapById(entry.mapId)?.name ?? entry.mapId })))}
+- 歷代角色（同一世界中已故的前任冒險者，最多 5 位；可作為傳聞、NPC 回憶與遺跡素材，不可復活、不可讓玩家取得其物品，也不可與目前玩家混淆）: ${JSON.stringify(characterHistory.slice(-5).map((entry) => ({ name: entry.name, build: describeUnitBuild(entry), diedAt: formatGameTime(entry.endedAtMinutes), place: getMapById(entry.mapId)?.name ?? entry.mapId, ...(entry.deathEventId ? { deathEventId: entry.deathEventId, death: entry.deathSummary } : {}) })))}
 - 當前地區: ${currentMap?.name ?? playerState.currentMapId} (${playerState.currentMapId})
 - 可前往的相鄰地區（只可選這些 ID）: ${JSON.stringify(availableDestinations)}
 - 當前地區在場 NPC 及數值: ${JSON.stringify(presentNpcs)}
@@ -279,7 +287,11 @@ ${scenario.gmRole}
 - 背包物品 ID 列表: ${JSON.stringify(playerState.inventory)}
 - 世界靜態物品清單（只可使用這些 ID/名稱）: ${JSON.stringify(itemsDatabase.map((item) => ({ id: item.id, name: item.name, type: item.type })))}
 - 裝備物品 ID: ${JSON.stringify(playerState.equipped)}
-- 劇情旗標 (Flags): ${JSON.stringify(playerState.storyFlags || {})}
+- 劇情旗標 (Flags，只能經由世界事件成立，AI 不可直接設定): ${JSON.stringify(playerState.storyFlags || {})}
+- 世界事件紀錄（遊戲規則寫入的既成事實，依時間排序；summary 是公開消息，detail 是經過與兇手等細節，只有 witnesses 列出的單位親眼看見）: ${JSON.stringify(worldContext.events)}
+- 世界編年史（較舊事件的摘要）: ${JSON.stringify(worldContext.chronicle)}
+- 生效中的世界修正（已計入上方各單位數值）: ${JSON.stringify(worldContext.modifiers)}
+- 可提議的世界事件（eventProposals 只可選這些 ID）: ${JSON.stringify(proposableEvents)}
 - 進行中任務: ${JSON.stringify(playerState.activeQuests)}
 - 已擊敗怪物數量: ${JSON.stringify(playerState.defeatedMonsters)}
 
@@ -300,6 +312,8 @@ ${scenario.gmRole}
 - 一般戰鬥由遊戲規則結算，不可敘事中自行宣告擊敗或扣除怪物。
 - 每次回應都必須包含 serviceRequest；只有玩家明確要求使用、購買某項服務（例如住店、休息一晚）時，才從「當前可使用服務」清單填入 shopId 與 serviceId，否則設為 null。詢問價格或服務內容不算使用。服務的費用、恢復效果與耗時由遊戲端結算，不可同時用 hpChange/mpChange/goldChange 描述同一服務，也不可在 storyText 宣稱已付款或已恢復；若清單中沒有對應服務，只能說明目前無法使用。
 - 遊戲時間由遊戲依行動類型推進；玩家要求原地等待時由遊戲處理，AI 不可在敘事中自行跳過時間。
+- 世界事件與死因只能依「世界事件紀錄」敘述，不可捏造未記錄的死亡、兇手或世界變化。NPC 只有出現在該事件 witnesses 中才知道 detail（誰下手、如何發生）；其他人只知道 summary 的公開結果，可以轉述傳聞或猜測，但不可斷定兇手或經過。目前玩家角色若不是當時在場的人，也只能從在場目擊者口中得知細節。
+- 每次回應都必須包含 eventProposals（陣列）；只有玩家行動確實促成「可提議的世界事件」所描述的情況（符合 when 說明）時，才填入該事件 ID，否則為空陣列。事件效果由遊戲驗證後套用，storyText 可描述促成事件的經過，但不可自行宣告超出事件描述的世界改變。
 - 只有玩家行動或明確世界事件確實改變了當前地區單位對玩家的關係時，才在 stateChanges.unitDispositionChanges 回報單位 ID 與 friendly/neutral/hostile；純對話、陣營傾向或臆測不能改變關係。單位關係變更須與 storyText 敘事一致。
 - 每次回應都必須包含 encounterRequest；若玩家尚未實際看見或接觸敵人，設為 null。只有探索、搜索或情境中確實遇見敵人時，才指定本地區可遭遇清單中的 monsterId，並在敘事中描述遭遇。不可只因怪物存在於地圖資料，就宣稱玩家已遭遇；不可遭遇未列出的敵人。
 - 玩家在對話中明確要求攻擊目前地區的敵人時，不可假裝攻擊已命中、敵人已受傷或已被擊敗；戰鬥與獎勵由遊戲端確定性規則處理，若無法由遊戲端執行，只能說明尚未發起戰鬥。
@@ -329,13 +343,13 @@ ${scenario.gmRole}
     "addItems": [{"itemId": "<物品 ID>", "quantity": 1}],
     "removeItems": [],
     "defeatedMonsters": [],
-    "setFlags": {"<劇情旗標>": true},
     "questUpdates": [{"questId": "<任務 ID>", "status": "completed"}],
     "questAcceptances": [],
     "npcItemTransfers": [],
     "unitDispositionChanges": []
   },
-  "failureStateChanges": null
+  "failureStateChanges": null,
+  "eventProposals": []
 }
 \`\`\`
 只可回報玩家已接取且客觀目標已完成的任務；不可自行接取任務或宣告未完成目標完成。
@@ -421,10 +435,14 @@ ${scenario.gmRole}
         },
         additionalProperties: true
       },
-      failureStateChanges: { type: ['object', 'null'], additionalProperties: true }
+      failureStateChanges: { type: ['object', 'null'], additionalProperties: true },
+      // 沒有可提議事件時只允許空陣列。
+      eventProposals: proposableEvents.length
+        ? { type: 'array', items: { type: 'string', enum: proposableEvents.map((event) => event.id) } }
+        : { type: 'array', items: { type: 'string' }, maxItems: 0 }
     },
     required: [
-      'storyText', 'suggestedActions', 'encounterRequest', 'travelRequest', 'serviceRequest', 'checkRequest', 'checkOutcomes', 'stateChanges', 'failureStateChanges'
+      'storyText', 'suggestedActions', 'encounterRequest', 'travelRequest', 'serviceRequest', 'checkRequest', 'checkOutcomes', 'stateChanges', 'failureStateChanges', 'eventProposals'
     ],
     additionalProperties: false
   };

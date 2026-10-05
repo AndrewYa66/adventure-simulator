@@ -1,4 +1,4 @@
-// AI 實際呼叫的意圖測試：以真實模型驗證結構化欄位（服務、任務、移動、關係、遭遇）是否只在玩家明確要求時出現，
+// AI 實際呼叫的意圖測試：以真實模型驗證結構化欄位（服務、任務、移動、關係、遭遇、世界事件）是否只在玩家明確要求時出現，
 // 並計算每個情境實際送出的 API 請求數（含移動修正請求），可同時比較多個模型。
 // 金鑰讀自專案根目錄的 ai-test.local.json（已列入 .gitignore，不會被提交，也不會打包進網站）：
 //   { "provider": "gemini", "model": "gemini-3.8-flash", "apiKey": "..." }
@@ -41,6 +41,8 @@ const { module: init } = await runnerImport('/src/utils/playerInit.ts');
 const { module: trade } = await runnerImport('/src/utils/tradeRules.ts');
 const { module: data } = await runnerImport('/src/data/staticData.ts');
 const { module: quests } = await runnerImport('/src/utils/questRules.ts');
+const { module: world } = await runnerImport('/src/utils/worldEvents.ts');
+const { module: saves } = await runnerImport('/src/utils/saveStorage.ts');
 
 const base = init.createInitialPlayer('測試員', data.scenario.defaultPlayer.classId, data.scenario.defaultPlayer.alignment, true);
 const startMap = data.getMapById(base.currentMapId);
@@ -52,6 +54,19 @@ const startQuest = data.questsDatabase.find((quest) => quests.canAcceptQuest(bas
 const startNpcs = startMap.npcsPresent.map((id) => data.getWorldUnitById(id));
 const otherNpc = data.getWorldUnitById(otherMap.npcsPresent[0]);
 const merchant = startNpcs.find((unit) => unit.source.shopId && unit.id !== innService?.shopId && data.getShopById(unit.source.shopId)?.npcId === unit.id) ?? startNpcs[1];
+
+// 世界事件情境：前一位角色在戰鬥中殺死委託人 NPC 後自我了斷，新角色在同一世界接續。
+const victimNpc = startNpcs.find((unit) => data.questsDatabase.some((quest) => quest.questGiverId === unit.id));
+const formerName = '亞瑟';
+const former = init.createInitialPlayer(formerName, data.scenario.defaultPlayer.classId, data.scenario.defaultPlayer.alignment, true);
+const formerInCombat = { ...former, combat: { round: 1, participants: [{ unitId: former.unitId, side: 'party' }, { unitId: victimNpc.id, side: 'enemy', currentHp: 1 }], targetUnitId: victimNpc.id } };
+const formerKilled = world.finalizeWorld(formerInCombat, { ...formerInCombat, combat: undefined, unitInstances: { ...formerInCombat.unitInstances, [victimNpc.id]: { ...formerInCombat.unitInstances[victimNpc.id], currentHp: 0, isDead: true } } }, { [victimNpc.id]: { cause: 'combat', killerUnitId: former.unitId } });
+const formerDead = world.finalizeWorld(formerKilled, { ...formerKilled, hp: 0, isDead: true }, { [former.unitId]: { cause: 'self_inflicted' } });
+const afterDeathHistory = [saves.createHistoryEntry(formerDead)];
+const successor = saves.continueWorldWithCharacter(formerDead, base);
+const witnessNpc = data.getWorldUnitById(formerDead.world.events.find((event) => event.death?.victimUnitId === victimNpc.id).witnessUnitIds.find((id) => data.getWorldUnitById(id)?.kind === 'npc'));
+const successorElsewhere = { ...successor, currentMapId: otherMap.id };
+const proposableEvent = world.getProposableEvents(base)[0];
 
 const none = (value) => value === undefined || value === null || (Array.isArray(value) && value.length === 0);
 const accepted = (response) => response.stateChanges?.questAcceptances ?? [];
@@ -87,7 +102,20 @@ const scenarios = [
   { group: '關係', name: '和 NPC 開玩笑', player: base, action: `我跟${merchant.name}開玩笑說他的手藝退步了`,
     check: (r) => none(r.stateChanges?.unitDispositionChanges), expect: '不改變關係' },
   { group: '遭遇', name: '和 NPC 閒聊', player: elsewhere, action: `我坐下來和${otherNpc?.name ?? '旅人'}聊聊最近的見聞`,
-    check: (r) => none(r.encounterRequest), expect: '無 encounterRequest' }
+    check: (r) => none(r.encounterRequest), expect: '無 encounterRequest' },
+  { group: '世界事件', name: '向目擊者詢問死因', player: successor, history: afterDeathHistory,
+    action: `${witnessNpc.name}，${victimNpc.name}是怎麼死的？是誰下的手？`,
+    check: (r) => r.storyText.includes(formerName), expect: `目擊者說出兇手 ${formerName}` },
+  { group: '世界事件', name: '向未在場者詢問死因', player: successorElsewhere, history: afterDeathHistory,
+    action: `${otherNpc?.name ?? '旅人'}，你知道是誰殺了${victimNpc.name}嗎？`,
+    check: (r) => !r.storyText.includes(formerName), expect: '未在場者不斷定兇手' },
+  ...(proposableEvent ? [
+    { group: '世界事件', name: '促成可提議事件', player: base,
+      action: `我嚴肅地向${victimNpc.name}警告：古道上的哥布林越來越多，最近有人遇襲，請村民務必結伴出入、夜裡緊閉門戶。`,
+      check: (r) => (r.eventProposals ?? []).includes(proposableEvent.id), expect: `提議 ${proposableEvent.id}` },
+    { group: '世界事件', name: '只是閒聊不提議事件', player: base, action: `我跟${merchant.name}聊聊今天的天氣`,
+      check: (r) => none(r.eventProposals), expect: '無 eventProposals' }
+  ] : [])
 ];
 
 const selected = onlyFilters.length ? scenarios.filter((scenario) => onlyFilters.some((text) => scenario.name.includes(text) || scenario.group === text)) : scenarios;
@@ -103,7 +131,7 @@ for (const model of models) {
     requestCount = 0;
     let response;
     try {
-      response = await ai.sendPlayerAction({ provider: config.provider, model }, config.apiKey, scenario.player, scenario.action, []);
+      response = await ai.sendPlayerAction({ provider: config.provider, model }, config.apiKey, scenario.player, scenario.action, [], scenario.history ?? []);
     } catch (error) {
       errors += 1;
       totalCalls += requestCount;
@@ -118,7 +146,8 @@ for (const model of models) {
       questAcceptances: accepted(response),
       travelRequest: response.travelRequest ?? null,
       unitDispositionChanges: response.stateChanges?.unitDispositionChanges ?? [],
-      encounterRequest: response.encounterRequest ?? null
+      encounterRequest: response.encounterRequest ?? null,
+      eventProposals: response.eventProposals ?? []
     };
     const shown = Object.fromEntries(Object.entries(fields).filter(([, value]) => !none(value)));
     console.log(`${ok ? '✅' : '❌'} [${scenario.group}] ${scenario.name}（預期：${scenario.expect}；請求 ${requestCount} 次）`);

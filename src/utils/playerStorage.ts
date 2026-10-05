@@ -1,13 +1,60 @@
-import type { PlayerState, StoryMessage } from '../types/game';
-import { createDefaultUnitInstance, getBaseExpForLevel, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getQuestById, getSpeciesById, getUnitAbilities, getUnitLevelCap, getWorldUnitById, MAX_UNIT_LEVEL, PLAYER_UNIT_ID, scenario, unitTemplatesDatabase } from '../data/staticData';
+import type { PlayerState, StoryMessage, WorldEvent, WorldModifier, WorldRuntimeState } from '../types/game';
+import { createDefaultUnitInstance, getBaseExpForLevel, getEventById, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getQuestById, getSpeciesById, getUnitAbilities, getUnitLevelCap, getWorldUnitById, MAX_UNIT_LEVEL, PLAYER_UNIT_ID, scenario, unitTemplatesDatabase } from '../data/staticData';
 import { isValidGameTime } from './gameTime';
-import { isValidSpeciesClassCombo } from './unitGrowth';
+import { isValidSpeciesClassCombo, UNIT_STAT_KEYS } from './unitGrowth';
 import { createCombat } from './combatState';
+import { parseModifierScope } from './worldModifiers';
 
 /** 存檔內容驗證：拒絕無效 ID、數值範圍與不在場的戰鬥目標；存檔的讀寫見 saveStorage.ts。 */
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+const EVENT_TYPES = ['unit_death', 'unit_respawn', 'quest_failed', 'scenario_event'];
+const KNOWN_BY = ['witnesses', 'region', 'world'];
+const DEATH_CAUSES = ['combat', 'self_inflicted', 'misadventure', 'unknown'];
+
+function isWorldEvent(value: unknown): value is WorldEvent {
+  if (!isRecord(value) || typeof value.id !== 'string' || !EVENT_TYPES.includes(String(value.type)) || !isValidGameTime(value.gameTimeMinutes) ||
+      typeof value.mapId !== 'string' || typeof value.summary !== 'string' || (value.detail !== undefined && typeof value.detail !== 'string') ||
+      !KNOWN_BY.includes(String(value.knownBy)) || !isStringArray(value.witnessUnitIds) || typeof value.cause !== 'string' ||
+      (value.eventId !== undefined && typeof value.eventId !== 'string')) return false;
+  if (value.death !== undefined) {
+    const death = value.death;
+    if (!isRecord(death) || typeof death.victimUnitId !== 'string' || typeof death.victimName !== 'string' || !DEATH_CAUSES.includes(String(death.cause)) ||
+        (death.killerUnitId !== undefined && typeof death.killerUnitId !== 'string') || (death.killerName !== undefined && typeof death.killerName !== 'string')) return false;
+  }
+  return value.changes === undefined || (isRecord(value.changes) &&
+    Object.values(value.changes).every((entry) => isStringArray(entry)));
+}
+
+function isWorldModifier(value: unknown): value is WorldModifier {
+  return isRecord(value) && typeof value.id === 'string' && typeof value.scope === 'string' && !!parseModifierScope(value.scope) &&
+    UNIT_STAT_KEYS.includes(value.stat as never) && (value.op === 'add' || value.op === 'multiply') && Number.isFinite(value.value) &&
+    typeof value.sourceEventId === 'string' && (value.expiresAtMinutes === undefined || isValidGameTime(value.expiresAtMinutes));
+}
+
+/** 驗證世界狀態；任何部分無效即整份拒絕（與其他存檔欄位一致，不部分載入）。 */
+function normalizeWorldState(value: unknown): WorldRuntimeState | null {
+  if (!isRecord(value) || !Array.isArray(value.events) || !value.events.every(isWorldEvent) || !isStringArray(value.chronicle) ||
+      !Number.isSafeInteger(value.nextEventSeq) || (value.nextEventSeq as number) < 1 ||
+      !Array.isArray(value.modifiers) || !value.modifiers.every(isWorldModifier) || !isStringArray(value.firedEventIds) || !isRecord(value.regions)) return null;
+  const regions: WorldRuntimeState['regions'] = {};
+  for (const [mapId, region] of Object.entries(value.regions)) {
+    if (!getMapById(mapId) || !isRecord(region) || !Number.isSafeInteger(region.lastRestockDay)) return null;
+    regions[mapId] = { lastRestockDay: region.lastRestockDay as number };
+  }
+  return {
+    events: value.events as WorldEvent[],
+    chronicle: value.chronicle,
+    nextEventSeq: value.nextEventSeq as number,
+    modifiers: value.modifiers as WorldModifier[],
+    // 靜態資料移除的事件不再視為已觸發。
+    firedEventIds: value.firedEventIds.filter((eventId) => !!getEventById(eventId)),
+    regions
+  };
 }
 
 const isMonsterUnitId = (unitId: string): boolean => getWorldUnitById(unitId)?.kind === 'monster';
@@ -25,6 +72,8 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
       typeof value.setupComplete !== 'boolean' || !isValidGameTime(value.gameTimeMinutes) || !isRecord(value.unitInstances) ||
       !isRecord(value.abilities) || !Array.isArray(value.statusEffects) || !Array.isArray(value.transactionHistory) ||
       !isRecord(value.defeatedMonsters) || !isRecord(value.unitDispositionOverrides)) return null;
+  const world = normalizeWorldState(value.world);
+  if (!world) return null;
 
   const classId = typeof value.classId === 'string' && getCharacterClassById(value.classId)?.playerSelectable ? value.classId : scenario.defaultPlayer.classId;
   // 種族不存在或與職階組合無效時回到劇本預設種族。
@@ -48,13 +97,13 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
   });
   const activeQuests = value.activeQuests.flatMap((entry) => {
     if (!isRecord(entry) || typeof entry.questId !== 'string' || !getQuestById(entry.questId) ||
-        (entry.status !== 'in_progress' && entry.status !== 'completed')) return [];
+        !['in_progress', 'completed', 'failed'].includes(String(entry.status))) return [];
     const defeated: Record<string, number> = {};
     const savedDefeats = isRecord(entry.progress) && isRecord(entry.progress.defeatedMonsters) ? entry.progress.defeatedMonsters : {};
     for (const [monsterId, count] of Object.entries(savedDefeats)) {
       if (isMonsterUnitId(monsterId) && Number.isInteger(count) && (count as number) >= 0) defeated[monsterId] = count as number;
     }
-    return [{ questId: entry.questId, status: entry.status as 'in_progress' | 'completed', progress: { defeatedMonsters: defeated } }];
+    return [{ questId: entry.questId, status: entry.status as 'in_progress' | 'completed' | 'failed', progress: { defeatedMonsters: defeated } }];
   });
   const defeatedMonsters: Record<string, number> = {};
   for (const [monsterId, count] of Object.entries(value.defeatedMonsters)) {
@@ -85,7 +134,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
       (savedState.level as number) <= getUnitLevelCap(template.id) ? savedState.level as number : defaults.level;
     const exp = Number.isSafeInteger(savedState.exp) && (savedState.exp as number) >= getBaseExpForLevel(level)
       ? savedState.exp as number : getBaseExpForLevel(level);
-    const maxHp = getWorldUnitById(template.id, { [template.id]: { level } })?.stats.hp ?? 1;
+    const maxHp = getWorldUnitById(template.id, { unitInstances: { [template.id]: { level } }, world })?.stats.hp ?? 1;
     const savedInventory = Array.isArray(savedState.inventory) ? savedState.inventory.flatMap((entry) =>
       isRecord(entry) && typeof entry.itemId === 'string' && getItemById(entry.itemId) &&
       Number.isInteger(entry.quantity) && (entry.quantity as number) > 0
@@ -98,7 +147,8 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
       inventory: savedInventory,
       currentHp: Number.isInteger(savedState.currentHp) && (savedState.currentHp as number) >= 0
         ? Math.min(savedState.currentHp as number, maxHp) : maxHp,
-      isDead: savedState.isDead === true || savedState.currentHp === 0
+      isDead: savedState.isDead === true || savedState.currentHp === 0,
+      ...(isValidGameTime(savedState.diedAtMinutes) ? { diedAtMinutes: savedState.diedAtMinutes } : {})
     }];
   })) as PlayerState['unitInstances'];
 
@@ -109,7 +159,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     const enemies: { unitId: string; currentHp: number }[] = [];
     for (const enemy of savedEnemies) {
       const unitId = isRecord(enemy) && typeof enemy.unitId === 'string' ? enemy.unitId : undefined;
-      const unit = unitId ? getWorldUnitById(unitId, unitInstances) : undefined;
+      const unit = unitId ? getWorldUnitById(unitId, { unitInstances, world }) : undefined;
       const isPresent = unit?.kind === 'npc'
         ? getMapById(value.currentMapId)?.npcsPresent.includes(unitId!)
         : !!unit && getMapById(value.currentMapId)?.monstersPresent.includes(unitId!);
@@ -187,6 +237,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     defeatedMonsters,
     unitDispositionOverrides,
     activeQuests,
+    world,
     ...(encounteredUnitId && !isDead ? { encounteredUnitId } : {}),
     ...(combat && !isDead ? { combat } : {})
   };

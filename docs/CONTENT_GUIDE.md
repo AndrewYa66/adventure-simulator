@@ -87,7 +87,7 @@ content/
 
 ### 事件
 
-觸發方式→trigger（自動→auto、劇情片段完成→storylet、角色決策→agent、AI提議→aiProposal）；條件欄位同劇情片段；設定旗標／移除旗標→effects.setFlags／effects.clearFlags；影響單位／影響地區→effects.units／effects.mapIds；傳播範圍→knownBy（目擊者→witnesses、同勢力→faction、本地區→region、全世界→world）。內文「世界影響」由維護者轉為 `worldModifiers` 等結構化效果（O29）。
+觸發方式→trigger（自動→auto、劇情片段完成→storylet、角色決策→agent、AI提議→aiProposal）；條件欄位同劇情片段；設定旗標／移除旗標→effects.setFlags／effects.clearFlags；影響單位／影響地區→effects.units／effects.mapIds；傳播範圍→knownBy（目擊者→witnesses、同勢力→faction、本地區→region、全世界→world）。內文「世界影響」由維護者轉為 `worldModifiers` 等結構化效果，「發生了什麼」轉為 `summary`，AI 提議事件的使用時機寫入 `aiHint`。遊戲資料格式見 `src/data/events.json` 與 `docs/API.md`「世界事件、世界修正與世界規則」；目前遊戲端只支援自動與 AI 提議兩種觸發方式，以及目擊者／本地區／全世界三種傳播範圍（同勢力待 O38）。
 
 ### 設定條目
 
