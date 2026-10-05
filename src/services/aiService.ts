@@ -128,15 +128,56 @@ function parseAIResponse(value: unknown): AIResponsePayload | null {
 /**
  * 遇到 503 / 429 時自動重試的 Fetch 輔助函式
  */
+/** 429 額度錯誤的分類：每日／帳戶額度用完不重試；每分鐘額度只在建議等待時間很短時重試。 */
+interface RateLimitInfo {
+  kind: 'daily' | 'account' | 'per_minute';
+  retryAfterSeconds?: number;
+}
+
+/** 等待時間不超過此秒數才自動重試，否則直接告知玩家，避免卡在載入中或浪費額度。 */
+const MAX_AUTO_RETRY_WAIT_SECONDS = 10;
+
+async function readRateLimitInfo(res: Response): Promise<RateLimitInfo> {
+  const headerSeconds = Number(res.headers.get('retry-after'));
+  const body: unknown = await res.clone().json().catch(() => null);
+  const error = isRecord(body) && isRecord(body.error) ? body.error : {};
+  const details = Array.isArray(error.details) ? error.details.filter(isRecord) : [];
+  // Gemini：QuotaFailure.violations[].quotaId（例如 GenerateRequestsPerDayPerProjectPerModel-FreeTier）與 RetryInfo.retryDelay（例如 "49s"）。
+  const quotaIds = details.flatMap((detail) => Array.isArray(detail.violations) ? detail.violations : [])
+    .flatMap((violation) => isRecord(violation) && typeof violation.quotaId === 'string' ? [violation.quotaId] : []);
+  const retryDelay = details.find((detail) => typeof detail.retryDelay === 'string')?.retryDelay as string | undefined;
+  const retryAfterSeconds = retryDelay ? Number.parseFloat(retryDelay) : Number.isFinite(headerSeconds) && headerSeconds > 0 ? headerSeconds : undefined;
+  // OpenAI：error.code / error.type 為 insufficient_quota 代表帳戶額度不足。
+  if (error.code === 'insufficient_quota' || error.type === 'insufficient_quota') return { kind: 'account' };
+  if (quotaIds.some((id) => /PerDay/i.test(id))) return { kind: 'daily', retryAfterSeconds };
+  return { kind: 'per_minute', retryAfterSeconds };
+}
+
+function formatWait(seconds: number): string {
+  const total = Math.ceil(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (hours) return `${hours} 小時${minutes ? ` ${minutes} 分鐘` : ''}`;
+  if (minutes) return `${minutes} 分鐘`;
+  return `${total} 秒`;
+}
+
+function describeRateLimit(info: RateLimitInfo): string {
+  if (info.kind === 'account') return 'AI 服務帳戶額度不足，請檢查方案與帳單設定，或在模型設定改用其他服務。';
+  if (info.kind === 'daily') {
+    return `目前模型的每日免費額度已用完${info.retryAfterSeconds ? `（約 ${formatWait(info.retryAfterSeconds)}後恢復）` : ''}。可在模型設定改用其他模型，或稍後再試。`;
+  }
+  return `AI 請求太頻繁，已達每分鐘額度上限，請${info.retryAfterSeconds ? `約 ${formatWait(info.retryAfterSeconds)}後` : '稍後'}再試。`;
+}
+
+/**
+ * 503 與網路錯誤以退避重試；429 依額度種類處理：每日或帳戶額度用完直接告知玩家，
+ * 每分鐘額度只在建議等待時間很短時重試一次，避免重試反而消耗更多額度。
+ */
 async function fetchWithRetry(url: string, options: RequestInit, retries = 2, delay = 1000): Promise<Response> {
+  let res: Response;
   try {
-    const res = await fetch(url, options);
-    if ((res.status === 503 || res.status === 429) && retries > 0) {
-      console.warn(`[AI API] 伺服器忙碌 (${res.status})，${delay / 1000} 秒後重試...`);
-      await new Promise((resolve) => setTimeout(resolve, delay));
-      return fetchWithRetry(url, options, retries - 1, delay * 1.5);
-    }
-    return res;
+    res = await fetch(url, options);
   } catch (err) {
     if (retries > 0) {
       await new Promise((resolve) => setTimeout(resolve, delay));
@@ -144,6 +185,22 @@ async function fetchWithRetry(url: string, options: RequestInit, retries = 2, de
     }
     throw err;
   }
+  if (res.status === 503 && retries > 0) {
+    console.warn(`[AI API] 伺服器忙碌 (503)，${delay / 1000} 秒後重試...`);
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    return fetchWithRetry(url, options, retries - 1, delay * 1.5);
+  }
+  if (res.status === 429) {
+    const info = await readRateLimitInfo(res);
+    const wait = info.retryAfterSeconds ?? delay / 1000;
+    if (info.kind === 'per_minute' && retries > 0 && wait <= MAX_AUTO_RETRY_WAIT_SECONDS) {
+      console.warn(`[AI API] 已達每分鐘額度上限，${wait} 秒後重試一次...`);
+      await new Promise((resolve) => setTimeout(resolve, wait * 1000));
+      return fetchWithRetry(url, options, 0, delay);
+    }
+    throw new Error(describeRateLimit(info));
+  }
+  return res;
 }
 
 export async function sendPlayerAction(
