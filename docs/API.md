@@ -8,10 +8,12 @@
 
 | 服務 | 模型 ID | API |
 | --- | --- | --- |
-| Google Gemini | `gemini-3.8-flash`、`gemini-3.6-flash`、`gemini-3.5-flash-lite` | Gemini `generateContent` |
+| Google Gemini | `gemini-3.5-flash-lite`（預設）、`gemini-3.8-flash`、`gemini-3.6-flash` | Gemini `generateContent` |
 | OpenAI | `gpt-6-luna`、`gpt-6.1-sol`、`gpt-6-astra` | OpenAI `Responses` |
 
-模型清單由 `src/services/aiModels.ts` 管理。選定模型失敗時，系統會顯示錯誤，不會靜默切換到其他模型。
+模型清單由 `src/services/aiModels.ts` 管理。預設模型為 `gemini-3.5-flash-lite`：有免費額度且回應快，一般玩家不需付費即可遊玩（實測 14 個意圖情境的結構化欄位判斷正確，見 `npm run test:ai`）；尚未儲存設定的玩家以及設定失效時都會使用此模型。選定模型失敗時，系統會顯示錯誤，不會靜默切換到其他模型。
+
+連線錯誤處理：503 與網路錯誤以退避重試 2 次。429 依額度種類處理：每日免費額度（Gemini `PerDay` 配額）或帳戶額度不足（OpenAI `insufficient_quota`）不重試，直接顯示可理解的訊息與預估恢復時間；每分鐘額度只在伺服器建議等待時間不超過 10 秒時重試一次，否則提示玩家等待秒數。Gemini 免費額度約為每個模型每分鐘 5 次、每天 20 次（依 Google 公告為準）。
 
 ## 共用前端介面
 
