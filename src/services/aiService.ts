@@ -2,6 +2,7 @@ import type { PlayerState, AIResponsePayload } from '../types/game';
 import type { AIModelSettings } from './aiModels';
 import { canPlayerEnterMap, getItemById, getMapById, getNpcCategoryById, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, questsDatabase } from '../data/staticData';
 import { canAcceptQuest, canTurnInQuest } from '../utils/questRules';
+import { getPlayerWorldUnit } from '../utils/worldUnits';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from '../utils/travelIntent';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -185,6 +186,7 @@ export async function sendPlayerAction(
       quest.questId === unit.source.requiredQuestId && quest.status === 'in_progress'
     )) ? [{ id: unit.id, name: unit.name, disposition: getWorldUnitDisposition(playerState, unit.id) }] : []);
   const encounteredUnit = playerState.encounteredUnitId ? getWorldUnitById(playerState.encounteredUnitId) : undefined;
+  const playerUnit = getPlayerWorldUnit(playerState);
 
   if (!cleanApiKey) {
     throw new Error('所選模型的 API Key 尚未設定。請開啟模型設定。');
@@ -194,6 +196,7 @@ export async function sendPlayerAction(
 你是一位中世紀奇幻 TRPG 的遊戲主持人 (GM)。
 當前玩家狀態：
 - 姓名: ${playerState.name} (Lv.${playerState.level})
+- 玩家單位 ID: ${playerUnit.id} | 有效戰鬥數值: ${JSON.stringify(playerUnit.stats)}（玩家不是 NPC/魔物，不可出現在 unitDispositionChanges、encounterRequest 或戰鬥目標）
 - 職業: ${playerState.classId} | 陣營: ${playerState.alignment}
 - 能力值：${JSON.stringify(playerState.abilities)}（檢定須選最相關欄位）
 - HP: ${playerState.hp} | MP: ${playerState.mp} | 金幣: ${playerState.gold}

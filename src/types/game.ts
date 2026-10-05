@@ -44,7 +44,7 @@ export interface PlayerGrowthStatic {
 export type CharacterAlignment = '守序善良' | '中立善良' | '混亂善良' | '守序中立' | '絕對中立' | '混亂中立' | '守序邪惡' | '中立邪惡' | '混亂邪惡';
 export type UnitDisposition = 'friendly' | 'neutral' | 'hostile';
 
-/** NPC 與魔物共用的靜態單位欄位；玩家動態資料及單位專屬規則會在後續階段遷移。 */
+/** NPC 與魔物共用的靜態單位欄位；玩家以 PlayerWorldUnit 轉接，不併入靜態資料。 */
 export interface UnitStaticBase {
   id: string;
   name: string;
@@ -138,6 +138,22 @@ export type WorldUnitStatic =
     source: MonsterStatic;
   });
 
+/** 玩家在共用單位查詢中的視圖；數值由存檔與成長/職業/裝備規則即時計算，source 保留完整玩家存檔。 */
+export interface PlayerWorldUnit {
+  kind: 'player';
+  id: string;
+  name: string;
+  title?: string;
+  categoryId: string;
+  alignment: CharacterAlignment;
+  stats: UnitStatBlock;
+  mapIds: string[];
+  source: PlayerState;
+}
+
+/** 可辨識玩家、NPC 與魔物的共用單位視圖。 */
+export type WorldUnitView = WorldUnitStatic | PlayerWorldUnit;
+
 export interface ShopStatic {
   id: string;
   name: string;
@@ -207,6 +223,8 @@ export interface QuestStatic {
 
 /** 玩家動態存檔狀態 (寫入 LocalStorage) */
 export interface PlayerState {
+  /** 玩家穩定單位 ID；舊存檔載入時補上 PLAYER_UNIT_ID。 */
+  unitId: string;
   name: string;
   classId: string;
   alignment: CharacterAlignment;
@@ -239,8 +257,6 @@ export interface PlayerState {
   // 劇情進度與旗標，防止 AI 遺忘劇情進度
   storyFlags: Record<string, boolean>; // 例如: { "FLAG_TUTORIAL_DONE": true }
   defeatedMonsters: Record<string, number>;
-  /** @deprecated 讀取舊存檔用；新流程使用 encounteredUnitId。 */
-  encounteredMonsterId?: string;
   encounteredUnitId?: string;
   unitDispositionOverrides: Record<string, UnitDisposition>;
   

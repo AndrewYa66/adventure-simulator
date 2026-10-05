@@ -44,7 +44,7 @@ function resolveEnemyTurn(player: PlayerState, combat: NonNullable<PlayerState['
   if (unconsciousTurns > 0) statusEffects.push({ id: 'unconscious', remainingTurns: unconsciousTurns });
   const nextPlayer: PlayerState = {
     ...player, hp, isDead, statusEffects,
-    ...(isDead ? { encounteredUnitId: undefined, encounteredMonsterId: undefined } : {}),
+    ...(isDead ? { encounteredUnitId: undefined } : {}),
     ...(isDead ? { combat: undefined } : { combat: { ...combat, round: combat.round + 1 } })
   };
   const result = check.success
@@ -154,7 +154,7 @@ export default function App() {
     const currentMap = getMapById(sourcePlayer.currentMapId);
     const destination = getMapById(mapId);
     if (!currentMap?.connectedMapIds.includes(mapId) || !destination || !canPlayerEnterMap(sourcePlayer, destination)) return null;
-    const nextPlayer = { ...sourcePlayer, previousMapId: sourcePlayer.currentMapId, currentMapId: destination.id, encounteredMonsterId: undefined, encounteredUnitId: undefined };
+    const nextPlayer = { ...sourcePlayer, previousMapId: sourcePlayer.currentMapId, currentMapId: destination.id, encounteredUnitId: undefined };
     return { player: nextPlayer, destination };
   };
 
@@ -274,7 +274,6 @@ export default function App() {
     const combatUnit = getWorldUnitById(player.combat.unitId);
     const outOfCombat = { ...player };
     delete outOfCombat.combat;
-    delete outOfCombat.encounteredMonsterId;
     delete outOfCombat.encounteredUnitId;
     updatePlayer(outOfCombat);
     appendSystemMessage(`你與${combatUnit?.name ?? '敵人'}拉開距離，戰鬥結束。`);
@@ -340,7 +339,6 @@ export default function App() {
       const questText = completedQuests.map((quest) => `任務「${getQuestById(quest.questId)?.title ?? quest.questId}」完成，需求道具已交付並領取獎勵。`).join('\n');
       const victoryState = { ...nextPlayer };
       delete victoryState.combat;
-      delete victoryState.encounteredMonsterId;
       delete victoryState.encounteredUnitId;
       updatePlayer(victoryState);
       appendSystemMessage(`🏆 ${attackText}\n${monster.name}已被擊敗！獲得 ${monster.rewards.exp} EXP、${monster.rewards.gold} 金幣。${dropText}${questText ? `\n${questText}` : ''}`, checks);
@@ -350,7 +348,6 @@ export default function App() {
     if (monsterHp <= 0 && unit.kind === 'npc') {
       const victoryState = { ...combatActionPlayer };
       delete victoryState.combat;
-      delete victoryState.encounteredMonsterId;
       delete victoryState.encounteredUnitId;
       updatePlayer(victoryState);
       appendSystemMessage(`⚔️ ${attackText}\n${unit.name}已被擊倒，不會掉落經驗、金幣或道具。`, checks);
@@ -597,7 +594,7 @@ export default function App() {
       if (resultToApply.stateChanges) {
         nextPlayer = applyStateChanges(player, resultToApply);
       }
-      if (nextPlayer.isDead) nextPlayer = { ...nextPlayer, encounteredMonsterId: undefined, encounteredUnitId: undefined };
+      if (nextPlayer.isDead) nextPlayer = { ...nextPlayer, encounteredUnitId: undefined };
       const requestedEncounter = aiResponse.encounterRequest?.monsterId;
       const requestedUnit = requestedEncounter ? getWorldUnitById(requestedEncounter) : undefined;
       const requestedMonster = requestedUnit?.kind === 'monster' ? requestedUnit : undefined;

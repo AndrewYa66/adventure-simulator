@@ -1,5 +1,5 @@
 import type { GameSession, PlayerState, StoryMessage } from '../types/game';
-import { getCharacterClassById, getItemById, getMapById, getMonsterById, getPlayerResourceCaps, getQuestById, getWorldUnitById, npcsDatabase } from '../data/staticData';
+import { createDefaultNpcWorldState, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getQuestById, getWorldUnitById, npcsDatabase, PLAYER_UNIT_ID } from '../data/staticData';
 import { createInitialPlayer } from './playerInit';
 
 const PLAYER_STORAGE_KEY = 'TRPG_PLAYER_STATE';
@@ -15,6 +15,8 @@ export interface LoadedGameSession {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
+
+const isMonsterUnitId = (unitId: string): boolean => getWorldUnitById(unitId)?.kind === 'monster';
 
 export function normalizePlayerState(value: unknown): PlayerState | null {
   if (!isRecord(value) || typeof value.name !== 'string' || !value.name.trim() ||
@@ -49,14 +51,14 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     const defeated: Record<string, number> = {};
     const savedDefeats = isRecord(entry.progress) && isRecord(entry.progress.defeatedMonsters) ? entry.progress.defeatedMonsters : {};
     for (const [monsterId, count] of Object.entries(savedDefeats)) {
-      if (getMonsterById(monsterId) && Number.isInteger(count) && (count as number) >= 0) defeated[monsterId] = count as number;
+      if (isMonsterUnitId(monsterId) && Number.isInteger(count) && (count as number) >= 0) defeated[monsterId] = count as number;
     }
     return [{ questId: entry.questId, status: entry.status as 'in_progress' | 'completed', progress: { defeatedMonsters: defeated } }];
   });
   const defeatedMonsters: Record<string, number> = {};
   if (value.defeatedMonsters !== undefined && !isRecord(value.defeatedMonsters)) return null;
   for (const [monsterId, count] of Object.entries(value.defeatedMonsters ?? {})) {
-    if (getMonsterById(monsterId) && Number.isInteger(count) && (count as number) >= 0) defeatedMonsters[monsterId] = count as number;
+    if (isMonsterUnitId(monsterId) && Number.isInteger(count) && (count as number) >= 0) defeatedMonsters[monsterId] = count as number;
   }
   const unitDispositionOverrides: PlayerState['unitDispositionOverrides'] = {};
   if (isRecord(value.unitDispositionOverrides)) {
@@ -120,12 +122,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
   const npcStates = Object.fromEntries(npcsDatabase.map((npc) => {
     const savedState = savedNpcStates[npc.id];
     const maxHp = getWorldUnitById(npc.id)?.stats.hp ?? 1;
-    if (!isRecord(savedState)) return [npc.id, {
-      gold: npc.startingGold ?? 0,
-      inventory: (npc.startingInventory ?? []).flatMap((entry) => getItemById(entry.itemId) && entry.quantity > 0 ? [{ ...entry }] : []),
-      currentHp: maxHp,
-      isDead: false
-    }];
+    if (!isRecord(savedState)) return [npc.id, createDefaultNpcWorldState(npc)];
     const savedInventory = Array.isArray(savedState.inventory) ? savedState.inventory.flatMap((entry) =>
       isRecord(entry) && typeof entry.itemId === 'string' && getItemById(entry.itemId) &&
       Number.isInteger(entry.quantity) && (entry.quantity as number) > 0
@@ -153,6 +150,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
       : []).slice(-100) : [];
 
   return {
+    unitId: PLAYER_UNIT_ID,
     name: value.name.trim(),
     classId,
     alignment: ['守序善良', '中立善良', '混亂善良', '守序中立', '絕對中立', '混亂中立', '守序邪惡', '中立邪惡', '混亂邪惡'].includes(String(value.alignment))

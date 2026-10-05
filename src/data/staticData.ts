@@ -5,6 +5,7 @@ import type {
   MonsterStatic,
   NpcCategoryStatic,
   NpcStatic,
+  NpcWorldState,
   PlayerGrowthStatic,
   QuestStatic,
   ShopStatic,
@@ -33,6 +34,9 @@ export const playerGrowthDatabase: PlayerGrowthStatic[] = rawPlayerGrowth as Pla
 export const questsDatabase: QuestStatic[] = rawQuests as QuestStatic[];
 export const shopsDatabase: ShopStatic[] = rawShops as ShopStatic[];
 
+/** 玩家的穩定單位 ID；NPC/魔物資料不得使用此 ID。 */
+export const PLAYER_UNIT_ID = 'PLAYER-001';
+
 // ==========================================
 // 靜態資料查詢 Helper Functions
 // ==========================================
@@ -57,14 +61,16 @@ export const getMapById = (id: string): MapStatic | undefined => {
   return mapsDatabase.find((map) => map.id === id);
 };
 
-export const getMonsterById = (id: string): MonsterStatic | undefined => {
+/** 舊查詢介面：已無外部呼叫端，僅供共同查詢層內部使用。 */
+const getMonsterById = (id: string): MonsterStatic | undefined => {
   return monstersDatabase.find((monster) => monster.id === id);
 };
 
 export const getNpcCategoryById = (id: string): NpcCategoryStatic | undefined =>
   npcCategoriesDatabase.find((category) => category.id === id);
 
-export const getNpcById = (id: string): NpcStatic | undefined =>
+/** 舊查詢介面：已無外部呼叫端，僅供共同查詢層內部使用。 */
+const getNpcById = (id: string): NpcStatic | undefined =>
   npcsDatabase.find((npc) => npc.id === id);
 
 export const getShopById = (id: string): ShopStatic | undefined =>
@@ -73,7 +79,7 @@ export const getShopById = (id: string): ShopStatic | undefined =>
 export const getShopForNpc = (npc: NpcStatic): ShopStatic | undefined =>
   npc.shopId ? getShopById(npc.shopId) : undefined;
 
-export const getNpcStats = (npc: NpcStatic) => {
+const getNpcStats = (npc: NpcStatic) => {
   const baseStats = getNpcCategoryById(npc.categoryId)?.baseStats;
   if (!baseStats) return undefined;
   return { ...baseStats, ...npc.stats };
@@ -101,6 +107,15 @@ export const getWorldUnitById = (id: string): WorldUnitStatic | undefined => {
     stats: monster.stats, mapIds, source: monster
   };
 };
+
+/** NPC 動態狀態預設值；新存檔建立與舊存檔補欄位共用。 */
+export const createDefaultNpcWorldState = (npc: NpcStatic): NpcWorldState => ({
+  gold: npc.startingGold ?? 0,
+  inventory: (npc.startingInventory ?? []).flatMap((entry) =>
+    getItemById(entry.itemId) && Number.isInteger(entry.quantity) && entry.quantity > 0 ? [{ ...entry }] : []),
+  currentHp: getWorldUnitById(npc.id)?.stats.hp ?? 1,
+  isDead: false
+});
 
 /** Return the normalized units referenced by a map, preserving NPC and monster order. */
 export const getWorldUnitsAtMap = (mapId: string): WorldUnitStatic[] => {
@@ -165,6 +180,7 @@ export function validateWorldUnitData(): string[] {
       issues.push('單位缺少有效的 ID 或名稱');
     }
     if (seenIds.has(unit.id)) issues.push(`單位 ID 重複：${unit.id}`);
+    if (unit.id === PLAYER_UNIT_ID) issues.push(`單位 ID 與玩家保留 ID 衝突：${unit.id}`);
     seenIds.add(unit.id);
     if (unit.alignment !== undefined && !validAlignments.has(unit.alignment)) issues.push(`${unit.id}: 無效陣營 ${unit.alignment}`);
     if (!['friendly', 'neutral', 'hostile'].includes(unit.defaultDisposition)) issues.push(`${unit.id}: 無效預設關係 ${unit.defaultDisposition}`);
