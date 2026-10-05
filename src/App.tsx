@@ -722,7 +722,7 @@ export default function App() {
           ? `\n\n📍 你想前往的地區有多個可能地點，請選擇目的地：`
           : requestedDestinationId
           ? `\n\n⚠️ 目前無法前往「${getMapById(requestedDestinationId)?.name ?? requestedDestinationId}」，所在地區未變更。請選擇右側「鄰近地點」中的可前往區域。`
-          : storyClaimsPlayerMoved(storyText)
+          : storyClaimsPlayerMoved(storyText, player.currentMapId)
             ? `\n\n⚠️ 目前沒有有效的地區移動請求，因此所在地區未變更。若要移動，請明確指定可前往地點。`
           : previousMap && nextMap && previousMap.id !== nextMap.id
             ? `\n\n⚠️ AI 敘事提及地區變更，但沒有有效的移動請求；所在地區維持${previousMap.name}。`

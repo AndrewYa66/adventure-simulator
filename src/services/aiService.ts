@@ -413,7 +413,7 @@ ${scenario.gmRole}
       const requestedId = parsed.travelRequest?.destinationMapId;
       const requestIsValid = !!requestedId && availableDestinations.some((destination) => destination.id === requestedId);
       const localIntent = resolveExplicitTravelIntent(actionText, playerState);
-      const narrativeClaimsTravel = storyClaimsPlayerMoved(parsed.storyText);
+      const narrativeClaimsTravel = storyClaimsPlayerMoved(parsed.storyText, playerState.currentMapId);
 
       const requestNeedsRepair = (!!requestedId && !requestIsValid) ||
         (!requestedId && (localIntent.kind === 'ambiguous' || narrativeClaimsTravel));

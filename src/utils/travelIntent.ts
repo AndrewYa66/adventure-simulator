@@ -1,5 +1,5 @@
 import type { MapStatic, PlayerState } from '../types/game';
-import { canPlayerEnterMap, getMapById } from '../data/staticData';
+import { canPlayerEnterMap, getMapById, mapsDatabase } from '../data/staticData';
 
 export type TravelIntentResolution =
   | { kind: 'resolved'; destination: MapStatic }
@@ -16,8 +16,26 @@ const returnPhrases = ['回到', '返回', '折返', '回村', '返村', '回森
 const blockedPhrases = /(不想|不打算|不去|不前往|不要|先不|暫時不|暂时不|還不|还不|能不能|可不可以|是否|要不要|如何|怎麼|怎么|路線|路线|多遠|多远|多久|在哪|哪裡|哪里|位置|告訴我|告诉我)/;
 const directionPhrases = /(前往|前去|走到|移動到|移动到|進入|进入|出發前往|出发前往|帶我去|带我去|我要去|我想去|我決定去|我决定去|去往|出發去|出发去|去|到|往|回到|返回|折返|回村|回森林|回去)/;
 
-export function storyClaimsPlayerMoved(text: string): boolean {
-  return /(?:你|玩家)(?:已經|已|終於|终于|順利|顺利)?(?:抵達|抵达|到達|到达|來到|来到|回到|返回|走進|走进|踏入|進入|进入|回到了|到了)/.test(text);
+/** 移動動詞後多少字內出現其他地區名稱才算宣稱換區。 */
+const MOVE_CLAIM_WINDOW = 16;
+
+/**
+ * 敘事是否宣稱玩家已移動到「其他地區」。只有移動動詞後緊接其他地圖的名稱、別名或分類詞才算；
+ * 「你走進旅館」「你來到櫃檯前」這類同地區內的走動不算，避免誤觸移動修正請求與警示。
+ */
+export function storyClaimsPlayerMoved(text: string, currentMapId: string): boolean {
+  const currentTags = new Set(getMapById(currentMapId)?.locationTags ?? []);
+  const otherLabels = mapsDatabase.filter((map) => map.id !== currentMapId).flatMap((map) => [
+    map.name,
+    ...(map.aliases ?? []),
+    ...(map.locationTags ?? []).filter((tag) => !currentTags.has(tag)).flatMap((tag) => destinationCategoryPhrases[tag] ?? [])
+  ]).filter((label) => label.length >= 2);
+  const moveVerb = /(?:抵達|抵达|到達|到达|來到|来到|回到|返回|走進|走进|踏入|進入|进入|回到了|到了)/gu;
+  for (const match of text.matchAll(moveVerb)) {
+    const following = text.slice(match.index + match[0].length, match.index + match[0].length + MOVE_CLAIM_WINDOW);
+    if (otherLabels.some((label) => following.includes(label))) return true;
+  }
+  return false;
 }
 
 export function hasExplicitTravelIntent(actionText: string): boolean {
