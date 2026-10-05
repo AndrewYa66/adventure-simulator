@@ -11,6 +11,8 @@ node_modules
 dist
 dist-ssr
 *.local
+# AI 冒煙測試金鑰（scripts/ai-smoke-test.mjs）
+ai-test.local.json
 
 # Editor directories and files
 .vscode/*
