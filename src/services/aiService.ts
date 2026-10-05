@@ -303,15 +303,16 @@ ${scenario.gmRole}
         required: ['monsterId'],
         additionalProperties: false
       },
-      serviceRequest: {
+      // 沒有可用服務時只允許 null，避免模型被迫選擇佔位 ID。
+      serviceRequest: availableServices.length ? {
         type: ['object', 'null'],
         properties: {
-          shopId: { type: 'string', enum: availableServices.length ? [...new Set(availableServices.map((service) => service.shopId))] : ['__NO_AVAILABLE_SHOP__'] },
-          serviceId: { type: 'string', enum: availableServices.length ? availableServices.map((service) => service.serviceId) : ['__NO_AVAILABLE_SERVICE__'] }
+          shopId: { type: 'string', enum: [...new Set(availableServices.map((service) => service.shopId))] },
+          serviceId: { type: 'string', enum: availableServices.map((service) => service.serviceId) }
         },
         required: ['shopId', 'serviceId'],
         additionalProperties: false
-      },
+      } : { type: 'null' },
       travelRequest: {
         type: ['object', 'null'],
         properties: {

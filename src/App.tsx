@@ -16,7 +16,7 @@ import { ApiKeyModal } from './components/ApiKeyModal';
 import { CharacterSetup } from './components/CharacterSetup';
 import { createInitialPlayer } from './utils/playerInit';
 import { isSelfDamageIntent, parseExplicitSelfDamage, parseWaitIntent, unsupportedInventoryItemRequested } from './utils/playerActionIntent';
-import { buyItem, purchaseService, sellItem } from './utils/tradeRules';
+import { buyItem, getAvailableServices, purchaseService, sellItem } from './utils/tradeRules';
 import { ACTION_DURATIONS, advanceGameTime, formatDuration, formatGameTime, MAX_WAIT_MINUTES, waitGameTime } from './utils/gameTime';
 import { grantUnitExp } from './utils/unitProgress';
 import { createCombat, getCombatTarget, setEnemyHp } from './utils/combatState';
@@ -703,7 +703,10 @@ export default function App() {
           : aiResponse.travelRequest?.destinationMapId;
       const travel = requestedDestinationId ? movePlayerTo(requestedDestinationId, nextPlayer) : null;
       // 服務請求以與 HUD 相同的規則結算（含扣款轉帳、恢復與固定耗時）；同回合移動時不處理服務。
-      const requestedService = !travel && aiResponse.serviceRequest ? aiResponse.serviceRequest : undefined;
+      // 只處理指向目前地區實際服務的請求；佔位或不存在的 ID 視為沒有請求，不顯示失敗訊息。
+      const requestedService = !travel && aiResponse.serviceRequest && getAvailableServices(player).some((service) =>
+        service.shopId === aiResponse.serviceRequest?.shopId && service.serviceId === aiResponse.serviceRequest?.serviceId)
+        ? aiResponse.serviceRequest : undefined;
       const requestedShop = requestedService ? getShopById(requestedService.shopId) : undefined;
       const serviceResult = requestedService && requestedShop ? purchaseService(nextPlayer, requestedShop, requestedService.serviceId, nextPlayer.currentMapId) : undefined;
       const serviceName = requestedShop?.services?.find((service) => service.id === requestedService?.serviceId)?.name ?? '服務';
