@@ -33,3 +33,22 @@ export function formatGameTime(minutes: number): string {
   const mm = String(minuteOfDay % 60).padStart(2, '0');
   return `第 ${getGameDay(minutes)} 天 ${hh}:${mm}`;
 }
+
+/** 原地等待：唯一可變時長的行動，由玩家明確指定，單次上限 8 小時；只推進時間，不回復資源。 */
+export const MAX_WAIT_MINUTES = 8 * 60;
+
+export function isValidWaitMinutes(minutes: number): boolean {
+  return Number.isSafeInteger(minutes) && minutes > 0 && minutes <= MAX_WAIT_MINUTES;
+}
+
+export function waitGameTime(player: PlayerState, minutes: number): PlayerState {
+  if (!isValidWaitMinutes(minutes)) return player;
+  return { ...player, gameTimeMinutes: player.gameTimeMinutes + minutes };
+}
+
+/** 例如「2 小時 30 分鐘」。 */
+export function formatDuration(minutes: number): string {
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return [hours ? `${hours} 小時` : '', rest ? `${rest} 分鐘` : ''].filter(Boolean).join(' ') || '0 分鐘';
+}

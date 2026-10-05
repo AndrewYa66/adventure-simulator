@@ -1,5 +1,6 @@
 import type { ItemStatic, PlayerState, ShopStatic } from '../types/game';
-import { getMapById, getPlayerResourceCaps, getWorldUnitById, getWorldUnitDisposition } from '../data/staticData';
+import { getMapById, getPlayerResourceCaps, getShopForNpc, getWorldUnitById, getWorldUnitDisposition } from '../data/staticData';
+import { advanceGameTime } from './gameTime';
 import { canPlayerAct } from './playerStatus';
 
 export type TradeResult = { ok: true; player: PlayerState; quantity: number; totalPrice: number } |
@@ -94,12 +95,25 @@ export function purchaseService(player: PlayerState, shop: ShopStatic, serviceId
   if (player.hp >= getPlayerResourceCaps(player).maxHp &&
       player.mp >= getPlayerResourceCaps(player).maxMp) return { ok: false, reason: '目前生命與魔力已恢復，無需休息。' };
   const caps = getPlayerResourceCaps(player);
-  return { ok: true, quantity: 1, totalPrice: service.price, player: {
+  // 休息類服務依行動類型固定耗時（rest）。
+  return { ok: true, quantity: 1, totalPrice: service.price, player: advanceGameTime({
     ...player,
     hp: caps.maxHp,
     mp: caps.maxMp,
     gold: player.gold - service.price,
     unitInstances: { ...player.unitInstances, [shop.npcId]: { ...npcState, gold: npcState.gold + service.price } },
     transactionHistory: record(player, 'service', `使用服務：${service.name}`, -service.price)
-  } };
+  }, 'rest') };
+}
+
+/** 目前地區可使用的商店服務（商店 NPC 在場、存活、非敵對）；供 HUD 與 AI 的 serviceRequest 候選共用。 */
+export function getAvailableServices(player: PlayerState) {
+  return (getMapById(player.currentMapId)?.npcsPresent ?? []).flatMap((npcId) => {
+    const unit = getWorldUnitById(npcId);
+    const shop = unit?.kind === 'npc' ? getShopForNpc(unit.source) : undefined;
+    if (!shop || !canTrade(player, shop, player.currentMapId)) return [];
+    return (shop.services ?? []).map((service) => ({
+      shopId: shop.id, serviceId: service.id, name: service.name, price: service.price, description: service.description, provider: unit!.name
+    }));
+  });
 }

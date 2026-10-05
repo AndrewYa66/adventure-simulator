@@ -387,6 +387,8 @@ export interface AIResponsePayload {
   suggestedActions: string[];
   encounterRequest?: { monsterId: string } | null;
   travelRequest?: { destinationMapId: string } | null;
+  /** 使用目前地區商店的服務；只可選遊戲提供的候選，由前端以與 HUD 相同的規則結算。 */
+  serviceRequest?: { shopId: string; serviceId: string } | null;
   checkRequest?: {
     stat: ActionCheckResult['stat'];
     dc: number;

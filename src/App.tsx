@@ -15,9 +15,9 @@ import { StoryLog } from './components/StoryLog';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { CharacterSetup } from './components/CharacterSetup';
 import { createInitialPlayer } from './utils/playerInit';
-import { isSelfDamageIntent, parseExplicitSelfDamage, unsupportedInventoryItemRequested } from './utils/playerActionIntent';
+import { isSelfDamageIntent, parseExplicitSelfDamage, parseWaitIntent, unsupportedInventoryItemRequested } from './utils/playerActionIntent';
 import { buyItem, purchaseService, sellItem } from './utils/tradeRules';
-import { advanceGameTime, formatGameTime } from './utils/gameTime';
+import { ACTION_DURATIONS, advanceGameTime, formatDuration, formatGameTime, MAX_WAIT_MINUTES, waitGameTime } from './utils/gameTime';
 import { grantUnitExp } from './utils/unitProgress';
 import { createCombat, getCombatTarget, setEnemyHp } from './utils/combatState';
 import { getPlayerWorldUnit } from './utils/worldUnits';
@@ -257,8 +257,8 @@ export default function App() {
       appendSystemMessage(`服務未完成：${result.reason}`);
       return;
     }
-    updatePlayer(advanceGameTime(result.player, 'rest'));
-    appendSystemMessage(`使用${service?.name ?? '服務'}，支付 ${result.totalPrice} 金幣，休息 8 小時後生命與魔力已恢復。`);
+    updatePlayer(result.player);
+    appendSystemMessage(`使用${service?.name ?? '服務'}，支付 ${result.totalPrice} 金幣，休息 ${formatDuration(ACTION_DURATIONS.rest)}後生命與魔力已恢復。`);
   };
 
   const handleEquipItem = (itemId: string) => {
@@ -550,6 +550,24 @@ export default function App() {
       ]);
       return;
     }
+    const waitIntent = parseWaitIntent(actionText);
+    if (waitIntent) {
+      const now = Date.now();
+      const waitNext = waitIntent.kind === 'duration' ? waitGameTime(player, waitIntent.minutes) : player;
+      const text = waitIntent.kind === 'duration' && waitNext !== player
+        ? `⏳ 你原地等待了 ${formatDuration(waitIntent.minutes)}，現在是 ${formatGameTime(waitNext.gameTimeMinutes)}。等待不會恢復生命與魔力。${waitIntent.hasFollowUp ? '\n等待之後的行動請另外輸入。' : ''}`
+        : waitIntent.kind === 'duration'
+          ? `單次最多只能等待 ${formatDuration(MAX_WAIT_MINUTES)}，時間沒有推進。`
+          : waitIntent.kind === 'time_of_day'
+            ? `目前尚未支援「等到某個時段」，請改為指定時長，例如「等待 2 小時」（單次最多 ${formatDuration(MAX_WAIT_MINUTES)}）。`
+            : `請說明要等待多久，例如「等待 2 小時」（單次最多 ${formatDuration(MAX_WAIT_MINUTES)}）。`;
+      if (waitNext !== player) updatePlayer(waitNext);
+      setMessages((prev) => [...prev,
+        { id: `${now}-user`, sender: 'user', text: actionText, timestamp: new Date().toLocaleTimeString() },
+        { id: `${now}-wait`, sender: 'system', text, timestamp: new Date().toLocaleTimeString() }
+      ]);
+      return;
+    }
     const unsupportedItem = unsupportedInventoryItemRequested(actionText);
     if (unsupportedItem) {
       setMessages((prev) => [...prev,
@@ -684,7 +702,16 @@ export default function App() {
           ? undefined
           : aiResponse.travelRequest?.destinationMapId;
       const travel = requestedDestinationId ? movePlayerTo(requestedDestinationId, nextPlayer) : null;
-      nextPlayer = travel ? travel.player : advanceGameTime(nextPlayer, 'dialogue');
+      // 服務請求以與 HUD 相同的規則結算（含扣款轉帳、恢復與固定耗時）；同回合移動時不處理服務。
+      const requestedService = !travel && aiResponse.serviceRequest ? aiResponse.serviceRequest : undefined;
+      const requestedShop = requestedService ? getShopById(requestedService.shopId) : undefined;
+      const serviceResult = requestedService && requestedShop ? purchaseService(nextPlayer, requestedShop, requestedService.serviceId, nextPlayer.currentMapId) : undefined;
+      const serviceName = requestedShop?.services?.find((service) => service.id === requestedService?.serviceId)?.name ?? '服務';
+      nextPlayer = travel ? travel.player : serviceResult?.ok ? serviceResult.player : advanceGameTime(nextPlayer, 'dialogue');
+      const serviceNotice = !requestedService ? ''
+        : serviceResult?.ok
+          ? `\n\n🛏️ 使用${serviceName}，支付 ${serviceResult.totalPrice} 金幣，經過 ${formatDuration(ACTION_DURATIONS.rest)}，生命與魔力已恢復。`
+          : `\n\n⚠️ ${serviceName}未完成：${serviceResult && !serviceResult.ok ? serviceResult.reason : '找不到這項服務。'}`;
       updatePlayer(nextPlayer);
 
       const previousMap = getMapById(player.currentMapId);
@@ -706,7 +733,7 @@ export default function App() {
         {
           id: (Date.now() + 1).toString(),
           sender: 'ai',
-          text: `${storyText}${questNotice}${questCompletionNotice}${npcTransferNotice}${unitDispositionNotice}${encounterNotice}${locationNotice}${deathNotice}`,
+          text: `${storyText}${questNotice}${questCompletionNotice}${npcTransferNotice}${unitDispositionNotice}${encounterNotice}${serviceNotice}${locationNotice}${deathNotice}`,
           options: aiResponse.suggestedActions,
           travelOptions: textTravelIntent.kind === 'ambiguous'
             ? textTravelIntent.candidates.map((candidate) => ({ mapId: candidate.id, name: candidate.name }))

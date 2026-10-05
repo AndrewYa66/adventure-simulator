@@ -23,7 +23,7 @@
         "name": "旅店休息",
         "price": 5,
         "kind": "restore_resources",
-        "description": "支付 5 金幣，在旅店休息並恢復 HP 與 MP。休息時間之後由時間系統處理。"
+        "description": "支付 5 金幣，在旅店休息 8 小時並恢復 HP 與 MP。"
       }
     ]
   }

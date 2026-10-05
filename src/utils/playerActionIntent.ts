@@ -52,3 +52,39 @@ export function unsupportedInventoryItemRequested(actionText: string): string | 
       normalizedAction !== normalizeItemTerm(item)) return undefined;
   return item;
 }
+
+export type WaitIntent =
+  | { kind: 'duration'; minutes: number; hasFollowUp: boolean }
+  | { kind: 'time_of_day' }
+  | { kind: 'unspecified' };
+
+const AMOUNT = String.raw`(\d+|[一二兩三四五六七八九十]{1,3})`;
+const DURATION_PATTERN = new RegExp(
+  String.raw`^\s*(?:了|約|大約)?\s*(?:(半)\s*個?\s*(?:小時|鐘頭)|${AMOUNT}\s*個?\s*(半)?\s*(?:小時|鐘頭)(半)?)?\s*(?:${AMOUNT}\s*分(?:鐘)?)?`,
+  'u'
+);
+
+/**
+ * 解析原地等待；時長須由玩家明確指定，不交給 AI 判斷。
+ * 「等一下」「等待村長」這類不含時長的句子不視為等待，照常交給 AI。
+ */
+export function parseWaitIntent(actionText: string): WaitIntent | undefined {
+  if (/(?:如何|怎麼|能否|能不能|可不可以|是否|請問|要不要|不要|不想|不能|無法|多久)/u.test(actionText)) return undefined;
+  const verb = actionText.match(/(?:原地)?(?:等待|等候|等)/u);
+  if (!verb || verb.index === undefined) return undefined;
+  const after = actionText.slice(verb.index + verb[0].length);
+
+  const match = after.match(DURATION_PATTERN);
+  if (match && match[0].trim()) {
+    const [, halfOnly, hours, halfBefore, halfAfter, minutes] = match;
+    const total = (halfOnly ? 30 : 0) + (hours ? parseAmount(hours) * 60 : 0) +
+      (halfBefore || halfAfter ? 30 : 0) + (minutes ? parseAmount(minutes) : 0);
+    if (total > 0) {
+      const followUp = after.slice(match[0].length).replace(/[\s。．.！!，,、～~]/gu, '');
+      return { kind: 'duration', minutes: total, hasFollowUp: followUp.length > 0 };
+    }
+  }
+  if (/^\s*(?:到|至)\s*(?:天亮|天黑|日出|日落|早上|清晨|中午|下午|傍晚|晚上|深夜|半夜|明天|隔天)/u.test(after)) return { kind: 'time_of_day' };
+  if (/原地(?:等待|等候|等)/u.test(actionText) && !after.replace(/[\s。．.！!～~]/gu, '')) return { kind: 'unspecified' };
+  return undefined;
+}

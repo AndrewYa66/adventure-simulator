@@ -2,6 +2,7 @@ import type { PlayerState, AIResponsePayload } from '../types/game';
 import type { AIModelSettings } from './aiModels';
 import { canPlayerEnterMap, describeUnitBuild, getItemById, getMapById, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, questsDatabase, scenario } from '../data/staticData';
 import { canAcceptQuest, canTurnInQuest } from '../utils/questRules';
+import { getAvailableServices } from '../utils/tradeRules';
 import { getPlayerWorldUnit } from '../utils/worldUnits';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from '../utils/travelIntent';
 import { formatGameTime } from '../utils/gameTime';
@@ -71,6 +72,8 @@ function parseAIResponse(value: unknown): AIResponsePayload | null {
 
   if (value.travelRequest !== undefined && value.travelRequest !== null &&
       (!isRecord(value.travelRequest) || typeof value.travelRequest.destinationMapId !== 'string')) return null;
+  if (value.serviceRequest !== undefined && value.serviceRequest !== null &&
+      (!isRecord(value.serviceRequest) || typeof value.serviceRequest.shopId !== 'string' || typeof value.serviceRequest.serviceId !== 'string')) return null;
   if (value.encounterRequest !== undefined && value.encounterRequest !== null &&
       (!isRecord(value.encounterRequest) || typeof value.encounterRequest.monsterId !== 'string')) return null;
 
@@ -181,6 +184,7 @@ export async function sendPlayerAction(
     (!unit.source.requiredQuestId || playerState.activeQuests.some((quest) =>
       quest.questId === unit.source.requiredQuestId && quest.status === 'in_progress'
     )) ? [{ id: unit.id, name: unit.name, build: describeUnitBuild(unit), disposition: getWorldUnitDisposition(playerState, unit.id) }] : []);
+  const availableServices = getAvailableServices(playerState);
   const encounteredUnit = playerState.encounteredUnitId ? getWorldUnitById(playerState.encounteredUnitId, playerState.unitInstances) : undefined;
   const playerUnit = getPlayerWorldUnit(playerState);
 
@@ -211,6 +215,7 @@ ${scenario.gmRole}
 - 當前戰鬥: ${playerState.combat ? JSON.stringify(playerState.combat) : '無'}
 - 目前已遭遇單位: ${encounteredUnit?.name ?? '無'}
 - 本地區可遭遇敵人（只可選這些 ID）: ${JSON.stringify(encounterCandidates)}
+- 當前可使用服務（serviceRequest 只可選這些 shopId/serviceId）: ${JSON.stringify(availableServices)}
 - 背包物品 ID 列表: ${JSON.stringify(playerState.inventory)}
 - 世界靜態物品清單（只可使用這些 ID/名稱）: ${JSON.stringify(itemsDatabase.map((item) => ({ id: item.id, name: item.name, type: item.type })))}
 - 裝備物品 ID: ${JSON.stringify(playerState.equipped)}
@@ -233,6 +238,8 @@ ${scenario.gmRole}
 - 非戰鬥行動若有風險且失敗會造成實質後果，依最相關能力提出 checkRequest（atk/def/spd 或 str/dex/con/int/wis/cha），在成功/失敗分支填入相應 HP/MP 變化。玩家明確提出自我傷害等會直接改變資源的行動時，必須依其明確數值回報變化，並照常套用 HP 歸零死亡規則。
 - 若玩家有自傷意圖但沒有說明傷害數值，先詢問數值，不要猜測或只用文字敘述扣血。
 - 一般戰鬥由遊戲規則結算，不可敘事中自行宣告擊敗或扣除怪物。
+- 每次回應都必須包含 serviceRequest；只有玩家明確要求使用、購買某項服務（例如住店、休息一晚）時，才從「當前可使用服務」清單填入 shopId 與 serviceId，否則設為 null。詢問價格或服務內容不算使用。服務的費用、恢復效果與耗時由遊戲端結算，不可同時用 hpChange/mpChange/goldChange 描述同一服務，也不可在 storyText 宣稱已付款或已恢復；若清單中沒有對應服務，只能說明目前無法使用。
+- 遊戲時間由遊戲依行動類型推進；玩家要求原地等待時由遊戲處理，AI 不可在敘事中自行跳過時間。
 - 只有玩家行動或明確世界事件確實改變了當前地區單位對玩家的關係時，才在 stateChanges.unitDispositionChanges 回報單位 ID 與 friendly/neutral/hostile；純對話、陣營傾向或臆測不能改變關係。單位關係變更須與 storyText 敘事一致。
 - 每次回應都必須包含 encounterRequest；若玩家尚未實際看見或接觸敵人，設為 null。只有探索、搜索或情境中確實遇見敵人時，才指定本地區可遭遇清單中的 monsterId，並在敘事中描述遭遇。不可只因怪物存在於地圖資料，就宣稱玩家已遭遇；不可遭遇未列出的敵人。
 - 玩家在對話中明確要求攻擊目前地區的敵人時，不可假裝攻擊已命中、敵人已受傷或已被擊敗；戰鬥與獎勵由遊戲端確定性規則處理，若無法由遊戲端執行，只能說明尚未發起戰鬥。
@@ -251,6 +258,7 @@ ${scenario.gmRole}
   "suggestedActions": ["選項 1", "選項 2", "選項 3"],
   "encounterRequest": null,
   "travelRequest": null,
+  "serviceRequest": null,
   "checkRequest": null,
   "checkOutcomes": null,
   "stateChanges": {
@@ -293,6 +301,15 @@ ${scenario.gmRole}
           monsterId: { type: 'string', enum: encounterCandidates.length ? encounterCandidates.map((monster) => monster.id) : ['__NO_AVAILABLE_MONSTER__'] }
         },
         required: ['monsterId'],
+        additionalProperties: false
+      },
+      serviceRequest: {
+        type: ['object', 'null'],
+        properties: {
+          shopId: { type: 'string', enum: availableServices.length ? [...new Set(availableServices.map((service) => service.shopId))] : ['__NO_AVAILABLE_SHOP__'] },
+          serviceId: { type: 'string', enum: availableServices.length ? availableServices.map((service) => service.serviceId) : ['__NO_AVAILABLE_SERVICE__'] }
+        },
+        required: ['shopId', 'serviceId'],
         additionalProperties: false
       },
       travelRequest: {
@@ -346,7 +363,7 @@ ${scenario.gmRole}
       failureStateChanges: { type: ['object', 'null'], additionalProperties: true }
     },
     required: [
-      'storyText', 'suggestedActions', 'encounterRequest', 'travelRequest', 'checkRequest', 'checkOutcomes', 'stateChanges', 'failureStateChanges'
+      'storyText', 'suggestedActions', 'encounterRequest', 'travelRequest', 'serviceRequest', 'checkRequest', 'checkOutcomes', 'stateChanges', 'failureStateChanges'
     ],
     additionalProperties: false
   };
