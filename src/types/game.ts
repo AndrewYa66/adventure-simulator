@@ -276,6 +276,21 @@ export interface QuestStatic {
 // 2. 動態資料 DTO (Dynamic State - LocalStorage / API)
 // ==========================================
 
+/**
+ * 戰鬥參與者：party（玩家、日後的同伴）的 HP 存於各自存檔/實例；enemy 的 HP 在戰鬥中追蹤。
+ * 結構預留多對多戰鬥（O35）；目前遊戲規則仍為玩家對單一敵人。
+ */
+export type CombatParticipant =
+  | { unitId: string; side: 'party' }
+  | { unitId: string; side: 'enemy'; currentHp: number };
+
+export interface CombatState {
+  round: number;
+  participants: CombatParticipant[];
+  /** 玩家目前攻擊的敵方單位 ID。 */
+  targetUnitId: string;
+}
+
 /** 玩家動態存檔狀態 (寫入 LocalStorage) */
 export interface PlayerState {
   /** 玩家穩定單位 ID；舊存檔載入時補上 PLAYER_UNIT_ID。 */
@@ -326,8 +341,8 @@ export interface PlayerState {
     status: 'in_progress' | 'completed';
     progress?: { defeatedMonsters: Record<string, number> };
   }[];
-  /** 戰鬥目標通用化；怪物仍以專屬資料決定掉落與特殊招式。 */
-  combat?: { unitId: string; currentHp: number; round: number };
+  /** 進行中的戰鬥；怪物仍以專屬資料決定掉落與特殊招式。 */
+  combat?: CombatState;
 }
 
 /** 對話視窗訊息 */

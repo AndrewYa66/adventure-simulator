@@ -4,6 +4,7 @@ import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, desc
 import { getPlayerStatBreakdown, STAT_LABELS } from '../utils/gameChecks';
 import { canAcceptQuest, canTurnInQuest } from '../utils/questRules';
 import { canPlayerAct, isPlayerUnconscious } from '../utils/playerStatus';
+import { getCombatTarget } from '../utils/combatState';
 import { formatGameTime } from '../utils/gameTime';
 
 interface PlayerHUDProps {
@@ -196,9 +197,9 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onReset, storageWa
       <div>
         <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #444' }}>👹 遭遇</h4>
         {player.combat ? (() => {
-          const unit = getWorldUnitById(player.combat.unitId, player.unitInstances);
+          const unit = getWorldUnitById(player.combat.targetUnitId, player.unitInstances);
           return <div>
-            <div style={{ marginBottom: '6px' }}>{unit?.name || player.combat.unitId} HP {player.combat.currentHp}/{unit?.stats.hp}</div>
+            <div style={{ marginBottom: '6px' }}>{unit?.name || player.combat.targetUnitId} HP {getCombatTarget(player.combat)?.currentHp ?? 0}/{unit?.stats.hp}</div>
             <div style={{ color: '#aaa', fontSize: '11px', marginBottom: '8px' }}>第 {player.combat.round} 回合</div>
             <button onClick={onAttack} disabled={player.isDead} style={{ marginRight: '6px', padding: '6px 10px', background: '#8e2424', color: 'white', border: '1px solid #b44', borderRadius: '4px', cursor: player.isDead ? 'not-allowed' : 'pointer' }}>{isPlayerUnconscious(player) ? '昏迷中（跳過回合）' : '攻擊'}</button>
             {unlockedSkills.filter((skill) => skill.effect.kind === 'damage_multiplier').map((skill) => <button key={skill.id} onClick={() => onUseSkill(skill.id)} disabled={!canPlayerAct(player) || player.mp < skill.costMp} title={skill.description} style={{ marginRight: '6px', padding: '6px 10px', cursor: player.mp < skill.costMp || !canPlayerAct(player) ? 'not-allowed' : 'pointer' }}>{skill.name}（MP {skill.costMp}）</button>)}

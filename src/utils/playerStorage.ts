@@ -3,6 +3,7 @@ import { createDefaultUnitInstance, getBaseExpForLevel, getCharacterClassById, g
 import { createInitialPlayer } from './playerInit';
 import { isValidGameTime } from './gameTime';
 import { isValidSpeciesClassCombo } from './unitGrowth';
+import { createCombat } from './combatState';
 
 const PLAYER_STORAGE_KEY = 'TRPG_PLAYER_STATE';
 const SESSION_STORAGE_KEY = 'TRPG_GAME_SESSION';
@@ -110,20 +111,27 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
 
   let combat: PlayerState['combat'];
   if (value.combat !== undefined && value.combat !== null) {
-    const combatUnitId = isRecord(value.combat) && typeof value.combat.unitId === 'string'
-      ? value.combat.unitId
-      : isRecord(value.combat) && typeof value.combat.monsterId === 'string' ? value.combat.monsterId : undefined;
-    const combatUnit = combatUnitId ? getWorldUnitById(combatUnitId, unitInstances) : undefined;
-    const combatUnitIsPresent = combatUnit?.kind === 'npc'
-      ? getMapById(value.currentMapId)?.npcsPresent.includes(combatUnitId!)
-      : !!combatUnit && getMapById(value.currentMapId)?.monstersPresent.includes(combatUnitId!);
-    const savedCombatNpcState = combatUnit?.kind === 'npc' && isRecord(savedInstances[combatUnitId!])
-      ? savedInstances[combatUnitId!] as Record<string, unknown> : undefined;
-    if (!isRecord(value.combat) || !combatUnitId || !combatUnit || !combatUnitIsPresent ||
-        !Number.isInteger(value.combat.currentHp) || (value.combat.currentHp as number) <= 0 ||
-        !Number.isInteger(value.combat.round) || (value.combat.round as number) < 1 ||
-        (savedCombatNpcState?.isDead === true || savedCombatNpcState?.currentHp === 0)) return null;
-    combat = { unitId: combatUnitId, currentHp: Math.min(value.combat.currentHp as number, combatUnit.stats.hp), round: value.combat.round as number };
+    if (!isRecord(value.combat) || !Number.isInteger(value.combat.round) || (value.combat.round as number) < 1) return null;
+    // 新格式為參與者清單；舊格式為單一目標 { unitId | monsterId, currentHp }，轉為一名敵方參與者。
+    const savedEnemies: unknown[] = Array.isArray(value.combat.participants)
+      ? value.combat.participants.filter((participant) => isRecord(participant) && participant.side === 'enemy')
+      : [{ unitId: typeof value.combat.unitId === 'string' ? value.combat.unitId : value.combat.monsterId, currentHp: value.combat.currentHp }];
+    const enemies: { unitId: string; currentHp: number }[] = [];
+    for (const enemy of savedEnemies) {
+      const unitId = isRecord(enemy) && typeof enemy.unitId === 'string' ? enemy.unitId : undefined;
+      const unit = unitId ? getWorldUnitById(unitId, unitInstances) : undefined;
+      const isPresent = unit?.kind === 'npc'
+        ? getMapById(value.currentMapId)?.npcsPresent.includes(unitId!)
+        : !!unit && getMapById(value.currentMapId)?.monstersPresent.includes(unitId!);
+      const savedNpcState = unit?.kind === 'npc' && isRecord(savedInstances[unitId!]) ? savedInstances[unitId!] as Record<string, unknown> : undefined;
+      if (!isRecord(enemy) || !unitId || !unit || !isPresent || !Number.isInteger(enemy.currentHp) || (enemy.currentHp as number) <= 0 ||
+          savedNpcState?.isDead === true || savedNpcState?.currentHp === 0) return null;
+      enemies.push({ unitId, currentHp: Math.min(enemy.currentHp as number, unit.stats.hp) });
+    }
+    if (!enemies.length) return null;
+    const savedTarget = value.combat.targetUnitId;
+    const targetUnitId = typeof savedTarget === 'string' && enemies.some((enemy) => enemy.unitId === savedTarget) ? savedTarget : enemies[0].unitId;
+    combat = { ...createCombat([PLAYER_UNIT_ID], enemies), round: value.combat.round as number, targetUnitId };
   }
   const previousMapId = typeof value.previousMapId === 'string' &&
     getMapById(value.currentMapId)?.connectedMapIds.includes(value.previousMapId)

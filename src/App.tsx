@@ -19,6 +19,7 @@ import { isSelfDamageIntent, parseExplicitSelfDamage, unsupportedInventoryItemRe
 import { buyItem, purchaseService, sellItem } from './utils/tradeRules';
 import { advanceGameTime, formatGameTime } from './utils/gameTime';
 import { grantUnitExp } from './utils/unitProgress';
+import { createCombat, getCombatTarget, setEnemyHp } from './utils/combatState';
 import { getPlayerWorldUnit } from './utils/worldUnits';
 import type { CharacterAlignment } from './types/game';
 
@@ -62,7 +63,7 @@ function resolveEnemyTurn(player: PlayerState, combat: NonNullable<PlayerState['
 
 function createRestoreNotice(player: PlayerState, savedAt: number, messageCount: number): StoryMessage {
   const map = getMapById(player.currentMapId);
-  const combatUnit = player.combat ? getWorldUnitById(player.combat.unitId, player.unitInstances) : undefined;
+  const combatUnit = player.combat ? getWorldUnitById(player.combat.targetUnitId, player.unitInstances) : undefined;
   const activeQuests = player.activeQuests.filter((quest) => quest.status === 'in_progress')
     .map((quest) => getQuestById(quest.questId)?.title ?? quest.questId);
   const inventory = player.inventory.map((entry) => `${getItemById(entry.itemId)?.name ?? entry.itemId} ×${entry.quantity}`);
@@ -73,7 +74,7 @@ function createRestoreNotice(player: PlayerState, savedAt: number, messageCount:
     `進行中任務：${activeQuests.length ? activeQuests.join('、') : '無'}`,
     `持有物：${inventory.length ? inventory.join('、') : '無'}`
   ];
-  if (combatUnit && player.combat) lines.push(`戰鬥恢復：第 ${player.combat.round} 回合，${combatUnit.name} HP ${player.combat.currentHp}/${combatUnit.stats.hp}`);
+  if (combatUnit && player.combat) lines.push(`戰鬥恢復：第 ${player.combat.round} 回合，${combatUnit.name} HP ${getCombatTarget(player.combat)?.currentHp ?? 0}/${combatUnit.stats.hp}`);
   else if (player.encounteredUnitId) lines.push(`已遭遇單位：${getWorldUnitById(player.encounteredUnitId)?.name ?? player.encounteredUnitId}（可從 HUD 發起戰鬥）`);
   else lines.push('戰鬥狀態：目前沒有進行中的戰鬥，也尚未遭遇敵人。');
   return {
@@ -259,13 +260,13 @@ export default function App() {
         (unit.kind === 'monster' && (map.isSafeZone || player.encounteredUnitId !== unitId || (monster?.requiredQuestId && !player.activeQuests.some((quest) => quest.questId === monster.requiredQuestId && quest.status === 'in_progress')))) ||
         (unit.kind === 'npc' && (npcState?.isDead || npcState?.currentHp === 0))) return;
     const currentHp = unit.kind === 'npc' ? npcState?.currentHp ?? unit.stats.hp : unit.stats.hp;
-    updatePlayer({ ...player, encounteredUnitId: unitId, combat: { unitId, currentHp, round: 1 } });
+    updatePlayer({ ...player, encounteredUnitId: unitId, combat: createCombat([player.unitId], [{ unitId, currentHp }]) });
     appendSystemMessage(`你與${unit.name}進入戰鬥！攻擊、已解鎖技能及消耗品各自消耗一個行動回合；敵人存活時會反擊並進行閃避檢定。`);
   };
 
   const handleFleeCombat = () => {
     if (!player.combat || !canPlayerAct(player)) return;
-    const combatUnit = getWorldUnitById(player.combat.unitId, player.unitInstances);
+    const combatUnit = getWorldUnitById(player.combat.targetUnitId, player.unitInstances);
     const outOfCombat = { ...player };
     delete outOfCombat.combat;
     delete outOfCombat.encounteredUnitId;
@@ -275,8 +276,9 @@ export default function App() {
 
   const handleCombatAction = (skill?: SkillStatic, sourcePlayer: PlayerState = player) => {
     const combat = sourcePlayer.combat;
-    const unit = combat ? getWorldUnitById(combat.unitId, sourcePlayer.unitInstances) : undefined;
-    if (!combat || !unit || sourcePlayer.isDead) return;
+    const target = combat ? getCombatTarget(combat) : undefined;
+    const unit = target ? getWorldUnitById(target.unitId, sourcePlayer.unitInstances) : undefined;
+    if (!combat || !target || !unit || sourcePlayer.isDead) return;
     if (isPlayerUnconscious(sourcePlayer)) {
       const recovered = { ...advanceGameTime(sourcePlayer, 'combatRound'), statusEffects: sourcePlayer.statusEffects.filter((effect) => effect.id !== 'unconscious'), combat: { ...combat } };
       const enemyTurn = resolveEnemyTurn(recovered, combat, unit);
@@ -299,8 +301,8 @@ export default function App() {
       ? Math.max(1, Math.floor(playerAttack * skillMultiplier) - unit.stats.def)
       : 0;
     const monsterHp = attackCheck.success
-      ? Math.max(0, combat.currentHp - damage)
-      : combat.currentHp;
+      ? Math.max(0, target.currentHp - damage)
+      : target.currentHp;
     const attackText = attackCheck.success
       ? `${skill?.name ?? '攻擊'}命中，對${unit.name}造成 ${damage} 點傷害。`
       : `${skill?.name ?? '攻擊'}未命中${unit.name}。`;
@@ -349,7 +351,8 @@ export default function App() {
       return;
     }
 
-    const enemyTurn = resolveEnemyTurn({ ...combatActionPlayer, combat: { ...combat, currentHp: monsterHp } }, { ...combat, currentHp: monsterHp }, unit);
+    const nextCombat = setEnemyHp(combat, unit.id, monsterHp);
+    const enemyTurn = resolveEnemyTurn({ ...combatActionPlayer, combat: nextCombat }, nextCombat, unit);
     updatePlayer(enemyTurn.player);
     appendSystemMessage(`${attackText}\n${enemyTurn.text}`, [...checks, enemyTurn.check]);
   };
@@ -402,9 +405,9 @@ export default function App() {
       return;
     }
 
-    const combatUnit = getWorldUnitById(player.combat.unitId, player.unitInstances);
+    const combatUnit = getWorldUnitById(player.combat.targetUnitId, player.unitInstances);
     if (!combatUnit) return;
-    const combatNext = combatUnit.kind === 'npc' ? withNpcHp(next, combatUnit.id, player.combat.currentHp) : next;
+    const combatNext = combatUnit.kind === 'npc' ? withNpcHp(next, combatUnit.id, getCombatTarget(player.combat)?.currentHp ?? 0) : next;
     const enemyTurn = resolveEnemyTurn({ ...combatNext, combat: player.combat }, player.combat, combatUnit);
     updatePlayer(enemyTurn.player);
     appendSystemMessage(`使用${item.name}，${details}。\n${enemyTurn.text}`, [enemyTurn.check]);
@@ -463,8 +466,8 @@ export default function App() {
         setMessages((prev) => [...prev, userMessage, { id: `${Date.now()}-combat`, sender: 'system', text: '安全地區不會發生魔物戰鬥。', timestamp: new Date().toLocaleTimeString() }]);
         return;
       }
-      if (player.combat && matched.length === 1 && matched[0].id !== player.combat.unitId) {
-        const currentUnit = getWorldUnitById(player.combat.unitId);
+      if (player.combat && matched.length === 1 && matched[0].id !== player.combat.targetUnitId) {
+        const currentUnit = getWorldUnitById(player.combat.targetUnitId);
         setMessages((prev) => [...prev, userMessage, { id: `${Date.now()}-combat`, sender: 'system', text: `目前正在與${currentUnit?.name ?? '敵人'}戰鬥，無法切換目標。`, timestamp: new Date().toLocaleTimeString() }]);
         return;
       }
@@ -480,7 +483,7 @@ export default function App() {
           return;
         }
         const currentHp = target.kind === 'npc' ? provokedPlayer.unitInstances[target.id]?.currentHp ?? target.stats.hp : target.stats.hp;
-        const combatPlayer: PlayerState = { ...provokedPlayer, encounteredUnitId: target.id, combat: { unitId: target.id, currentHp, round: 1 } };
+        const combatPlayer: PlayerState = { ...provokedPlayer, encounteredUnitId: target.id, combat: createCombat([provokedPlayer.unitId], [{ unitId: target.id, currentHp }]) };
         appendSystemMessage(`你${provokedPlayer === player ? '與' : '激怒並與'}已遭遇的${target.name}進入戰鬥！`);
         handleCombatAction(undefined, combatPlayer);
       } else if (player.combat) handleCombatAction();
