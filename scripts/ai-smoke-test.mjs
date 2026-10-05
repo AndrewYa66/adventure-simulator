@@ -2,6 +2,7 @@
 // 金鑰讀自專案根目錄的 ai-test.local.json（*.local 已列入 .gitignore，不會被提交，也不會打包進網站）：
 //   { "provider": "gemini", "model": "gemini-3.8-flash", "apiKey": "..." }
 // 執行：npm run test:ai   （每個情境呼叫一次模型，會產生少量 API 費用）
+// 暫時改用其他模型或調整情境間隔：npm run test:ai -- --model gemini-3.6-flash --delay 20
 import { readFileSync } from 'node:fs';
 import { runnerImport } from 'vite';
 
@@ -16,6 +17,10 @@ if (!config.apiKey || !config.provider || !config.model) {
   console.error('ai-test.local.json 需包含 provider、model、apiKey。');
   process.exit(1);
 }
+
+const modelArgIndex = process.argv.indexOf('--model');
+if (modelArgIndex > 0 && process.argv[modelArgIndex + 1]) config.model = process.argv[modelArgIndex + 1];
+console.log(`模型：${config.provider} / ${config.model}`);
 
 const { module: ai } = await runnerImport('/src/services/aiService.ts');
 const { module: init } = await runnerImport('/src/utils/playerInit.ts');
@@ -32,9 +37,21 @@ const scenarios = [
   ...(otherMapId ? [{ name: '沒有旅店的地區，要求住店', player: { ...base, hp: 40, currentMapId: otherMapId }, action: '我要找間旅店住一晚', expectService: false }] : [])
 ];
 
+// Gemini 免費額度約每分鐘 5 次；情境之間預設間隔 15 秒，可用 --delay <秒> 調整。
+const delayArgIndex = process.argv.indexOf('--delay');
+const delayMs = (delayArgIndex > 0 ? Number(process.argv[delayArgIndex + 1]) : 15) * 1000;
+
 let failures = 0;
-for (const scenario of scenarios) {
-  const response = await ai.sendPlayerAction({ provider: config.provider, model: config.model }, config.apiKey, scenario.player, scenario.action, []);
+for (const [index, scenario] of scenarios.entries()) {
+  if (index > 0 && delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+  let response;
+  try {
+    response = await ai.sendPlayerAction({ provider: config.provider, model: config.model }, config.apiKey, scenario.player, scenario.action, []);
+  } catch (error) {
+    failures += 1;
+    console.log(`\n⚠️ ${scenario.name}：呼叫失敗（${error instanceof Error ? error.message.slice(0, 160) : error}）`);
+    continue;
+  }
   const request = response.serviceRequest ?? null;
   const shop = request ? data.getShopById(request.shopId) : undefined;
   const result = request && shop ? trade.purchaseService(scenario.player, shop, request.serviceId, scenario.player.currentMapId) : undefined;
