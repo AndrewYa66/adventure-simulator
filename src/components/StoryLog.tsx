@@ -99,7 +99,7 @@ export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAct
       </div>
 
       {deathActions && <section role="alert" aria-label="角色死亡" style={{ padding: '14px 16px', backgroundColor: '#3a1c1c', borderTop: '1px solid #8e2424', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px' }}>
-        <span style={{ flex: '1 1 260px', color: '#ffcdd2' }}>☠️ 你已死亡。自動存檔停在致命行動之前，可讀取後重新嘗試，或從存檔管理讀取手動存檔。</span>
+        <span style={{ flex: '1 1 260px', color: '#ffcdd2' }}>☠️ 你已死亡。自動存檔停在致命行動之前（戰鬥中死亡則停在該場戰鬥開始前），可讀取後重新嘗試，或從存檔管理讀取手動存檔。</span>
         <button onClick={deathActions.onLoadAutoSave} disabled={loading} style={{ padding: '8px 14px', backgroundColor: '#2e5d32', color: '#fff', border: '1px solid #4a8', borderRadius: '4px', cursor: 'pointer' }}>讀取自動存檔（死亡前）</button>
         <button onClick={deathActions.onOpenSaveManager} style={{ padding: '8px 14px', backgroundColor: '#333', color: '#fff', border: '1px solid #666', borderRadius: '4px', cursor: 'pointer' }}>開啟存檔管理</button>
       </section>}

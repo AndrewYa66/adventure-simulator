@@ -191,9 +191,9 @@ export default function App() {
   };
 
   // 自動存檔：每次狀態變更（且非 AI 回合進行中）覆寫目前世界的自動存檔欄位。
-  // 死亡狀態不寫入，讓自動存檔停在致命行動之前，死亡後可讀檔重試。
+  // 死亡與戰鬥中不寫入：自動存檔停在致命行動或該場戰鬥開始之前，死亡後讀檔不會落入無法脫身的戰鬥。
   useEffect(() => {
-    if (loading || !activeWorldId || player.isDead) return;
+    if (loading || !activeWorldId || player.isDead || player.combat) return;
     const saved = writeSlot(activeWorldId, AUTO_SLOT_ID, player, messages, characterHistory);
     if (!saved) console.warn('自動存檔失敗，瀏覽器儲存空間可能不足。');
   }, [player, messages, characterHistory, loading, activeWorldId]);
@@ -250,9 +250,11 @@ export default function App() {
   };
 
   // ---------- 存檔管理 ----------
+  const saveBlockedReason = player.isDead ? '角色已死亡，無法存檔；請讀取死亡前的自動存檔或手動存檔。'
+    : player.combat ? '戰鬥中無法存檔；戰鬥結束後才會存檔。' : undefined;
   const handleSaveManual = (slotId: SaveSlotId) => {
     if (!activeWorldId) return '目前沒有進行中的世界。';
-    if (player.isDead) return '角色已死亡，無法存檔；請讀取死亡前的存檔。';
+    if (saveBlockedReason) return saveBlockedReason;
     return writeSlot(activeWorldId, slotId, player, messages, characterHistory)
       ? '已存檔。' : '存檔失敗：瀏覽器儲存空間可能不足，請先匯出備份並刪除不需要的存檔。';
   };
@@ -932,7 +934,7 @@ export default function App() {
         ? () => setSetupMode(null)
         // 建立新世界時若已有其他世界，可取消並回到存檔管理切換世界。
         : loadSaveIndex().worlds.length > 0 ? () => { setSetupMode(null); setIsSaveManagerOpen(true); } : undefined} />}
-      {isSaveManagerOpen && <SaveManager activeWorldId={activeWorldId} busy={loading} canSave={!player.isDead} onSaveManual={handleSaveManual} onLoad={handleLoadSlot}
+      {isSaveManagerOpen && <SaveManager activeWorldId={activeWorldId} busy={loading} saveBlockedReason={saveBlockedReason} onSaveManual={handleSaveManual} onLoad={handleLoadSlot}
         onDeleteSlot={handleDeleteSlot} onDeleteWorld={handleDeleteWorld} onExport={handleExportWorld} onImport={handleImportWorld}
         onNewWorld={handleNewWorld} onClose={() => {
           setIsSaveManagerOpen(false);
