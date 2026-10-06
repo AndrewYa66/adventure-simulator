@@ -52,9 +52,9 @@ const tired = { ...base, hp: 40 };
 const elsewhere = { ...tired, currentMapId: otherMap.id };
 const innService = trade.getAvailableServices(base)[0];
 const startQuest = data.questsDatabase.find((quest) => quests.canAcceptQuest(base, quest));
-const startNpcs = startMap.npcsPresent.map((id) => data.getWorldUnitById(id));
-const otherNpc = data.getWorldUnitById(otherMap.npcsPresent[0]);
-const merchant = startNpcs.find((unit) => unit.source.shopId && unit.id !== innService?.shopId && data.getShopById(unit.source.shopId)?.npcId === unit.id) ?? startNpcs[1];
+const startNpcs = data.getResidentUnitIds(startMap).map((id) => data.getWorldUnitById(id));
+const otherNpc = data.getWorldUnitById(data.getResidentUnitIds(otherMap)[0]);
+const merchant = startNpcs.find((unit) => unit.shopId && unit.id !== innService?.shopId && data.getShopById(unit.shopId)?.ownerUnitId === unit.id) ?? startNpcs[1];
 
 // 世界事件情境：前一位角色在戰鬥中殺死委託人 NPC 後自我了斷，新角色在同一世界接續。
 const victimNpc = startNpcs.find((unit) => data.questsDatabase.some((quest) => quest.questGiverId === unit.id));
@@ -65,7 +65,7 @@ const formerKilled = world.finalizeWorld(formerInCombat, { ...formerInCombat, co
 const formerDead = world.finalizeWorld(formerKilled, { ...formerKilled, hp: 0, isDead: true }, { [former.unitId]: { cause: 'self_inflicted' } });
 const afterDeathHistory = [saves.createHistoryEntry(formerDead)];
 const successor = saves.continueWorldWithCharacter(formerDead, base);
-const witnessNpc = data.getWorldUnitById(formerDead.world.events.find((event) => event.death?.victimUnitId === victimNpc.id).witnessUnitIds.find((id) => data.getWorldUnitById(id)?.kind === 'npc'));
+const witnessNpc = data.getWorldUnitById(formerDead.world.events.find((event) => event.death?.victimUnitId === victimNpc.id).witnessUnitIds.find((id) => data.getWorldUnitById(id)?.requiresEncounter !== true));
 const successorElsewhere = { ...successor, currentMapId: otherMap.id };
 const proposableEvent = world.getProposableEvents(base)[0];
 

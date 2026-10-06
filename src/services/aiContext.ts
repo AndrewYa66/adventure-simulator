@@ -16,12 +16,15 @@ import { getCharacterLegacyForAI, getProposableEvents, getWorldContextForAI } fr
  */
 
 /** 目前的回應格式版本；Gemini JSON Schema 要求填入此值。 */
-export const AI_RESPONSE_FORMAT_VERSION = 2;
-/** 可解析的版本；沒有版本號的回應視為第 1 版（欄位與第 2 版相同）。 */
-export const SUPPORTED_AI_RESPONSE_FORMAT_VERSIONS = [1, 2];
+export const AI_RESPONSE_FORMAT_VERSION = 3;
+/**
+ * 可解析的版本；沒有版本號的回應視為第 1 版。
+ * 第 1、2 版的單位欄位使用舊名稱（monsterId、npcItemTransfers.npcId、defeatedMonsters），解析時轉為第 3 版名稱。
+ */
+export const SUPPORTED_AI_RESPONSE_FORMAT_VERSIONS = [1, 2, 3];
 
 export type AIContextSectionId =
-  | 'player' | 'legacy' | 'location' | 'npcs' | 'factions' | 'quests' | 'encounters' | 'items' | 'flags'
+  | 'player' | 'legacy' | 'location' | 'residents' | 'factions' | 'quests' | 'encounters' | 'items' | 'flags'
   | 'worldEvents' | 'chronicle' | 'modifiers' | 'proposableEvents' | 'rules';
 
 export interface AIContextSectionReport {
@@ -114,28 +117,28 @@ function buildRules(): string {
 - 詢問地點資訊、觀察遠方、談論某地或描述打算但尚未決定，都不算移動；travelRequest 設為 null。含糊的「去那裡看看」且目的地不明時，先在 storyText 詢問，不要猜測或切換。
 - 玩家說「回到/前往」+「村莊/森林」等泛稱時，先從相鄰地區中依 aliases/tags 找候選；若上一個地區符合且可返回或前往，優先選上一個地區。若仍有多個合理候選，travelRequest 設為 null，並在 storyText 詢問具體目的地。
 - 不要透過 stateChanges 修改地區；實際移動由遊戲驗證 travelRequest 後套用。不可前往清單以外的地區。
-- NPC isDead 為 true 或 currentHp 為 0 時代表角色已死亡，不可當成存活人物交談、提供任務、交易或持有可取得物品。
-- NPC 持有物與金幣即為世界實際庫存，不能憑空贈送或生成；只能在持有量足夠且玩家明確取得時回報 npcItemTransfers。
-- 陣營傾向描述價值觀；對玩家的目前關係是友善/中立/敵對，依「個人關係 → 所屬勢力對玩家的聲望 → 單位預設關係」判定，已計入上方 disposition。不可由 NPC/魔物種類或九大陣營推斷關係。
-- 只有目前關係為敵對的單位才會作為敵人主動攻擊；友善或中立單位即使是魔物也不可無故描述為敵人或發動戰鬥。玩家明確攻擊友善/中立單位時，遊戲會記錄挑釁造成的敵對關係。
+- 在場人物 isDead 為 true 或 currentHp 為 0 時代表已死亡，不可當成存活人物交談、提供任務、交易或持有可取得物品。
+- 人物的持有物與金幣即為世界實際庫存，不能憑空贈送或生成；只能在持有量足夠且玩家明確取得時回報 unitItemTransfers。
+- 陣營傾向描述價值觀；對玩家的目前關係是友善/中立/敵對，依「個人關係 → 所屬勢力對玩家的聲望 → 單位預設關係」判定，已計入上方 disposition。不可由種族、外表或九大陣營推斷關係。
+- 只有目前關係為敵對的單位才會作為敵人主動攻擊；友善或中立單位即使外表兇惡也不可無故描述為敵人或發動戰鬥。玩家明確攻擊友善/中立單位時，遊戲會記錄挑釁造成的敵對關係。
 - 任務只能從「當前可接取任務」中接受。玩家明確表示接取/接受某任務時，才在 stateChanges.questAcceptances 填入對應 ID；不可因詢問細節、委託描述或含糊回覆而接取。不可自行建立任務、改寫需求或獎勵。
 - 任務接取由遊戲端再次驗證所在地、任務給予者是否在場及任務是否已接取/完成；不可只在 storyText 宣稱已接取。
-- 任務僅能在上列可交付清單內回報完成。交付道具由程式轉入 NPC 持有物，任務獎勵金幣與物品從任務給予者的實際持有物中發放，不足時只發可取得部分並明確說明短缺。
-- 玩家不能取得物品資料庫或在場 NPC 持有物中不存在的道具；不得透過敘事生成不屬於本世界觀的物品（例如 ${scenario.anachronisticItemTerms.join('、')}）、裝備或消耗品。npcItemTransfers 僅能列出當前在場 NPC 與靜態物品 ID，且只在玩家明確偷取、拾取或接受贈與時使用。
+- 任務僅能在上列可交付清單內回報完成。交付道具由程式轉入委託人持有物，任務獎勵金幣與物品從任務給予者的實際持有物中發放，不足時只發可取得部分並明確說明短缺。
+- 玩家不能取得物品資料庫或在場人物持有物中不存在的道具；不得透過敘事生成不屬於本世界觀的物品（例如 ${scenario.anachronisticItemTerms.join('、')}）、裝備或消耗品。unitItemTransfers 僅能列出當前在場人物（或已遭遇的單位）與靜態物品 ID，且只在玩家明確偷取、拾取或接受贈與時使用。
 - 任何會持續改變玩家或世界狀態的行動，都必須在同一回應填入對應的結構化欄位；若沒有合法狀態欄位可套用，只能描述尚未完成的嘗試或詢問玩家，不可在敘事中宣稱效果已生效。
 - 玩家沒有劇情保護。合理危險、檢定失敗或敵方有效攻擊可以使 HP 降至 0；不得為避免死亡而竄改檢定結果、取消已成立的傷害或在 storyText 宣稱玩家倖存。HP 歸零就是死亡，不是昏迷；只有明確套用 unconscious 狀態才代表昏迷。
 - 非戰鬥行動若有風險且失敗會造成實質後果，依最相關能力提出 checkRequest（atk/def/spd 或 str/dex/con/int/wis/cha），在成功/失敗分支填入相應 HP/MP 變化。玩家明確提出自我傷害等會直接改變資源的行動時，必須依其明確數值回報變化，並照常套用 HP 歸零死亡規則。
 - 若玩家有自傷意圖但沒有說明傷害數值，先詢問數值，不要猜測或只用文字敘述扣血。
-- 一般戰鬥由遊戲規則結算，不可敘事中自行宣告擊敗或扣除怪物。
+- 一般戰鬥由遊戲規則結算，不可敘事中自行宣告擊敗或扣除敵人。
 - 每次回應都必須包含 serviceRequest；只有玩家明確要求使用、購買某項服務（例如住店、休息一晚）時，才從「當前可使用服務」清單填入 shopId 與 serviceId，否則設為 null。詢問價格或服務內容不算使用。服務的費用、恢復效果與耗時由遊戲端結算，不可同時用 hpChange/mpChange/goldChange 描述同一服務，也不可在 storyText 宣稱已付款或已恢復；若清單中沒有對應服務，只能說明目前無法使用。
 - 遊戲時間由遊戲依行動類型推進；玩家要求原地等待時由遊戲處理，AI 不可在敘事中自行跳過時間。玩家要求等待、睡覺或停留數天等長時間時，本回合只經過一般回合時間：storyText 不得描述數小時以上的時間流逝，應說明單次等待上限為 8 小時，請玩家分次等待或使用旅店休息。
 - 世界事件與死因只能依「世界事件紀錄」「歷代角色」與「世界編年史」敘述，不可捏造未記錄的死亡、兇手或世界變化。
-- 認知層級：每件事的 presentKnowledge 列出此刻在場 NPC 對它的認知，NPC 只能說出自己層級的 knows 內容。「親眼目擊」者肯定、具體地說出經過與兇手（被問到時必須明確說出是誰、做了什麼、何時何地，不可含糊帶過或推說不清楚）；「傳聞」者只能以聽說的口吻提到兇手或死因，不知道經過，可建議去問 heardFrom 中的目擊者；「公開消息」者只知道結果，可以猜測但不可斷定兇手；「傳說」者以久遠往事的口吻模糊帶過。沒有列在該事件 presentKnowledge 中的 NPC 不知道這件事。旁白也不可向玩家揭露在場者都不知道的經過；玩家角色只能從 NPC 口中得知。
-- 「歷代角色」的 death 與 deeds 是前任冒險者生前造成的既成事實，該前任冒險者不是目前玩家，不可復活，玩家也不可取得其物品；NPC 是否知道某件事與該前任冒險者有關，同樣只依該事件的 presentKnowledge。
+- 認知層級：每件事的 presentKnowledge 列出此刻在場人物對它的認知（who），他們只能說出自己層級的 knows 內容。「親眼目擊」者肯定、具體地說出經過與兇手（被問到時必須明確說出是誰、做了什麼、何時何地，不可含糊帶過或推說不清楚）；「傳聞」者只能以聽說的口吻提到兇手或死因，不知道經過，可建議去問 heardFrom 中的目擊者；「公開消息」者只知道結果，可以猜測但不可斷定兇手；「傳說」者以久遠往事的口吻模糊帶過。沒有列在該事件 presentKnowledge 中的人不知道這件事。旁白也不可向玩家揭露在場者都不知道的經過；玩家角色只能從在場人物口中得知。
+- 「歷代角色」的 death 與 deeds 是前任冒險者生前造成的既成事實，該前任冒險者不是目前玩家，不可復活，玩家也不可取得其物品；在場人物是否知道某件事與該前任冒險者有關，同樣只依該事件的 presentKnowledge。
 - 每次回應都必須包含 eventProposals（陣列）；只有玩家行動確實促成「可提議的世界事件」所描述的情況（符合 when 說明）時，才填入該事件 ID，否則為空陣列。事件效果由遊戲驗證後套用，storyText 可描述促成事件的經過，但不可自行宣告超出事件描述的世界改變。
-- 每次回應都必須包含 questProposals（陣列，最多一件）。只有玩家在本回合明確向在場人物詢問工作、委託或需要幫忙的事時，才從「可發布的支線委託」提議：templateId、giverId（玩家詢問的對象；若玩家未指定對象則選清單中的人）、targetUnitId（收集範本另填 itemId，討伐範本 itemId 為 null）、quantity（在範圍內）。閒聊、交易、詢問劇本任務或 NPC 自己想找人幫忙都不算，questProposals 必須為空陣列；不可讓 NPC 主動提出委託。報酬、標題、目標與經驗值由遊戲依範本與委託人持有物決定（約為 rewardValuePerQuantity × quantity 的價值），storyText 不可說出具體報酬數字，也不可宣稱玩家已接下委託；發布後玩家需另外表示接受。
+- 每次回應都必須包含 questProposals（陣列，最多一件）。只有玩家在本回合明確向在場人物詢問工作、委託或需要幫忙的事時，才從「可發布的支線委託」提議：templateId、giverId（玩家詢問的對象；若玩家未指定對象則選清單中的人）、targetUnitId（收集範本另填 itemId，討伐範本 itemId 為 null）、quantity（在範圍內）。閒聊、交易、詢問劇本任務或人物自己想找人幫忙都不算，questProposals 必須為空陣列；不可讓人物主動提出委託。報酬、標題、目標與經驗值由遊戲依範本與委託人持有物決定（約為 rewardValuePerQuantity × quantity 的價值），storyText 不可說出具體報酬數字，也不可宣稱玩家已接下委託；發布後玩家需另外表示接受。
 - 只有玩家行動或明確世界事件確實改變了當前地區單位對玩家的關係時，才在 stateChanges.unitDispositionChanges 回報單位 ID 與 friendly/neutral/hostile；純對話、陣營傾向或臆測不能改變關係。單位關係變更須與 storyText 敘事一致。
-- 每次回應都必須包含 encounterRequest；若玩家尚未實際看見或接觸敵人，設為 null。只有探索、搜索或情境中確實遇見敵人時，才指定本地區可遭遇清單中的 monsterId，並在敘事中描述遭遇。不可只因怪物存在於地圖資料，就宣稱玩家已遭遇；不可遭遇未列出的敵人。
+- 每次回應都必須包含 encounterRequest；若玩家尚未實際看見或接觸敵人，設為 null。只有探索、搜索或情境中確實遇見敵人時，才指定本地區可遭遇清單中的 unitId，並在敘事中描述遭遇。不可只因單位存在於地圖資料，就宣稱玩家已遭遇；不可遭遇未列出的敵人。
 - 玩家在對話中明確要求攻擊目前地區的敵人時，不可假裝攻擊已命中、敵人已受傷或已被擊敗；戰鬥與獎勵由遊戲端確定性規則處理，若無法由遊戲端執行，只能說明尚未發起戰鬥。
 - 不可在敘事中宣稱玩家已使用消耗品、恢復 HP/MP 或已取得金幣/經驗/掉落物，除非對應狀態變更已由遊戲端結算。
 注意事項：
@@ -143,7 +146,7 @@ function buildRules(): string {
 2. 只有結果不確定且失敗會有實質影響時才要求檢定；一般對話、觀察或無風險行動不擲骰。
 3. 檢定使用 checkRequest {"stat":"atk|def|spd|str|dex|con|int|wis|cha","dc":5至25,"reason":"理由"}。不可在 storyText 中預先宣告檢定成功或失敗。
 4. 有檢定時必須提供 checkOutcomes.successText 與 checkOutcomes.failureText。stateChanges 只會在檢定成功時套用；需要描述失敗時的代價可用 failureStateChanges。
-5. 只有成功擊敗怪物後才回報 defeatedMonsters；完成任務時必須確認結構化需求均已滿足。
+5. 只有成功擊敗敵人後才回報 defeatedUnits；完成任務時必須確認結構化需求均已滿足。
 6. 你必須【嚴格】以格式正確的 JSON 格式回答，formatVersion 固定為 ${AI_RESPONSE_FORMAT_VERSION}：
 
 \`\`\`json
@@ -163,10 +166,10 @@ function buildRules(): string {
     "goldChange": 0,
     "addItems": [{"itemId": "<物品 ID>", "quantity": 1}],
     "removeItems": [],
-    "defeatedMonsters": [],
+    "defeatedUnits": [],
     "questUpdates": [{"questId": "<任務 ID>", "status": "completed"}],
     "questAcceptances": [],
-    "npcItemTransfers": [],
+    "unitItemTransfers": [],
     "unitDispositionChanges": []
   },
   "failureStateChanges": null,
@@ -195,7 +198,8 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
   }) ?? [];
   const previousMap = playerState.previousMapId ? getMapById(playerState.previousMapId) : undefined;
   const currentUnits = getWorldUnitsAtMap(playerState.currentMapId, playerState);
-  const presentNpcs = currentUnits.flatMap((unit) => unit.kind === 'npc' ? [{
+  // 地區居民：進入地區即在場、可交談與交易的單位。
+  const presentResidents = currentUnits.flatMap((unit) => !unit.requiresEncounter ? [{
     id: unit.id,
     name: unit.name,
     title: unit.title,
@@ -206,8 +210,8 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
     disposition: getWorldUnitDisposition(playerState, unit.id),
     isDead: playerState.unitInstances[unit.id]?.isDead ?? playerState.unitInstances[unit.id]?.currentHp === 0,
     currentHp: playerState.unitInstances[unit.id]?.currentHp ?? unit.stats.hp,
-    holdings: playerState.unitInstances[unit.id] ?? { gold: unit.source.startingGold ?? 0, inventory: unit.source.startingInventory ?? [] },
-    description: unit.source.description
+    holdings: playerState.unitInstances[unit.id] ?? { gold: unit.startingGold ?? 0, inventory: unit.startingInventory ?? [] },
+    description: unit.description
   }] : []);
   const visibleQuests = listVisibleQuests(playerState);
   const availableQuests = visibleQuests.filter((quest) => canAcceptQuest(playerState, quest))
@@ -216,9 +220,9 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
   const turnInQuests = visibleQuests.filter((quest) => canTurnInQuest(playerState, quest))
     .map((quest) => ({ id: quest.id, title: quest.title, giver: getQuestGiverName(playerState, quest) }));
   const factionContext = getFactionContextForAI(playerState);
-  const encounterCandidates = currentUnits.flatMap((unit) => unit.kind === 'monster' &&
-    (!unit.source.requiredQuestId || playerState.activeQuests.some((quest) =>
-      quest.questId === unit.source.requiredQuestId && quest.status === 'in_progress'
+  const encounterCandidates = currentUnits.flatMap((unit) => unit.requiresEncounter &&
+    (!unit.requiredQuestId || playerState.activeQuests.some((quest) =>
+      quest.questId === unit.requiredQuestId && quest.status === 'in_progress'
     )) ? [{ id: unit.id, name: unit.name, build: describeUnitBuild(unit), disposition: getWorldUnitDisposition(playerState, unit.id) }] : []);
   const availableServices = getAvailableServices(playerState);
   const encounteredUnit = playerState.encounteredUnitId ? getWorldUnitById(playerState.encounteredUnitId, playerState) : undefined;
@@ -238,7 +242,7 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
   const sections: Section[] = [
     { id: 'player', dropped: 0, droppedEntries: 0, text: lines(
       `- 姓名: ${playerState.name} (Lv.${playerState.level})`,
-      `- 玩家單位 ID: ${playerUnit.id} | 有效戰鬥數值: ${JSON.stringify(playerUnit.stats)}（玩家不是 NPC/魔物，不可出現在 unitDispositionChanges、encounterRequest 或戰鬥目標）`,
+      `- 玩家單位 ID: ${playerUnit.id} | 有效戰鬥數值: ${JSON.stringify(playerUnit.stats)}（玩家不是一般單位，不可出現在 unitDispositionChanges、encounterRequest 或戰鬥目標）`,
       `- 種族/職業/等級: ${describeUnitBuild(playerState)} | 陣營: ${playerState.alignment}`,
       `- 能力值：${JSON.stringify(playerState.abilities)}（檢定須選最相關欄位）`,
       `- HP: ${playerState.hp} | MP: ${playerState.mp} | 金幣: ${playerState.gold}`,
@@ -246,7 +250,7 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
       `- 遊戲時間: ${formatGameTime(playerState.gameTimeMinutes)}（本回合行動前；時間由遊戲依行動類型推進，敘事中的時刻與晝夜須與此一致，不可自行跳過時間）`,
       `- 背包物品 ID 列表: ${JSON.stringify(playerState.inventory)}`,
       `- 裝備物品 ID: ${JSON.stringify(playerState.equipped)}`,
-      `- 已擊敗怪物數量: ${JSON.stringify(playerState.defeatedMonsters)}`
+      `- 已擊敗單位數量: ${JSON.stringify(playerState.defeatedUnits)}`
     ) },
     { id: 'legacy', dropped: 0, droppedEntries: 0, list: {
       shrink: () => shrinkLegacy(legacy),
@@ -258,11 +262,11 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
       `- 可前往的相鄰地區（只可選這些 ID）: ${JSON.stringify(availableDestinations)}`,
       `- 上一個地區: ${previousMap ? `${previousMap.name} (${previousMap.id})，分類 ${JSON.stringify(previousMap.locationTags ?? [])}` : '無'}`
     ) },
-    { id: 'npcs', dropped: 0, droppedEntries: 0, text: `- 當前地區在場 NPC 及數值: ${JSON.stringify(presentNpcs)}` },
+    { id: 'residents', dropped: 0, droppedEntries: 0, text: `- 當前地區在場人物及數值: ${JSON.stringify(presentResidents)}` },
     { id: 'factions', dropped: 0, droppedEntries: 0, text: lines(
-      `- 各勢力對玩家的聲望（遊戲依勢力得知的事件結算，AI 不可自行改變；可依此調整 NPC 語氣、價格談判與傳聞內容）: ${JSON.stringify(factionContext.reputation)}`,
+      `- 各勢力對玩家的聲望（遊戲依勢力得知的事件結算，AI 不可自行改變；可依此調整人物語氣、價格談判與傳聞內容）: ${JSON.stringify(factionContext.reputation)}`,
       `- 勢力間關係（未列出者為中立）: ${JSON.stringify(factionContext.relations)}`,
-      `- 本地區人物與魔物所屬勢力的公開簡介: ${JSON.stringify(factionContext.presentFactions)}`
+      `- 本地區單位所屬勢力的公開簡介: ${JSON.stringify(factionContext.presentFactions)}`
     ) },
     { id: 'quests', dropped: 0, droppedEntries: 0, text: lines(
       `- 當前可接取任務（僅可接取這些 ID）: ${JSON.stringify(availableQuests)}`,
@@ -280,7 +284,7 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
     { id: 'items', dropped: 0, droppedEntries: 0, text: `- 世界靜態物品清單（只可使用這些 ID/名稱）: ${JSON.stringify(itemsDatabase.map((item) => ({ id: item.id, name: item.name, type: item.type })))}` },
     { id: 'flags', dropped: 0, droppedEntries: 0, text: `- 劇情旗標 (Flags，只能經由世界事件成立，AI 不可直接設定): ${JSON.stringify(playerState.storyFlags || {})}` },
     { id: 'worldEvents', dropped: 0, droppedEntries: 0, list: {
-      label: '世界事件紀錄（遊戲規則寫入的既成事實，依時間排序；summary 是公開結果，presentKnowledge 是在場 NPC 各自的認知層級與能說的內容）',
+      label: '世界事件紀錄（遊戲規則寫入的既成事實，依時間排序；summary 是公開結果，presentKnowledge 是在場人物各自的認知層級與能說的內容）',
       entries: worldContext.events
     } },
     { id: 'chronicle', dropped: 0, droppedEntries: 0, list: { label: '世界編年史（較舊事件的摘要，屬於傳說：人們只模糊記得，細節與兇手不可考）', entries: worldContext.chronicle } },
@@ -323,8 +327,8 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
   };
 
   const availableDestinationIds = availableDestinations.map((destination) => destination.id);
-  const presentNpcIds = presentNpcs.filter((npc) => !npc.isDead && npc.disposition !== 'hostile').map((npc) => npc.id);
-  const dispositionUnitIds = currentUnits.filter((unit) => unit.kind !== 'npc' ||
+  const transferUnitIds = presentResidents.filter((resident) => !resident.isDead && resident.disposition !== 'hostile').map((resident) => resident.id);
+  const dispositionUnitIds = currentUnits.filter((unit) => unit.population ||
     (!playerState.unitInstances[unit.id]?.isDead && playerState.unitInstances[unit.id]?.currentHp !== 0)).map((unit) => unit.id);
   const knownItemIds = itemsDatabase.map((item) => item.id);
   const postingGivers = questPostingOptions.flatMap((option) => option.givers);
@@ -339,9 +343,9 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
       encounterRequest: {
         type: ['object', 'null'],
         properties: {
-          monsterId: { type: 'string', enum: encounterCandidates.length ? encounterCandidates.map((monster) => monster.id) : ['__NO_AVAILABLE_MONSTER__'] }
+          unitId: { type: 'string', enum: encounterCandidates.length ? encounterCandidates.map((unit) => unit.id) : ['__NO_ENCOUNTER_UNIT__'] }
         },
-        required: ['monsterId'],
+        required: ['unitId'],
         additionalProperties: false
       },
       // 沒有可用服務時只允許 null，避免模型被迫選擇佔位 ID。
@@ -374,16 +378,16 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
             type: 'array',
             items: { type: 'string', enum: availableQuests.length ? availableQuests.map((quest) => quest.id) : ['__NO_AVAILABLE_QUEST__'] }
           },
-          npcItemTransfers: {
+          unitItemTransfers: {
             type: 'array',
             items: {
               type: 'object',
               properties: {
-                npcId: { type: 'string', enum: presentNpcIds.length ? presentNpcIds : ['__NO_PRESENT_NPC__'] },
+                unitId: { type: 'string', enum: transferUnitIds.length ? transferUnitIds : ['__NO_PRESENT_RESIDENT__'] },
                 itemId: { type: 'string', enum: knownItemIds },
                 quantity: { type: 'integer', minimum: 1, maximum: 99 }
               },
-              required: ['npcId', 'itemId', 'quantity'],
+              required: ['unitId', 'itemId', 'quantity'],
               additionalProperties: false
             }
           },

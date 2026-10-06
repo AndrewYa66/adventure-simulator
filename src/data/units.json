@@ -1,0 +1,237 @@
+[
+  {
+    "id": "NPC-001",
+    "name": "埃爾德",
+    "title": "村長",
+    "speciesId": "human",
+    "classId": "elder",
+    "level": 1,
+    "defaultDisposition": "friendly",
+    "factionId": "FAC-001",
+    "startingGold": 200,
+    "startingInventory": [
+      {
+        "itemId": "ITEM-001",
+        "quantity": 5
+      },
+      {
+        "itemId": "ITEM-003",
+        "quantity": 2
+      }
+    ],
+    "alignment": "守序善良",
+    "description": "負責管理橡木村並發布村莊委託。"
+  },
+  {
+    "id": "NPC-002",
+    "name": "凱斯",
+    "title": "鐵匠",
+    "speciesId": "human",
+    "classId": "smith",
+    "level": 1,
+    "shopId": "SHOP-001",
+    "defaultDisposition": "friendly",
+    "factionId": "FAC-001",
+    "startingGold": 150,
+    "startingInventory": [
+      {
+        "itemId": "ITEM-101",
+        "quantity": 2
+      },
+      {
+        "itemId": "ITEM-201",
+        "quantity": 2
+      }
+    ],
+    "alignment": "絕對中立",
+    "description": "在村中鍛造與修理冒險者裝備。"
+  },
+  {
+    "id": "NPC-003",
+    "name": "艾莉絲",
+    "title": "農婦",
+    "speciesId": "human",
+    "classId": "farmer",
+    "level": 1,
+    "defaultDisposition": "friendly",
+    "factionId": "FAC-001",
+    "alignment": "中立善良",
+    "description": "在村外耕作，熟悉附近田地與道路。"
+  },
+  {
+    "id": "NPC-004",
+    "name": "米菈",
+    "title": "旅店老闆",
+    "speciesId": "human",
+    "classId": "innkeeper",
+    "level": 1,
+    "shopId": "SHOP-002",
+    "defaultDisposition": "friendly",
+    "factionId": "FAC-001",
+    "startingGold": 100,
+    "startingInventory": [
+      {
+        "itemId": "ITEM-001",
+        "quantity": 10
+      },
+      {
+        "itemId": "ITEM-003",
+        "quantity": 8
+      }
+    ],
+    "alignment": "中立善良",
+    "description": "經營微風旅館，常聽見旅人帶來的消息。"
+  },
+  {
+    "id": "NPC-005",
+    "name": "羅恩",
+    "title": "巡守隊長",
+    "speciesId": "human",
+    "classId": "guard",
+    "level": 2,
+    "defaultDisposition": "friendly",
+    "factionId": "FAC-001",
+    "alignment": "守序中立",
+    "description": "負責守護村莊與訓練巡守隊。"
+  },
+  {
+    "id": "NPC-006",
+    "name": "伊凡",
+    "title": "林地獵人",
+    "speciesId": "human",
+    "classId": "hunter",
+    "level": 1,
+    "defaultDisposition": "friendly",
+    "factionId": "FAC-001",
+    "alignment": "守序善良",
+    "description": "熟悉綠林古道，追蹤到哥布林巢穴附近的足跡。"
+  },
+  {
+    "id": "MON-001",
+    "name": "哥布林斥候",
+    "enName": "Goblin Scout",
+    "alignment": "混亂邪惡",
+    "defaultDisposition": "hostile",
+    "tier": "普通 (Common)",
+    "speciesId": "goblin",
+    "factionId": "FAC-008",
+    "classId": "scout",
+    "level": 1,
+    "specialAbilities": [
+      {
+        "name": "偷襲",
+        "effect": "第一回合速度提升 50%。"
+      }
+    ],
+    "requiresEncounter": true,
+    "population": true,
+    "loot": {
+      "gold": 5,
+      "dropItems": [
+        {
+          "itemId": "ITEM-002",
+          "chance": 0.8
+        }
+      ]
+    },
+    "tactics": "性格膽小，血量低於 30% 時可能逃跑。"
+  },
+  {
+    "id": "MON-002",
+    "name": "哥布林打手",
+    "enName": "Goblin Bruiser",
+    "alignment": "混亂邪惡",
+    "defaultDisposition": "hostile",
+    "tier": "普通 (Common)",
+    "speciesId": "goblin",
+    "factionId": "FAC-008",
+    "classId": "warrior",
+    "level": 2,
+    "statAdjustments": {
+      "spd": -4
+    },
+    "specialAbilities": [
+      {
+        "name": "野蠻重揮",
+        "effect": "用沉重武器猛擊眼前的敵人。"
+      }
+    ],
+    "requiresEncounter": true,
+    "population": true,
+    "loot": {
+      "gold": 9,
+      "dropItems": [
+        {
+          "itemId": "ITEM-002",
+          "chance": 0.65
+        },
+        {
+          "itemId": "ITEM-001",
+          "chance": 0.12
+        }
+      ]
+    },
+    "tactics": "仗著力量正面壓制對手，受傷後仍會繼續猛攻。"
+  },
+  {
+    "id": "MON-003",
+    "name": "格羅姆・裂牙",
+    "enName": "Grom Splitfang",
+    "alignment": "混亂邪惡",
+    "defaultDisposition": "hostile",
+    "tier": "頭目 (Boss)",
+    "speciesId": "goblin",
+    "factionId": "FAC-008",
+    "classId": "chieftain",
+    "level": 2,
+    "requiredQuestId": "QST-002",
+    "specialAbilities": [
+      {
+        "name": "裂地重擊",
+        "effect": "每第三回合砸擊地面。玩家以敏捷 DC 14 閃避；失敗時受到 1.5 倍攻擊傷害，若倖存則昏迷一回合。",
+        "combatAction": {
+          "triggerEveryRounds": 3,
+          "checkStat": "dex",
+          "dc": 14,
+          "damageMultiplier": 1.5,
+          "applyUnconsciousTurnsOnFailure": 1
+        }
+      }
+    ],
+    "requiresEncounter": true,
+    "isBoss": true,
+    "loot": {
+      "gold": 30,
+      "dropItems": [
+        {
+          "itemId": "ITEM-004",
+          "chance": 1
+        }
+      ]
+    },
+    "tactics": "巢穴酋長會觀察冒險者，再以裂地重擊打亂其節奏；不會因玩家生命低而取消攻擊。"
+  },
+  {
+    "id": "MON-004",
+    "name": "灰林狼",
+    "enName": "Ashwood Wolf",
+    "alignment": "絕對中立",
+    "defaultDisposition": "neutral",
+    "tier": "普通 (Common)",
+    "speciesId": "beast",
+    "level": 1,
+    "specialAbilities": [
+      {
+        "name": "迅捷撲咬",
+        "effect": "利用速度發動突襲。"
+      }
+    ],
+    "requiresEncounter": true,
+    "population": true,
+    "loot": {
+      "gold": 3,
+      "dropItems": []
+    },
+    "tactics": "受傷後可能拉開距離；若沒有被挑釁，通常不會追入村莊。"
+  }
+]

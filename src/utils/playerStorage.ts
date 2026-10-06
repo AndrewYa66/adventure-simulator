@@ -52,12 +52,12 @@ function normalizeGeneratedQuest(value: unknown): GeneratedQuest | null | undefi
       !isRecord(value.requirements) || !isRecord(value.rewards) || !Number.isSafeInteger(value.rewards.exp) || (value.rewards.exp as number) < 0 ||
       !Number.isSafeInteger(value.rewards.gold) || (value.rewards.gold as number) < 0 || !(value.rewards.items === undefined || Array.isArray(value.rewards.items))) return null;
   const requirements = value.requirements;
-  const defeats = requirements.defeatMonsters;
+  const defeats = requirements.defeatUnits;
   const collects = requirements.collectItems;
-  if ((defeats !== undefined && !(Array.isArray(defeats) && defeats.every((entry) => isRecord(entry) && typeof entry.monsterId === 'string' && Number.isInteger(entry.quantity) && (entry.quantity as number) > 0))) ||
+  if ((defeats !== undefined && !(Array.isArray(defeats) && defeats.every((entry) => isRecord(entry) && typeof entry.unitId === 'string' && Number.isInteger(entry.quantity) && (entry.quantity as number) > 0))) ||
       (collects !== undefined && !Array.isArray(collects))) return null;
-  if (!getQuestTemplateById(value.templateId) || getWorldUnitById(value.questGiverId)?.kind !== 'npc' || getWorldUnitById(value.targetUnitId)?.kind !== 'monster' ||
-      !getMapById(value.mapId) || (defeats ?? []).some((entry) => getWorldUnitById(String((entry as Record<string, unknown>).monsterId))?.kind !== 'monster') ||
+  if (!getQuestTemplateById(value.templateId) || !isResidentUnitId(value.questGiverId) || getWorldUnitById(value.targetUnitId)?.requiresEncounter !== true ||
+      !getMapById(value.mapId) || (defeats ?? []).some((entry) => getWorldUnitById(String((entry as Record<string, unknown>).unitId))?.requiresEncounter !== true) ||
       (collects !== undefined && !isItemStackList(collects)) || (value.rewards.items !== undefined && !isItemStackList(value.rewards.items))) return undefined;
   return value as unknown as GeneratedQuest;
 }
@@ -105,7 +105,8 @@ function normalizeWorldState(value: unknown): WorldRuntimeState | null {
   };
 }
 
-const isMonsterUnitId = (unitId: string): boolean => getWorldUnitById(unitId)?.kind === 'monster';
+const isKnownUnitId = (unitId: string): boolean => !!getWorldUnitById(unitId);
+const isResidentUnitId = (unitId: string): boolean => { const unit = getWorldUnitById(unitId); return !!unit && !unit.requiresEncounter; };
 
 export function normalizePlayerState(value: unknown): PlayerState | null {
   if (!isRecord(value) || typeof value.name !== 'string' || !value.name.trim() ||
@@ -119,7 +120,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
       !Array.isArray(value.activeQuests) || value.unitId !== PLAYER_UNIT_ID || typeof value.speciesId !== 'string' ||
       typeof value.setupComplete !== 'boolean' || !isValidGameTime(value.gameTimeMinutes) || !isRecord(value.unitInstances) ||
       !isRecord(value.abilities) || !Array.isArray(value.statusEffects) || !Array.isArray(value.transactionHistory) ||
-      !isRecord(value.defeatedMonsters) || !isRecord(value.unitDispositionOverrides) || !isRecord(value.factionReputation) ||
+      !isRecord(value.defeatedUnits) || !isRecord(value.unitDispositionOverrides) || !isRecord(value.factionReputation) ||
       !Number.isSafeInteger(value.characterSeq) || (value.characterSeq as number) < 1) return null;
   const world = normalizeWorldState(value.world);
   if (!world) return null;
@@ -148,16 +149,16 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     if (!isRecord(entry) || typeof entry.questId !== 'string' || !findQuest({ world }, entry.questId) ||
         !['in_progress', 'completed', 'failed'].includes(String(entry.status))) return [];
     const defeated: Record<string, number> = {};
-    const savedDefeats = isRecord(entry.progress) && isRecord(entry.progress.defeatedMonsters) ? entry.progress.defeatedMonsters : {};
-    for (const [monsterId, count] of Object.entries(savedDefeats)) {
-      if (isMonsterUnitId(monsterId) && Number.isInteger(count) && (count as number) >= 0) defeated[monsterId] = count as number;
+    const savedDefeats = isRecord(entry.progress) && isRecord(entry.progress.defeatedUnits) ? entry.progress.defeatedUnits : {};
+    for (const [unitId, count] of Object.entries(savedDefeats)) {
+      if (isKnownUnitId(unitId) && Number.isInteger(count) && (count as number) >= 0) defeated[unitId] = count as number;
     }
-    const giverUnitId = typeof entry.giverUnitId === 'string' && getWorldUnitById(entry.giverUnitId)?.kind === 'npc' ? entry.giverUnitId : undefined;
-    return [{ questId: entry.questId, status: entry.status as 'in_progress' | 'completed' | 'failed', progress: { defeatedMonsters: defeated }, ...(giverUnitId ? { giverUnitId } : {}) }];
+    const giverUnitId = typeof entry.giverUnitId === 'string' && isResidentUnitId(entry.giverUnitId) ? entry.giverUnitId : undefined;
+    return [{ questId: entry.questId, status: entry.status as 'in_progress' | 'completed' | 'failed', progress: { defeatedUnits: defeated }, ...(giverUnitId ? { giverUnitId } : {}) }];
   });
-  const defeatedMonsters: Record<string, number> = {};
-  for (const [monsterId, count] of Object.entries(value.defeatedMonsters)) {
-    if (isMonsterUnitId(monsterId) && Number.isInteger(count) && (count as number) >= 0) defeatedMonsters[monsterId] = count as number;
+  const defeatedUnits: Record<string, number> = {};
+  for (const [unitId, count] of Object.entries(value.defeatedUnits)) {
+    if (isKnownUnitId(unitId) && Number.isInteger(count) && (count as number) >= 0) defeatedUnits[unitId] = count as number;
   }
   const unitDispositionOverrides: PlayerState['unitDispositionOverrides'] = {};
   if (isRecord(value.unitDispositionOverrides)) {
@@ -212,12 +213,11 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     for (const enemy of savedEnemies) {
       const unitId = isRecord(enemy) && typeof enemy.unitId === 'string' ? enemy.unitId : undefined;
       const unit = unitId ? getWorldUnitById(unitId, { unitInstances, world }) : undefined;
-      const isPresent = unit?.kind === 'npc'
-        ? getMapById(value.currentMapId)?.npcsPresent.includes(unitId!)
-        : !!unit && getMapById(value.currentMapId)?.monstersPresent.includes(unitId!);
-      const savedNpcState = unit?.kind === 'npc' && isRecord(savedInstances[unitId!]) ? savedInstances[unitId!] as Record<string, unknown> : undefined;
+      const isPresent = !!unit && getMapById(value.currentMapId)?.unitsPresent.includes(unitId!);
+      // 唯一個體的實例已死亡時不可仍在戰鬥中；族群樣板的個體以戰鬥狀態追蹤 HP。
+      const savedUnitState = !!unit && !unit.population && isRecord(savedInstances[unitId!]) ? savedInstances[unitId!] as Record<string, unknown> : undefined;
       if (!isRecord(enemy) || !unitId || !unit || !isPresent || !Number.isInteger(enemy.currentHp) || (enemy.currentHp as number) <= 0 ||
-          savedNpcState?.isDead === true || savedNpcState?.currentHp === 0) return null;
+          savedUnitState?.isDead === true || savedUnitState?.currentHp === 0) return null;
       enemies.push({ unitId, currentHp: Math.min(enemy.currentHp as number, unit.stats.hp) });
     }
     if (!enemies.length) return null;
@@ -231,13 +231,11 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     : undefined;
   const savedEncounteredUnitId = typeof value.encounteredUnitId === 'string' ? value.encounteredUnitId : undefined;
   const encounteredUnit = typeof savedEncounteredUnitId === 'string' ? getWorldUnitById(savedEncounteredUnitId) : undefined;
-  const encounteredUnitIsPresent = encounteredUnit?.kind === 'npc'
-    ? getMapById(value.currentMapId)?.npcsPresent.includes(savedEncounteredUnitId!)
-    : !!encounteredUnit && getMapById(value.currentMapId)?.monstersPresent.includes(savedEncounteredUnitId!);
-  const savedEncounteredNpcState = encounteredUnit?.kind === 'npc' && isRecord(savedInstances[savedEncounteredUnitId!])
+  const encounteredUnitIsPresent = !!encounteredUnit && getMapById(value.currentMapId)?.unitsPresent.includes(savedEncounteredUnitId!);
+  const savedEncounteredState = !!encounteredUnit && !encounteredUnit.population && isRecord(savedInstances[savedEncounteredUnitId!])
     ? savedInstances[savedEncounteredUnitId!] as Record<string, unknown> : undefined;
   const encounteredUnitId = typeof savedEncounteredUnitId === 'string' && encounteredUnit && encounteredUnitIsPresent &&
-    savedEncounteredNpcState?.isDead !== true && savedEncounteredNpcState?.currentHp !== 0
+    savedEncounteredState?.isDead !== true && savedEncounteredState?.currentHp !== 0
     ? savedEncounteredUnitId
     : undefined;
   // 聲望：缺少的勢力（靜態資料新增）補初始值，數值夾在範圍內，已移除的勢力略過。
@@ -255,7 +253,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
   const isDead = value.isDead === true || hp === 0;
   const transactionHistory = Array.isArray(value.transactionHistory) ? value.transactionHistory.flatMap((record) =>
     isRecord(record) && typeof record.id === 'string' &&
-    ['purchase', 'sale', 'service', 'quest_reward', 'npc_transfer', 'game_change'].includes(String(record.type)) &&
+    ['purchase', 'sale', 'service', 'quest_reward', 'unit_transfer', 'game_change'].includes(String(record.type)) &&
     typeof record.description === 'string' && Number.isFinite(record.goldChange) && Number.isFinite(record.timestamp)
       ? [{
         id: record.id,
@@ -292,7 +290,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     inventory,
     equipped,
     storyFlags: value.storyFlags as Record<string, boolean>,
-    defeatedMonsters,
+    defeatedUnits,
     unitDispositionOverrides,
     factionReputation,
     activeQuests,

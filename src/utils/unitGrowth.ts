@@ -18,7 +18,7 @@ const ABILITY_MAX = 30;
 
 /**
  * 有效數值 = round(等級基準 × 種族倍率 × 職階倍率) + 個體相對修正。
- * 玩家、NPC、魔物一律使用此公式；裝備加值由呼叫端另外疊加。
+ * 玩家與所有單位一律使用此公式；裝備加值由呼叫端另外疊加。
  */
 export function computeUnitStats(
   benchmark: LevelBenchmarkStatic,

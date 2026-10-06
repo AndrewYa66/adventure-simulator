@@ -9,7 +9,8 @@ import {
   getFactionById,
   getFactionRelation,
   getMapById,
-  getShopForNpc,
+  getResidentUnitIds,
+  getShopForUnit,
   getSpeciesById,
   getUnitDisplayName,
   getUnitFactionId,
@@ -64,10 +65,10 @@ const hasUnitDied = (instance: UnitInstance | undefined) => isUnitDead(instance)
 export const getCharacterDisplayName = (player: Pick<PlayerState, 'name' | 'classId'>) =>
   `${getCharacterClassById(player.classId)?.name ?? ''}${player.name}`;
 
-/** 具名且唯一的單位（NPC 與頭目）死亡後不會重生。 */
+/** 具名且唯一的單位（非族群樣板）死亡後不會重生。 */
 function isUniqueUnit(unitId: string): boolean {
   const unit = getWorldUnitById(unitId);
-  return unit?.kind === 'npc' || (unit?.kind === 'monster' && unit.source.isBoss === true);
+  return !!unit && !unit.population;
 }
 
 /** 事件寫入的唯一入口：配發序號、依傳播範圍決定得知事件的勢力，並附加到紀錄。 */
@@ -80,7 +81,7 @@ function appendEvent(state: PlayerState, event: Omit<WorldEvent, 'id' | 'awareFa
 }
 
 /**
- * 事件發生時的目擊者：該地區在場且存活的 NPC，以及戰鬥中或已遭遇的魔物。
+ * 事件發生時的目擊者：該地區在場且存活的居民，以及戰鬥中或已遭遇的單位。
  * 位置與戰鬥取自事件前的狀態，存活與否取自事件後的狀態。
  */
 function getWitnesses(before: PlayerState, after: PlayerState, mapId: string, exclude: string[]): string[] {
@@ -89,9 +90,9 @@ function getWitnesses(before: PlayerState, after: PlayerState, mapId: string, ex
   const engaged = [
     ...(before.combat?.participants.filter((participant) => participant.side === 'enemy').map((participant) => participant.unitId) ?? []),
     ...(before.encounteredUnitId ? [before.encounteredUnitId] : [])
-  ].filter((unitId) => map.monstersPresent.includes(unitId) && !isUnitDead(after.unitInstances[unitId]));
-  const npcs = map.npcsPresent.filter((unitId) => isUnitAlive(after, unitId));
-  return [...new Set([...npcs, ...engaged])].filter((unitId) => !exclude.includes(unitId));
+  ].filter((unitId) => map.unitsPresent.includes(unitId) && !isUnitDead(after.unitInstances[unitId]));
+  const residents = getResidentUnitIds(map).filter((unitId) => isUnitAlive(after, unitId));
+  return [...new Set([...residents, ...engaged])].filter((unitId) => !exclude.includes(unitId));
 }
 
 function describeDeath(victimName: string, mapName: string, hint: DeathHint, killerName?: string) {
@@ -129,17 +130,17 @@ function recordDeath(before: PlayerState, state: PlayerState, victimUnitId: stri
   return { ...appended.state, unitInstances: { ...appended.state.unitInstances, [victimUnitId]: { ...instance, currentHp: 0, isDead: true, diedAtMinutes: state.gameTimeMinutes } } };
 }
 
-/** 接手委託的人選：與原委託人同勢力、同職階且存活的 NPC，優先選同一地區的人。 */
+/** 接手委託的人選：與原委託人同勢力、同職階且存活的地區居民，優先選同一地區的人。 */
 export function findQuestSuccessor(state: PlayerState, giverUnitId: string): string | undefined {
   const giver = getWorldUnitById(giverUnitId);
-  if (giver?.kind !== 'npc' || !giver.factionId || !giver.classId) return undefined;
-  const candidates = unitTemplatesDatabase().filter((template) => 'mapId' in template && template.id !== giverUnitId &&
+  if (!giver || giver.requiresEncounter || !giver.factionId || !giver.classId) return undefined;
+  const candidates = unitTemplatesDatabase().filter((template) => !template.requiresEncounter && template.id !== giverUnitId &&
     template.factionId === giver.factionId && template.classId === giver.classId && isUnitAlive(state, template.id));
-  return (candidates.find((template) => 'mapId' in template && template.mapId === giver.source.mapId) ?? candidates[0])?.id;
+  return (candidates.find((template) => getWorldUnitById(template.id)?.homeMapId === giver.homeMapId) ?? candidates[0])?.id;
 }
 
 /**
- * 委託人死亡時，由同勢力、同職階的存活 NPC 接手；沒有人選時委託失敗。玩家進行中的委託兩者都寫入事件。
+ * 委託人死亡時，由同勢力、同職階的存活居民接手；沒有人選時委託失敗。玩家進行中的委託兩者都寫入事件。
  * 尚未被接取的生成委託同樣改由接手者負責（不寫事件）；失敗的生成委託退回預扣報酬。
  */
 function resolveOrphanedQuests(state: PlayerState): PlayerState {
@@ -148,9 +149,9 @@ function resolveOrphanedQuests(state: PlayerState): PlayerState {
     if (quest.status !== 'open' || state.activeQuests.some((entry) => entry.questId === quest.id) || !isUnitDead(next.unitInstances[quest.questGiverId])) continue;
     const successor = findQuestSuccessor(next, quest.questGiverId);
     const successorUnit = successor ? getWorldUnitById(successor) : undefined;
-    next = successorUnit?.kind === 'npc'
+    next = successorUnit
       ? { ...next, world: { ...next.world, generatedQuests: next.world.generatedQuests.map((entry) => entry.id === quest.id
-        ? { ...entry, questGiverId: successorUnit.id, questGiver: getUnitDisplayName(successorUnit.id), mapId: successorUnit.source.mapId } : entry) } }
+        ? { ...entry, questGiverId: successorUnit.id, questGiver: getUnitDisplayName(successorUnit.id), mapId: successorUnit.homeMapId } : entry) } }
       : closeGeneratedQuest(next, quest.id, 'failed', quest.questGiverId);
   }
   for (const active of state.activeQuests) {
@@ -166,9 +167,9 @@ function resolveOrphanedQuests(state: PlayerState): PlayerState {
         : successorId ? { ...entry, giverUnitId: successorId } : { ...entry, status: 'failed' as const })
     };
     if (!successorId && isGeneratedQuest(quest)) next = closeGeneratedQuest(next, quest.id, 'failed', giverId);
-    next = successor?.kind === 'npc' && successor.factionId
+    next = successor?.factionId
       ? appendEvent(next, {
-        type: 'quest_transferred', gameTimeMinutes: next.gameTimeMinutes, mapId: successor.source.mapId,
+        type: 'quest_transferred', gameTimeMinutes: next.gameTimeMinutes, mapId: successor.homeMapId,
         summary: `因${getUnitDisplayName(giverId)}身亡，委託「${quest.title}」改由${getUnitDisplayName(successor.id)}接手。`,
         knownBy: 'faction', knownByFactions: [successor.factionId], witnessUnitIds: [], cause: '委託人死亡，同勢力同職階接手',
         changes: { questIds: [quest.id], unitIds: [giverId, successor.id] }
@@ -193,11 +194,11 @@ function settleRegion(state: PlayerState, mapId: string): PlayerState {
     const unitInstances = { ...next.unitInstances };
     // 第一次結算只建立紀錄；之後每跨一個遊戲日補貨一次，不因多次等待累積。
     if (region) {
-      for (const npcId of map.npcsPresent) {
-        const unit = getWorldUnitById(npcId);
-        const shop = unit?.kind === 'npc' ? getShopForNpc(unit.source) : undefined;
-        const instance = unitInstances[npcId];
-        if (!shop || !instance || isUnitDead(instance) || unit?.kind !== 'npc') continue;
+      for (const unitId of map.unitsPresent) {
+        const unit = getWorldUnitById(unitId);
+        const shop = unit ? getShopForUnit(unit.source) : undefined;
+        const instance = unitInstances[unitId];
+        if (!unit || !shop || !instance || isUnitDead(instance)) continue;
         const inventory = instance.inventory.map((entry) => ({ ...entry }));
         for (const listing of shop.items) {
           const target = unit.source.startingInventory?.find((entry) => entry.itemId === listing.itemId)?.quantity ?? 0;
@@ -205,13 +206,13 @@ function settleRegion(state: PlayerState, mapId: string): PlayerState {
           if (owned && owned.quantity < target) owned.quantity = target;
           else if (!owned && target > 0) inventory.push({ itemId: listing.itemId, quantity: target });
         }
-        unitInstances[npcId] = { ...instance, inventory };
+        unitInstances[unitId] = { ...instance, inventory };
       }
     }
     next = { ...next, unitInstances, world: { ...next.world, regions: { ...next.world.regions, [mapId]: { lastRestockDay: day } } } };
   }
 
-  for (const unitId of [...map.npcsPresent, ...map.monstersPresent]) {
+  for (const unitId of map.unitsPresent) {
     const instance = next.unitInstances[unitId];
     const template = unitTemplatesDatabase().find((entry) => entry.id === unitId);
     // 他方佔領：設有 occupation 的單位死亡滿指定天數後不重生，改由潛伏中的佔領單位出現。
@@ -224,7 +225,7 @@ function settleRegion(state: PlayerState, mapId: string): PlayerState {
       next = appendEvent(next, {
         type: 'unit_occupation', gameTimeMinutes: next.gameTimeMinutes, mapId,
         summary: `${template.name}消失後，${occupierFaction ? `${occupierFaction}的` : ''}${getUnitDisplayName(occupier.id)}佔據了${map.name}。`, knownBy: 'region',
-        witnessUnitIds: map.npcsPresent.filter((npcId) => isUnitAlive(next, npcId)), cause: '他方佔領', changes: { unitIds: [unitId, occupier.id] }
+        witnessUnitIds: getResidentUnitIds(map).filter((residentId) => isUnitAlive(next, residentId)), cause: '他方佔領', changes: { unitIds: [unitId, occupier.id] }
       }).state;
       continue;
     }
@@ -235,7 +236,7 @@ function settleRegion(state: PlayerState, mapId: string): PlayerState {
     next = appendEvent(next, {
       type: 'unit_respawn', gameTimeMinutes: next.gameTimeMinutes, mapId,
       summary: `${map.name}又出現了新的${template.name}。`, knownBy: 'region',
-      witnessUnitIds: map.npcsPresent.filter((npcId) => isUnitAlive(next, npcId)), cause: '重生規則', changes: { unitIds: [unitId] }
+      witnessUnitIds: getResidentUnitIds(map).filter((residentId) => isUnitAlive(next, residentId)), cause: '重生規則', changes: { unitIds: [unitId] }
     }).state;
   }
   return next;
@@ -253,14 +254,14 @@ export function canTriggerEvent(state: PlayerState, event: EventStatic): boolean
     matchesFactionConditions(state, requires);
 }
 
-/** 事件發生地：玩家所在的條件地區，其次是條件中 NPC 的所在地，最後為玩家所在地。 */
+/** 事件發生地：玩家所在的條件地區，其次是條件中居民的所在地，最後為玩家所在地。 */
 function resolveEventMapId(state: PlayerState, event: EventStatic): string {
   const mapIds = event.requires?.mapIds ?? [];
   if (mapIds.includes(state.currentMapId)) return state.currentMapId;
   if (mapIds.length) return mapIds[0];
   for (const unitId of [...(event.requires?.unitsDead ?? []), ...(event.requires?.unitsAlive ?? [])]) {
     const unit = getWorldUnitById(unitId);
-    if (unit?.kind === 'npc') return unit.source.mapId;
+    if (unit && !unit.requiresEncounter) return unit.homeMapId;
   }
   return state.currentMapId;
 }
@@ -269,6 +270,7 @@ function resolveEventMapId(state: PlayerState, event: EventStatic): string {
 export function applyScenarioEvent(state: PlayerState, event: EventStatic, cause: string): PlayerState {
   if (!canTriggerEvent(state, event)) return state;
   const mapId = resolveEventMapId(state, event);
+  const eventMap = getMapById(mapId);
   const storyFlags = { ...state.storyFlags };
   for (const flag of event.effects.setFlags ?? []) storyFlags[flag] = true;
   for (const flag of event.effects.clearFlags ?? []) delete storyFlags[flag];
@@ -288,7 +290,7 @@ export function applyScenarioEvent(state: PlayerState, event: EventStatic, cause
   return appendEvent(withEffects, {
     type: 'scenario_event', gameTimeMinutes: state.gameTimeMinutes, mapId, summary: event.summary, knownBy: event.knownBy,
     ...(event.knownByFactions?.length ? { knownByFactions: event.knownByFactions } : {}),
-    witnessUnitIds: (getMapById(mapId)?.npcsPresent ?? []).filter((unitId) => isUnitAlive(state, unitId)), cause, eventId: event.id,
+    witnessUnitIds: eventMap ? getResidentUnitIds(eventMap).filter((unitId) => isUnitAlive(state, unitId)) : [], cause, eventId: event.id,
     changes: {
       ...(event.effects.setFlags?.length ? { setFlags: event.effects.setFlags } : {}),
       ...(event.effects.clearFlags?.length ? { clearFlags: event.effects.clearFlags } : {}),
@@ -440,14 +442,17 @@ function applyActionReputation(previous: PlayerState, current: PlayerState, newD
 export const findLatestPlayerDeath = (state: PlayerState): WorldEvent | undefined =>
   [...state.world.events].reverse().find((event) => event.type === 'unit_death' && event.death?.victimUnitId === PLAYER_UNIT_ID);
 
-/** 在場且存活的 NPC（會說話、可被打聽的人）。 */
-const getPresentNpcIds = (state: PlayerState) => (getMapById(state.currentMapId)?.npcsPresent ?? []).filter((unitId) => isUnitAlive(state, unitId));
+/** 在場且存活的居民（會說話、可被打聽的人）。 */
+const getPresentResidentIds = (state: PlayerState) => {
+  const map = getMapById(state.currentMapId);
+  return map ? getResidentUnitIds(map).filter((unitId) => isUnitAlive(state, unitId)) : [];
+};
 
 /**
  * 某個單位對事件的認知層級（O39）；undefined 代表不知道。
  * - witnessed 親眼目擊：事件的目擊者，知道經過與兇手，不會淡化成傳說。
  * - rumor 傳聞：與目擊者同勢力但未在場，聽說了兇手或死因，不知道經過。
- * - public 公開消息：得知事件的勢力成員、全世界周知事件、或住在事件地區的無勢力 NPC，只知道結果。
+ * - public 公開消息：得知事件的勢力成員、全世界周知事件、或住在事件地區的無勢力居民，只知道結果。
  * - legend 傳說：傳聞或公開消息超過設定天數後，只剩模糊的往事。
  */
 export type EventKnowledgeLevel = 'witnessed' | 'rumor' | 'public' | 'legend';
@@ -465,7 +470,7 @@ export function getEventKnowledgeLevel(state: PlayerState, event: WorldEvent, un
   const unit = getWorldUnitById(unitId);
   const heard = hearsDetail(event, factionId);
   const knowsResult = heard || event.knownBy === 'world' || (!!factionId && event.awareFactionIds.includes(factionId)) ||
-    (!factionId && event.knownBy === 'region' && unit?.kind === 'npc' && unit.source.mapId === event.mapId);
+    (!factionId && event.knownBy === 'region' && !!unit && !unit.requiresEncounter && unit.homeMapId === event.mapId);
   if (!knowsResult) return undefined;
   if (state.gameTimeMinutes - event.gameTimeMinutes >= aiContextConfig.knowledge.legendAfterDays * MINUTES_PER_DAY) return 'legend';
   return heard ? 'rumor' : 'public';
@@ -480,18 +485,18 @@ function describeKnowledge(event: WorldEvent, level: EventKnowledgeLevel): strin
   return `${event.summary}${hearsay}，但不清楚經過。`;
 }
 
-/** 事件的 AI 描述：公開結果，加上在場 NPC 依認知層級分組能說的內容；沒有在場目擊者時不提供經過。 */
-function describeEventForAI(state: PlayerState, event: WorldEvent, presentNpcIds: string[]) {
+/** 事件的 AI 描述：公開結果，加上在場居民依認知層級分組能說的內容；沒有在場目擊者時不提供經過。 */
+function describeEventForAI(state: PlayerState, event: WorldEvent, presentResidentIds: string[]) {
   const groups = new Map<EventKnowledgeLevel, string[]>();
-  for (const unitId of presentNpcIds) {
+  for (const unitId of presentResidentIds) {
     const level = getEventKnowledgeLevel(state, event, unitId);
     if (level) groups.set(level, [...(groups.get(level) ?? []), getUnitDisplayName(unitId)]);
   }
   const presentKnowledge = KNOWLEDGE_ORDER.flatMap((level) => groups.has(level) ? [{
     level: KNOWLEDGE_LABELS[level],
-    npcs: groups.get(level)!,
+    who: groups.get(level)!,
     knows: describeKnowledge(event, level),
-    ...(level === 'rumor' ? { heardFrom: event.witnessUnitIds.filter((unitId) => getWorldUnitById(unitId)?.kind === 'npc').map(getUnitDisplayName) } : {})
+    ...(level === 'rumor' ? { heardFrom: event.witnessUnitIds.filter((unitId) => getWorldUnitById(unitId)?.requiresEncounter !== true).map(getUnitDisplayName) } : {})
   }] : []);
   return {
     id: event.id,
@@ -503,18 +508,18 @@ function describeEventForAI(state: PlayerState, event: WorldEvent, presentNpcIds
 }
 
 /**
- * 提供給 AI 的世界事件：所在地區、全世界周知、或與在場 NPC 相關（目擊、同勢力得知或死者原屬此地）的近期事件。
- * 每件事附上在場 NPC 的認知層級；excludeEventIds（已在歷代角色區段列出的事件）不重複列出。
+ * 提供給 AI 的世界事件：所在地區、全世界周知、或與在場居民相關（目擊、同勢力得知或死者原屬此地）的近期事件。
+ * 每件事附上在場居民的認知層級；excludeEventIds（已在歷代角色區段列出的事件）不重複列出。
  */
 export function getWorldContextForAI(state: PlayerState, excludeEventIds: readonly string[] = []) {
-  const presentNpcIds = getPresentNpcIds(state);
-  const presentFactions = getFactionsOfUnits(presentNpcIds);
+  const presentResidentIds = getPresentResidentIds(state);
+  const presentFactions = getFactionsOfUnits(presentResidentIds);
   const relevant = state.world.events.filter((event) => !excludeEventIds.includes(event.id) && (event.mapId === state.currentMapId || event.knownBy === 'world' ||
-    event.witnessUnitIds.some((unitId) => presentNpcIds.includes(unitId)) ||
+    event.witnessUnitIds.some((unitId) => presentResidentIds.includes(unitId)) ||
     (event.knownBy === 'faction' && event.awareFactionIds.some((factionId) => presentFactions.includes(factionId))) ||
     (event.death && getWorldUnitById(event.death.victimUnitId)?.mapIds.includes(state.currentMapId))));
   return {
-    events: relevant.slice(-aiContextConfig.worldEvents.maxEvents).map((event) => describeEventForAI(state, event, presentNpcIds)),
+    events: relevant.slice(-aiContextConfig.worldEvents.maxEvents).map((event) => describeEventForAI(state, event, presentResidentIds)),
     chronicle: state.world.chronicle.slice(-aiContextConfig.chronicle.maxLines),
     modifiers: state.world.modifiers.map((modifier) => ({
       scope: modifier.scope, stat: modifier.stat, change: modifier.op === 'add' ? `${modifier.value >= 0 ? '+' : ''}${modifier.value}` : `×${modifier.value}`,
@@ -523,7 +528,7 @@ export function getWorldContextForAI(state: PlayerState, excludeEventIds: readon
   };
 }
 
-/** 歷代角色的事蹟：該角色任內殺害 NPC 或頭目、聲望事件（含完成委託）、玩家行動促成的劇本事件；一般魔物擊殺不列入。 */
+/** 歷代角色的事蹟：該角色任內殺害具名人物或頭目、聲望事件（含完成委託）、玩家行動促成的劇本事件；一般魔物擊殺不列入。 */
 function isCharacterDeed(event: WorldEvent): boolean {
   if (event.type === 'unit_death') return event.death?.killerUnitId === PLAYER_UNIT_ID && event.death.victimUnitId !== PLAYER_UNIT_ID && isUniqueUnit(event.death.victimUnitId);
   // 殺害造成的聲望事件併入死亡事件的 consequence，不重複列出。
@@ -533,16 +538,16 @@ function isCharacterDeed(event: WorldEvent): boolean {
 
 /**
  * 提供給 AI 的歷代角色紀錄：每位角色附上其死亡事件與事蹟（最新 maxDeeds 件），
- * 每件事附上在場 NPC 的認知層級，讓 AI 能把前任冒險者與其造成的事件連起來，又不讓未目擊者說出經過。
+ * 每件事附上在場居民的認知層級，讓 AI 能把前任冒險者與其造成的事件連起來，又不讓未目擊者說出經過。
  * 已壓縮進編年史的舊事件不再列出。
  */
 export function getCharacterLegacyForAI(state: PlayerState, history: CharacterHistoryEntry[], maxCharacters: number, maxDeeds: number) {
-  const presentNpcIds = getPresentNpcIds(state);
+  const presentResidentIds = getPresentResidentIds(state);
   const describeEvent = (event: WorldEvent) => {
     const consequence = event.type === 'unit_death'
       ? state.world.events.find((entry) => entry.sourceEventId === event.id && entry.type === 'reputation_change')?.summary
       : undefined;
-    return { ...describeEventForAI(state, event, presentNpcIds), ...(consequence ? { consequence } : {}) };
+    return { ...describeEventForAI(state, event, presentResidentIds), ...(consequence ? { consequence } : {}) };
   };
   return history.slice(-maxCharacters).map((entry) => {
     const death = entry.deathEventId ? state.world.events.find((event) => event.id === entry.deathEventId) : undefined;

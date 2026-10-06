@@ -25,7 +25,7 @@ export interface ItemStatic {
 export interface AbilityScores { str: number; dex: number; con: number; int: number; wis: number; cha: number }
 export type AbilityKey = keyof AbilityScores;
 
-/** 有效戰鬥與資源數值；玩家、NPC、魔物共用同一公式計算（見 utils/unitGrowth.ts）。 */
+/** 有效戰鬥與資源數值；玩家與所有單位共用同一公式計算（見 utils/unitGrowth.ts）。 */
 export interface UnitStatBlock {
   hp: number;
   mp: number;
@@ -71,7 +71,7 @@ export interface SpeciesStatic {
   checkBonuses?: CheckBonuses;
   expRewardMultiplier: number;
   traits: string[];
-  /** 世界規則：此種族的非唯一個體死亡後經過幾天由新個體補上；未設定代表不重生。具名 NPC 與頭目不重生。 */
+  /** 世界規則：此種族的非唯一個體死亡後經過幾天由新個體補上；未設定代表不重生。具名的唯一個體不重生。 */
   respawnDays?: number;
 }
 
@@ -95,7 +95,7 @@ export interface CharacterClassStatic {
 export type CharacterAlignment = '守序善良' | '中立善良' | '混亂善良' | '守序中立' | '絕對中立' | '混亂中立' | '守序邪惡' | '中立邪惡' | '混亂邪惡';
 export type UnitDisposition = 'friendly' | 'neutral' | 'hostile';
 
-/** 單位組成：種族 × 職階 × 等級，加上個體相對修正。玩家、NPC、魔物共用。 */
+/** 單位組成：種族 × 職階 × 等級，加上個體相對修正。玩家與所有單位共用。 */
 export interface UnitBuild {
   speciesId: string;
   classId?: string;
@@ -104,11 +104,16 @@ export interface UnitBuild {
   statAdjustments?: Partial<UnitStatBlock>;
 }
 
-/** NPC 與魔物共用的靜態單位樣板（UnitTemplate）；世界中實際個體的成長保存於存檔。 */
-export interface UnitStaticBase extends UnitBuild {
+/**
+ * 單位靜態樣板（units.json）：玩家以外的所有單位共用同一結構，差異只由下列功能欄位表達，
+ * 不區分人物與魔物。世界中實際個體的成長保存於存檔。
+ */
+export interface UnitStatic extends UnitBuild {
   id: string;
   name: string;
+  /** 稱號或職稱，顯示時置於名稱前（例如「村長」）。 */
   title?: string;
+  enName?: string;
   alignment?: CharacterAlignment;
   defaultDisposition: UnitDisposition;
   /** 所屬勢力（factions.json）；未設定代表不屬於任何勢力（例如野獸）。 */
@@ -117,20 +122,41 @@ export interface UnitStaticBase extends UnitBuild {
   occupation?: { byUnitId: string; afterDays: number };
   /** 潛伏單位：開局不出現在世界中，只會經由「他方佔領」出現。 */
   dormantUntilOccupation?: boolean;
-}
-
-/** 怪物靜態資料 (來自 monsters.json) */
-export interface MonsterStatic extends UnitStaticBase {
-  enName: string;
-  tier: string;           // 例如: "普通 (Common)"
-  rewards: {
+  /**
+   * 族群樣板：代表一群可重複遭遇的個體，擊倒不寫死亡事件、依種族重生。
+   * 未設定即為具名的唯一個體（死亡永久，寫入死亡事件）。
+   */
+  population?: boolean;
+  /**
+   * 需要遭遇才會出現：進入地區時不在場，須探索遭遇後才能交戰；每次戰鬥以完整 HP 開始，
+   * 成長上限為出沒地區建議等級 +3，可打斷非安全區的等待，也可作為支線委託的討伐目標。
+   * 未設定即為地區居民：進入地區即在場，可交談、交易、發布委託，戰鬥 HP 會保留。
+   */
+  requiresEncounter?: boolean;
+  /** 頭目：擊倒時觸發勝利訊息。 */
+  isBoss?: boolean;
+  /** 只有此任務進行中時才能遭遇。 */
+  requiredQuestId?: string;
+  /** 強度分級的顯示文字，例如「普通 (Common)」。 */
+  tier?: string;
+  /** 給 AI 的人物介紹。 */
+  description?: string;
+  /** 給 AI 的戰鬥行為提示。 */
+  tactics?: string;
+  /** 經營的商店（shops.json）。 */
+  shopId?: string;
+  /** 初始持有物；擊倒時由擊倒者取得（世界實際庫存）。 */
+  startingGold?: number;
+  startingInventory?: { itemId: string; quantity: number }[];
+  /** 掉落表：擊倒時額外依機率產生的金幣與物品。 */
+  loot?: {
     gold: number;
     dropItems: {
       itemId: string;
       chance: number;     // 例如: 0.5 (50%)
     }[];
   };
-  specialAbilities: {
+  specialAbilities?: {
     name: string;
     effect: string;
     combatAction?: {
@@ -141,40 +167,20 @@ export interface MonsterStatic extends UnitStaticBase {
       applyUnconsciousTurnsOnFailure?: number;
     };
   }[];
-  requiredQuestId?: string;
-  isBoss?: boolean;
-  tacticsAndBehavior: string; // 供 AI DM 參考的行為提示
 }
 
-/** NPC 靜態資料：身份、職稱、所屬地區與種族/職階。 */
-export interface NpcStatic extends UnitStaticBase {
-  title: string;
-  mapId: string;
-  shopId?: string;
-  startingGold?: number;
-  startingInventory?: { itemId: string; quantity: number }[];
-  description: string;
+/** 共用查詢層回傳的正規化單位視圖；stats/expReward 依種族、職階、等級計算，source 保留完整樣板。 */
+export interface WorldUnitStatic extends UnitStatic {
+  stats: UnitStatBlock;
+  expReward: number;
+  /** 出現的地圖（地圖 unitsPresent 列出此單位者）。 */
+  mapIds: string[];
+  /** 居所：第一個列出此單位的地圖；交付委託、委託接手等以此為準。 */
+  homeMapId: string;
+  source: UnitStatic;
 }
 
-/** 共用查詢層回傳的正規化單位視圖；stats/expReward 依種族、職階、等級計算，source 保留原有種類專屬資料。 */
-export type WorldUnitStatic =
-  | (UnitStaticBase & {
-    kind: 'npc';
-    title: string;
-    stats: UnitStatBlock;
-    expReward: number;
-    mapIds: string[];
-    source: NpcStatic;
-  })
-  | (UnitStaticBase & {
-    kind: 'monster';
-    stats: UnitStatBlock;
-    expReward: number;
-    mapIds: string[];
-    source: MonsterStatic;
-  });
-
-/** 玩家在共用單位查詢中的視圖；數值與 NPC/魔物同一公式計算並加上裝備，source 保留完整玩家存檔。 */
+/** 玩家在共用單位查詢中的視圖；數值與其他單位同一公式計算並加上裝備，source 保留完整玩家存檔。 */
 export interface PlayerWorldUnit extends UnitBuild {
   kind: 'player';
   id: string;
@@ -187,20 +193,21 @@ export interface PlayerWorldUnit extends UnitBuild {
   source: PlayerState;
 }
 
-/** 可辨識玩家、NPC 與魔物的共用單位視圖。 */
+/** 可辨識玩家與其他單位的共用單位視圖。 */
 export type WorldUnitView = WorldUnitStatic | PlayerWorldUnit;
 
 export interface ShopStatic {
   id: string;
   name: string;
-  npcId: string;
+  /** 經營者單位 ID。 */
+  ownerUnitId: string;
   items: { itemId: string; buyPrice?: number }[];
   services?: { id: string; name: string; price: number; kind: 'restore_resources'; description: string }[];
 }
 
 /**
  * 單位實例（UnitInstance）：世界中實際存在、可成長的個體，保存於存檔；靜態樣板只提供初始值。
- * NPC 與魔物皆有實例；魔物樣板代表在該地區出沒的同一群個體，HP 以戰鬥狀態追蹤。
+ * 每個單位樣板都有實例；族群樣板代表在該地區出沒的同一群個體，戰鬥 HP 以戰鬥狀態追蹤。
  */
 export interface UnitInstance {
   level: number;
@@ -218,7 +225,7 @@ export interface UnitInstance {
 
 export interface TransactionRecord {
   id: string;
-  type: 'purchase' | 'sale' | 'service' | 'quest_reward' | 'npc_transfer' | 'game_change';
+  type: 'purchase' | 'sale' | 'service' | 'quest_reward' | 'unit_transfer' | 'game_change';
   description: string;
   goldChange: number;
   timestamp: number;
@@ -244,8 +251,8 @@ export interface ScenarioStatic {
   anachronisticItemTerms: string[];
   /** 劇本層級的規則開關。 */
   rules: {
-    /** 擊倒 NPC 是否依單位公式給予經驗值（後果另由勢力聲望承擔）。 */
-    npcKillGrantsExp: boolean;
+    /** 擊倒地區居民（非 requiresEncounter 單位）是否依單位公式給予經驗值（後果另由勢力聲望承擔）；需遭遇的單位一律給予。 */
+    residentKillGrantsExp: boolean;
   };
   /** 新角色接續：劇本允許新角色與前一位角色有關聯時，可部分繼承勢力聲望的變化量。 */
   succession?: {
@@ -360,9 +367,9 @@ export interface MapStatic {
   isSafeZone: boolean;
   description: string;
   connectedMapIds: string[];
-  monstersPresent: string[]; // 怪物 ID 陣列
   pointsOfInterest: string[];
-  npcsPresent: string[];
+  /** 出現在此地區的單位 ID（居民與需遭遇的單位）。 */
+  unitsPresent: string[];
   requiredQuestId?: string;
 }
 
@@ -376,7 +383,7 @@ export interface QuestStatic {
   prerequisiteQuestIds?: string[];
   objective: string;
   requirements: {
-    defeatMonsters?: { monsterId: string; quantity: number }[];
+    defeatUnits?: { unitId: string; quantity: number }[];
     collectItems?: { itemId: string; quantity: number }[];
   };
   rewards: {
@@ -387,7 +394,7 @@ export interface QuestStatic {
   rewardLimits?: { exp: { min: number; max: number }; gold: { min: number; max: number }; maxItemQuantity: number };
 }
 
-/** 任務範本類型：討伐（擊敗附近魔物）、收集（收集附近魔物的掉落物）。 */
+/** 任務範本類型：討伐（擊敗附近需遭遇的單位）、收集（收集其掉落物）。 */
 export type QuestTemplateType = 'defeat' | 'collect';
 
 /** 任務範本 (來自 quest_templates.json)：AI 只能依範本提議支線委託，數值由公式與上限決定。 */
@@ -395,12 +402,12 @@ export interface QuestTemplateStatic {
   id: string;
   type: QuestTemplateType;
   name: string;
-  /** 可用 {target}（目標魔物或物品名稱）、{quantity}。 */
+  /** 可用 {target}（目標單位或物品名稱）、{quantity}。 */
   titlePattern: string;
   objectivePattern: string;
   /** AI 提議此範本的使用時機。 */
   aiHint: string;
-  /** 發布者限制；未設定代表任何有所屬勢力的 NPC 都可發布。 */
+  /** 發布者限制；未設定代表任何有所屬勢力的地區居民都可發布。 */
   giver?: { factionIds?: string[]; classIds?: string[] };
   quantity: { min: number; max: number };
   /** 委託期限（遊戲日）；逾期後失效並退還報酬。 */
@@ -509,7 +516,7 @@ export interface WorldEvent {
   summary: string;
   detail?: string;
   knownBy: EventKnownBy;
-  /** 事件發生時在場且存活的 NPC/魔物（目擊者）。 */
+  /** 事件發生時在場且存活的單位（目擊者）。 */
   witnessUnitIds: string[];
   /** 得知此事件（至少公開結果）的勢力，依傳播範圍於寫入時決定。 */
   awareFactionIds: string[];
@@ -578,7 +585,7 @@ export interface PlayerState {
   hp: number;
   mp: number;
   gold: number;
-  /** NPC 與魔物的實例狀態。O37/O29 會移至世界存檔。 */
+  /** 單位的實例狀態（世界層）。 */
   unitInstances: Record<string, UnitInstance>;
   transactionHistory: TransactionRecord[];
   currentMapId: string;
@@ -600,7 +607,7 @@ export interface PlayerState {
 
   // 劇情進度與旗標，防止 AI 遺忘劇情進度
   storyFlags: Record<string, boolean>; // 例如: { "FLAG_TUTORIAL_DONE": true }
-  defeatedMonsters: Record<string, number>;
+  defeatedUnits: Record<string, number>;
   encounteredUnitId?: string;
   unitDispositionOverrides: Record<string, UnitDisposition>;
   /** 各勢力對目前角色的聲望（角色層；新角色依劇本初始值重置）。 */
@@ -610,11 +617,11 @@ export interface PlayerState {
   activeQuests: {
     questId: string;
     status: 'in_progress' | 'completed' | 'failed';
-    progress?: { defeatedMonsters: Record<string, number> };
+    progress?: { defeatedUnits: Record<string, number> };
     /** 原委託人死亡後，由同勢力、同職階單位接手時的新委託人 ID。 */
     giverUnitId?: string;
   }[];
-  /** 進行中的戰鬥；怪物仍以專屬資料決定掉落與特殊招式。 */
+  /** 進行中的戰鬥；掉落與特殊招式取自單位樣板的功能欄位。 */
   combat?: CombatState;
   /** 世界狀態：事件紀錄、世界修正與地區結算（世界層）。 */
   world: WorldRuntimeState;
@@ -656,7 +663,7 @@ export interface ActionCheckResult {
 export const WORLD_STATE_KEYS = ['gameTimeMinutes', 'unitInstances', 'storyFlags', 'world'] as const;
 export type WorldStateKey = typeof WORLD_STATE_KEYS[number];
 
-/** 已結束的歷代角色紀錄；供 AI 傳聞與 NPC 對話素材，死亡遺物（O26）之後由此擴充。 */
+/** 已結束的歷代角色紀錄；供 AI 傳聞與人物對話素材，死亡遺物（O26）之後由此擴充。 */
 export interface CharacterHistoryEntry {
   /** 角色代數，對應事件的 characterSeq。 */
   characterSeq: number;
@@ -727,7 +734,7 @@ export interface AIResponsePayload {
   formatVersion?: number;
   storyText: string;
   suggestedActions: string[];
-  encounterRequest?: { monsterId: string } | null;
+  encounterRequest?: { unitId: string } | null;
   travelRequest?: { destinationMapId: string } | null;
   /** 使用目前地區商店的服務；只可選遊戲提供的候選，由前端以與 HUD 相同的規則結算。 */
   serviceRequest?: { shopId: string; serviceId: string } | null;
@@ -749,8 +756,8 @@ export interface AIResponsePayload {
     removeItems?: { itemId: string; quantity: number }[];
     questUpdates?: { questId: string; status: 'completed' }[];
     questAcceptances?: string[];
-    npcItemTransfers?: { npcId: string; itemId: string; quantity: number }[];
-    defeatedMonsters?: { monsterId: string; quantity: number }[];
+    unitItemTransfers?: { unitId: string; itemId: string; quantity: number }[];
+    defeatedUnits?: { unitId: string; quantity: number }[];
     unitDispositionChanges?: { unitId: string; disposition: UnitDisposition }[];
   };
   failureStateChanges?: AIResponsePayload['stateChanges'];

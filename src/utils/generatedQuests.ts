@@ -51,7 +51,7 @@ const openQuests = (state: QuestState) => state.world.generatedQuests.filter((qu
 /** 發布者不能發布的原因；可發布時回傳 undefined。 */
 function giverBlockReason(state: QuestState, template: QuestTemplateStatic, giver: WorldUnitStatic | undefined): string | undefined {
   const map = getMapById(state.currentMapId);
-  if (giver?.kind !== 'npc' || !map?.npcsPresent.includes(giver.id)) return '發布者不在目前地區';
+  if (!giver || giver.requiresEncounter || !map?.unitsPresent.includes(giver.id)) return '發布者不在目前地區';
   if (!isAlive(state, giver.id)) return '發布者已死亡';
   if (getWorldUnitDisposition(state, giver.id) === 'hostile') return '發布者對你敵對';
   if (!giver.factionId) return '發布者不屬於任何勢力';
@@ -76,25 +76,25 @@ interface TargetCandidate {
   expReward: number;
 }
 
-/** 目標候選：發布者所在地區與相鄰地區的魔物（不含頭目、需前置任務者、同勢力或友好勢力）；收集範本取其掉落物，以等級最低的掉落者計算。 */
+/** 目標候選：發布者所在地區與相鄰地區需遭遇的單位（不含頭目、需前置任務者、同勢力或友好勢力）；收集範本取其掉落物，以等級最低的掉落者計算。 */
 function getTargetCandidates(state: QuestState, template: QuestTemplateStatic, giver: WorldUnitStatic): TargetCandidate[] {
   const giverMap = getMapById(giver.mapIds[0]);
   if (!giverMap) return [];
   const mapIds = [giverMap.id, ...giverMap.connectedMapIds];
-  const monsters = [...new Set(mapIds.flatMap((mapId) => getMapById(mapId)?.monstersPresent ?? []))].flatMap((unitId) => {
+  // 討伐目標：附近需遭遇的單位，不含頭目與需要前置任務者。
+  const targets = [...new Set(mapIds.flatMap((mapId) => getMapById(mapId)?.unitsPresent ?? []))].flatMap((unitId) => {
     const unit = getWorldUnitById(unitId, state);
-    if (unit?.kind !== 'monster' || unit.source.isBoss || unit.source.requiredQuestId || !isAlive(state, unit.id)) return [];
+    if (!unit?.requiresEncounter || unit.isBoss || unit.requiredQuestId || !isAlive(state, unit.id)) return [];
     if (unit.factionId && giver.factionId && (unit.factionId === giver.factionId ||
         ['friendly', 'alliance'].includes(getFactionRelation(state.world, unit.factionId, giver.factionId).status))) return [];
     return [unit];
   });
   if (template.type === 'defeat') {
-    return monsters.map((unit) => ({ targetUnitId: unit.id, name: unit.name, level: unit.level, expReward: unit.expReward }));
+    return targets.map((unit) => ({ targetUnitId: unit.id, name: unit.name, level: unit.level, expReward: unit.expReward }));
   }
   const byItem = new Map<string, TargetCandidate>();
-  for (const unit of [...monsters].sort((a, b) => a.level - b.level)) {
-    if (unit.kind !== 'monster') continue;
-    for (const drop of unit.source.rewards.dropItems) {
+  for (const unit of [...targets].sort((a, b) => a.level - b.level)) {
+    for (const drop of unit.loot?.dropItems ?? []) {
       const item = getItemById(drop.itemId);
       if (!item || drop.chance <= 0 || byItem.has(item.id)) continue;
       byItem.set(item.id, { targetUnitId: unit.id, itemId: item.id, name: item.name, level: unit.level, expReward: unit.expReward });
@@ -112,9 +112,9 @@ const computeValueCap = (template: QuestTemplateStatic, target: TargetCandidate,
 /** AI 上下文：目前可提議的範本、發布者（含可作為報酬的持有物）與目標（含經驗與報酬上限）。沒有任何候選時回傳空陣列。 */
 export function getQuestPostingOptions(state: QuestState) {
   if (openQuests(state).length >= questTemplateData.limits.maxOpenQuests) return [];
-  const npcs = getWorldUnitsAtMap(state.currentMapId, state).filter((unit) => unit.kind === 'npc');
+  const residents = getWorldUnitsAtMap(state.currentMapId, state).filter((unit) => !unit.requiresEncounter);
   return questTemplatesDatabase.filter((template) => templateConditionsMet(state, template)).flatMap((template) => {
-    const givers = npcs.filter((unit) => !giverBlockReason(state, template, unit)).flatMap((giver) => {
+    const givers = residents.filter((unit) => !giverBlockReason(state, template, unit)).flatMap((giver) => {
       const targets = getTargetCandidates(state, template, giver);
       if (!targets.length) return [];
       return [{
@@ -166,15 +166,15 @@ export function validateQuestProposal(state: QuestState, proposal: QuestProposal
   if (openQuests(state).length >= questTemplateData.limits.maxOpenQuests) return { ok: false, reason: '世界上開放中的委託已達上限' };
   const giver = getWorldUnitById(proposal.giverId, state);
   const blocked = giverBlockReason(state, template, giver);
-  if (blocked || giver?.kind !== 'npc') return { ok: false, reason: blocked ?? '發布者無效' };
+  if (blocked || !giver) return { ok: false, reason: blocked ?? '發布者無效' };
   const quantity = proposal.quantity;
   if (!Number.isInteger(quantity) || quantity < template.quantity.min || quantity > template.quantity.max) return { ok: false, reason: `數量須介於 ${template.quantity.min}–${template.quantity.max}` };
   const candidates = getTargetCandidates(state, template, giver);
-  // 收集範本以物品為準（目標魔物由遊戲依掉落資料決定）；討伐範本以魔物為準。
+  // 收集範本以物品為準（目標單位由遊戲依掉落資料決定）；討伐範本以單位為準。
   const target = template.type === 'collect'
     ? candidates.find((candidate) => candidate.itemId === proposal.itemId)
     : candidates.find((candidate) => candidate.targetUnitId === proposal.targetUnitId);
-  if (!target) return { ok: false, reason: '目標不是附近實際存在的魔物或物品' };
+  if (!target) return { ok: false, reason: '目標不是附近實際存在的單位或物品' };
 
   const holdings = state.unitInstances[giver.id];
   const cap = computeValueCap(template, target, quantity);
@@ -213,7 +213,7 @@ export function validateQuestProposal(state: QuestState, proposal: QuestProposal
       mapId: giver.mapIds[0],
       objective: fillPattern(template.objectivePattern, target.name, quantity),
       requirements: template.type === 'defeat'
-        ? { defeatMonsters: [{ monsterId: target.targetUnitId, quantity }] }
+        ? { defeatUnits: [{ unitId: target.targetUnitId, quantity }] }
         : { collectItems: [{ itemId: target.itemId!, quantity }] },
       rewards: { exp: computeExp(template, target, quantity), gold, items },
       status: 'open',

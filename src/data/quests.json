@@ -7,8 +7,18 @@
     "mapId": "MAP-001",
     "objective": "擊敗 3 隻哥布林斥候並帶回哥布林耳朵",
     "requirements": {
-      "defeatMonsters": [{ "monsterId": "MON-001", "quantity": 3 }],
-      "collectItems": [{ "itemId": "ITEM-002", "quantity": 1 }]
+      "collectItems": [
+        {
+          "itemId": "ITEM-002",
+          "quantity": 1
+        }
+      ],
+      "defeatUnits": [
+        {
+          "unitId": "MON-001",
+          "quantity": 3
+        }
+      ]
     },
     "rewards": {
       "exp": 200,
@@ -21,8 +31,14 @@
       ]
     },
     "rewardLimits": {
-      "exp": { "min": 180, "max": 220 },
-      "gold": { "min": 40, "max": 60 },
+      "exp": {
+        "min": 180,
+        "max": 220
+      },
+      "gold": {
+        "min": 40,
+        "max": 60
+      },
       "maxItemQuantity": 3
     }
   },
@@ -32,20 +48,47 @@
     "questGiverId": "NPC-001",
     "questGiver": "村長埃爾德",
     "mapId": "MAP-001",
-    "prerequisiteQuestIds": ["QST-001"],
+    "prerequisiteQuestIds": [
+      "QST-001"
+    ],
     "objective": "深入哥布林巢穴，擊敗酋長並帶回徽記",
     "requirements": {
-      "defeatMonsters": [{ "monsterId": "MON-003", "quantity": 1 }],
-      "collectItems": [{ "itemId": "ITEM-004", "quantity": 1 }]
+      "collectItems": [
+        {
+          "itemId": "ITEM-004",
+          "quantity": 1
+        }
+      ],
+      "defeatUnits": [
+        {
+          "unitId": "MON-003",
+          "quantity": 1
+        }
+      ]
     },
     "rewards": {
       "exp": 250,
       "gold": 150,
-      "items": [{ "itemId": "ITEM-001", "quantity": 3 }, { "itemId": "ITEM-003", "quantity": 2 }]
+      "items": [
+        {
+          "itemId": "ITEM-001",
+          "quantity": 3
+        },
+        {
+          "itemId": "ITEM-003",
+          "quantity": 2
+        }
+      ]
     },
     "rewardLimits": {
-      "exp": { "min": 220, "max": 280 },
-      "gold": { "min": 120, "max": 180 },
+      "exp": {
+        "min": 220,
+        "max": 280
+      },
+      "gold": {
+        "min": 120,
+        "max": 180
+      },
       "maxItemQuantity": 3
     }
   }

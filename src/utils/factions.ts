@@ -28,7 +28,7 @@ export const getFactionsOfUnits = (unitIds: readonly string[]): string[] => uniq
 function getFactionsPresentAt(state: Pick<PlayerState, 'unitInstances'>, mapId: string): string[] {
   const map = getMapById(mapId);
   if (!map) return [];
-  return getFactionsOfUnits([...map.npcsPresent, ...map.monstersPresent].filter((unitId) => {
+  return getFactionsOfUnits(map.unitsPresent.filter((unitId) => {
     const instance = state.unitInstances[unitId];
     return !!instance && !instance.isDead && instance.currentHp !== 0;
   }));

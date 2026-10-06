@@ -28,14 +28,14 @@ import { createSuccessorReputation, describeReputationChanges } from './utils/fa
 import { rollWaitInterruption } from './utils/waitRules';
 import type { CharacterAlignment } from './types/game';
 
-function withNpcHp(player: PlayerState, npcId: string, currentHp: number, isDead = false): PlayerState {
-  const state = player.unitInstances[npcId];
-  return { ...player, unitInstances: { ...player.unitInstances, [npcId]: { ...state, currentHp, isDead } } };
+function withUnitHp(player: PlayerState, unitId: string, currentHp: number, isDead = false): PlayerState {
+  const state = player.unitInstances[unitId];
+  return { ...player, unitInstances: { ...player.unitInstances, [unitId]: { ...state, currentHp, isDead } } };
 }
 
-/** 擊倒 NPC 時取得其全部持有物與金幣；經驗依劇本規則 npcKillGrantsExp 另行發放，後果由勢力聲望承擔。 */
-function lootDefeatedNpc(player: PlayerState, npcId: string, npcName: string) {
-  const state = player.unitInstances[npcId];
+/** 擊倒單位時取得其全部持有物與金幣（世界實際庫存）；掉落表與經驗另行結算。 */
+function takeHoldings(player: PlayerState, unitId: string, unitName: string) {
+  const state = player.unitInstances[unitId];
   if (!state || (state.gold <= 0 && state.inventory.length === 0)) return { player, loot: [] as { itemId: string; quantity: number }[], gold: 0 };
   const inventory = player.inventory.map((entry) => ({ ...entry }));
   for (const item of state.inventory) {
@@ -46,8 +46,8 @@ function lootDefeatedNpc(player: PlayerState, npcId: string, npcName: string) {
   const itemText = state.inventory.map((item) => `${getItemById(item.itemId)?.name ?? item.itemId} ×${item.quantity}`).join('、');
   const record = {
     id: `${Date.now()}-${Math.random()}`,
-    type: 'npc_transfer' as const,
-    description: `從 ${npcName} 身上取得${[state.gold > 0 ? `${state.gold} 金幣` : '', itemText].filter(Boolean).join('、')}`,
+    type: 'unit_transfer' as const,
+    description: `從 ${unitName} 身上取得${[state.gold > 0 ? `${state.gold} 金幣` : '', itemText].filter(Boolean).join('、')}`,
     goldChange: state.gold,
     timestamp: Date.now()
   };
@@ -56,7 +56,7 @@ function lootDefeatedNpc(player: PlayerState, npcId: string, npcName: string) {
       ...player,
       gold: player.gold + state.gold,
       inventory,
-      unitInstances: { ...player.unitInstances, [npcId]: { ...state, gold: 0, inventory: [] } },
+      unitInstances: { ...player.unitInstances, [unitId]: { ...state, gold: 0, inventory: [] } },
       transactionHistory: [record, ...player.transactionHistory].slice(0, 100)
     },
     loot: state.inventory,
@@ -65,8 +65,7 @@ function lootDefeatedNpc(player: PlayerState, npcId: string, npcName: string) {
 }
 
 function resolveEnemyTurn(player: PlayerState, combat: NonNullable<PlayerState['combat']>, unit: WorldUnitStatic) {
-  const monster = unit.kind === 'monster' ? unit.source : undefined;
-  const special = monster?.specialAbilities.find((ability) => ability.combatAction && combat.round % ability.combatAction.triggerEveryRounds === 0);
+  const special = unit.specialAbilities?.find((ability) => ability.combatAction && combat.round % ability.combatAction.triggerEveryRounds === 0);
   const action = special?.combatAction;
   const checkStat = action?.checkStat ?? 'def';
   const dc = action?.dc ?? 10 + Math.floor(unit.stats.atk / 2);
@@ -400,13 +399,13 @@ export default function App() {
   const handleStartCombat = (unitId: string) => {
     const map = getMapById(player.currentMapId);
     const unit = getWorldUnitById(unitId, player);
-    const present = unit?.mapIds.includes(player.currentMapId) && (unit.kind === 'npc' ? map?.npcsPresent.includes(unitId) : map?.monstersPresent.includes(unitId));
-    const monster = unit?.kind === 'monster' ? unit.source : undefined;
-    const npcState = unit?.kind === 'npc' ? player.unitInstances[unit.id] : undefined;
+    const present = unit?.mapIds.includes(player.currentMapId) && map?.unitsPresent.includes(unitId);
+    const unitState = unit && !unit.population ? player.unitInstances[unit.id] : undefined;
     if (player.combat || !canPlayerAct(player) || !map || !unit || !present || getWorldUnitDisposition(player, unitId) !== 'hostile' ||
-        (unit.kind === 'monster' && (map.isSafeZone || player.encounteredUnitId !== unitId || (monster?.requiredQuestId && !player.activeQuests.some((quest) => quest.questId === monster.requiredQuestId && quest.status === 'in_progress')))) ||
-        (unit.kind === 'npc' && (npcState?.isDead || npcState?.currentHp === 0))) return;
-    const currentHp = unit.kind === 'npc' ? npcState?.currentHp ?? unit.stats.hp : unit.stats.hp;
+        (unit.requiresEncounter && (map.isSafeZone || player.encounteredUnitId !== unitId || (unit.requiredQuestId && !player.activeQuests.some((quest) => quest.questId === unit.requiredQuestId && quest.status === 'in_progress')))) ||
+        unitState?.isDead || unitState?.currentHp === 0) return;
+    // 地區居民的戰鬥 HP 會保留；需遭遇的單位每次戰鬥以完整 HP 開始。
+    const currentHp = unit.requiresEncounter ? unit.stats.hp : unitState?.currentHp ?? unit.stats.hp;
     updatePlayer({ ...player, encounteredUnitId: unitId, combat: createCombat([player.unitId], [{ unitId, currentHp }]) });
     appendSystemMessage(`你與${unit.name}進入戰鬥！攻擊、已解鎖技能及消耗品各自消耗一個行動回合；敵人存活時會反擊並進行閃避檢定。`);
   };
@@ -447,7 +446,7 @@ export default function App() {
     const damage = attackCheck.success
       ? Math.max(1, Math.floor(playerAttack * skillMultiplier) - unit.stats.def)
       : 0;
-    const monsterHp = attackCheck.success
+    const targetHp = attackCheck.success
       ? Math.max(0, target.currentHp - damage)
       : target.currentHp;
     const attackText = attackCheck.success
@@ -455,63 +454,51 @@ export default function App() {
       : `${skill?.name ?? '攻擊'}未命中${unit.name}。`;
     const timedPlayer = advanceGameTime(sourcePlayer, 'combatRound');
     const actionPlayer = skill ? { ...timedPlayer, mp: timedPlayer.mp - skill.costMp } : timedPlayer;
-    const combatActionPlayer = unit.kind === 'npc' ? withNpcHp(actionPlayer, unit.id, monsterHp, monsterHp <= 0) : actionPlayer;
+    const combatActionPlayer = unit.requiresEncounter ? actionPlayer : withUnitHp(actionPlayer, unit.id, targetHp, targetHp <= 0);
 
-    if (monsterHp <= 0 && unit.kind === 'monster') {
-      const monster = unit.source;
-      const dropItems = monster.rewards.dropItems.flatMap((drop) => {
+    if (targetHp <= 0) {
+      // 單位一致：擊倒任何單位都走同一流程。取得其持有物、依掉落表擲骰、依公式給予經驗
+      // （地區居民的經驗可由劇本關閉，殺害的後果由勢力聲望承擔），並記入擊倒數與任務進度。
+      const looted = takeHoldings(combatActionPlayer, unit.id, unit.name);
+      const dropItems = (unit.loot?.dropItems ?? []).flatMap((drop) => {
         if (!globalThis.crypto?.getRandomValues) return [];
         const roll = new Uint32Array(1);
         globalThis.crypto.getRandomValues(roll);
         return roll[0] / 0x1_0000_0000 < drop.chance ? [{ itemId: drop.itemId, quantity: 1 }] : [];
       });
+      const lootGold = unit.loot?.gold ?? 0;
+      const expGain = unit.requiresEncounter || scenario.rules.residentKillGrantsExp ? unit.expReward : 0;
       const questUpdates = sourcePlayer.activeQuests.filter((quest) => quest.status === 'in_progress')
         .map((quest) => ({ questId: quest.questId, status: 'completed' as const }));
-      const nextPlayer = applyStateChanges(combatActionPlayer, {
+      const nextPlayer = applyStateChanges(looted.player, {
         storyText: '', suggestedActions: [],
         stateChanges: {
-          expChange: unit.expReward,
-          goldChange: monster.rewards.gold,
+          expChange: expGain,
+          goldChange: lootGold,
           addItems: dropItems,
-          defeatedMonsters: [{ monsterId: monster.id, quantity: 1 }],
+          defeatedUnits: [{ unitId: unit.id, quantity: 1 }],
           questUpdates
         }
       }, 'game');
       const completedQuests = nextPlayer.activeQuests.filter((quest) => quest.status === 'completed' &&
         sourcePlayer.activeQuests.some((previous) => previous.questId === quest.questId && previous.status === 'in_progress'));
-      const dropText = dropItems.length ? `取得掉落物：${dropItems.map((item) => `${getItemById(item.itemId)?.name ?? item.itemId} ×${item.quantity}`).join('、')}。` : '沒有掉落物。';
-      const questText = completedQuests.map((quest) => `任務「${findQuest(sourcePlayer, quest.questId)?.title ?? quest.questId}」完成，需求道具已交付並領取獎勵。`).join('\n');
-      // 頭目是唯一個體，擊敗即永久死亡（寫入死亡事件）；一般魔物樣板代表一群個體，不會因單次擊敗而消失。
-      const victoryState = monster.isBoss
-        ? { ...nextPlayer, unitInstances: { ...nextPlayer.unitInstances, [monster.id]: { ...nextPlayer.unitInstances[monster.id], currentHp: 0, isDead: true } } }
-        : { ...nextPlayer };
-      delete victoryState.combat;
-      delete victoryState.encounteredUnitId;
-      updatePlayer(victoryState, { [monster.id]: { cause: 'combat', killerUnitId: sourcePlayer.unitId } });
-      appendSystemMessage(`🏆 ${attackText}\n${monster.name}已被擊敗！獲得 ${unit.expReward} EXP、${monster.rewards.gold} 金幣。${dropText}${questText ? `\n${questText}` : ''}`, checks);
-      return;
-    }
-
-    if (monsterHp <= 0 && unit.kind === 'npc') {
-      const looted = lootDefeatedNpc(combatActionPlayer, unit.id, unit.name);
-      // 單位一致：擊倒 NPC 與魔物以同一公式給予經驗（劇本可關閉）；殺害的後果由勢力聲望承擔。
-      const expGain = scenario.rules.npcKillGrantsExp ? unit.expReward : 0;
-      const rewarded = expGain > 0
-        ? applyStateChanges(looted.player, { storyText: '', suggestedActions: [], stateChanges: { expChange: expGain } }, 'game')
-        : looted.player;
-      const victoryState = { ...rewarded };
+      // 唯一個體擊倒即永久死亡（寫入死亡事件）；族群樣板代表一群個體，不會因單次擊倒而消失。
+      const victoryState = unit.population ? { ...nextPlayer } : withUnitHp(nextPlayer, unit.id, 0, true);
       delete victoryState.combat;
       delete victoryState.encounteredUnitId;
       updatePlayer(victoryState, { [unit.id]: { cause: 'combat', killerUnitId: sourcePlayer.unitId } });
-      const lootText = looted.gold > 0 || looted.loot.length
-        ? `你從其身上取得${[looted.gold > 0 ? `${looted.gold} 金幣` : '', ...looted.loot.map((item) => `${getItemById(item.itemId)?.name ?? item.itemId} ×${item.quantity}`)].filter(Boolean).join('、')}。`
-        : '其身上沒有可取得的物品。';
-      const levelText = rewarded.level > looted.player.level ? ` 📈 升至 Lv.${rewarded.level}！` : '';
-      appendSystemMessage(`⚔️ ${attackText}\n${unit.name}已被擊倒，${expGain > 0 ? `獲得 ${expGain} EXP。${levelText}` : '不會獲得經驗。'}${lootText}`, checks);
+      const gains = [
+        expGain > 0 ? `${expGain} EXP` : '',
+        lootGold + looted.gold > 0 ? `${lootGold + looted.gold} 金幣` : '',
+        ...[...looted.loot, ...dropItems].map((item) => `${getItemById(item.itemId)?.name ?? item.itemId} ×${item.quantity}`)
+      ].filter(Boolean);
+      const levelText = nextPlayer.level > looted.player.level ? ` 📈 升至 Lv.${nextPlayer.level}！` : '';
+      const questText = completedQuests.map((quest) => `任務「${findQuest(sourcePlayer, quest.questId)?.title ?? quest.questId}」完成，需求道具已交付並領取獎勵。`).join('\n');
+      appendSystemMessage(`${unit.isBoss ? '🏆' : '⚔️'} ${attackText}\n${unit.name}已被擊倒！${gains.length ? `獲得 ${gains.join('、')}。` : '沒有獲得任何東西。'}${expGain > 0 ? '' : '（不會獲得經驗）'}${levelText}${questText ? `\n${questText}` : ''}`, checks);
       return;
     }
 
-    const nextCombat = setEnemyHp(combat, unit.id, monsterHp);
+    const nextCombat = setEnemyHp(combat, unit.id, targetHp);
     const enemyTurn = resolveEnemyTurn({ ...combatActionPlayer, combat: nextCombat }, nextCombat, unit);
     updatePlayer(enemyTurn.player, enemyTurn.deathHints);
     appendSystemMessage(`${attackText}\n${enemyTurn.text}`, [...checks, enemyTurn.check]);
@@ -567,7 +554,7 @@ export default function App() {
 
     const combatUnit = getWorldUnitById(player.combat.targetUnitId, player);
     if (!combatUnit) return;
-    const combatNext = combatUnit.kind === 'npc' ? withNpcHp(next, combatUnit.id, getCombatTarget(player.combat)?.currentHp ?? 0) : next;
+    const combatNext = combatUnit.requiresEncounter ? next : withUnitHp(next, combatUnit.id, getCombatTarget(player.combat)?.currentHp ?? 0);
     const enemyTurn = resolveEnemyTurn({ ...combatNext, combat: player.combat }, player.combat, combatUnit);
     updatePlayer(enemyTurn.player, enemyTurn.deathHints);
     appendSystemMessage(`使用${item.name}，${details}。\n${enemyTurn.text}`, [enemyTurn.check]);
@@ -612,8 +599,8 @@ export default function App() {
     const attackIntent = !isQuestion && /(?:攻擊|攻打|打倒|擊倒|砍向|砍|刺向|刺|揮擊|attack|strike|fight)/iu.test(actionText) && !/(?:攻擊自己|打自己|刺自己|砍自己)/u.test(actionText);
     if (attackIntent && canPlayerAct(player)) {
       const map = getMapById(player.currentMapId);
-      const available = getWorldUnitsAtMap(player.currentMapId, player).filter((unit) => unit.kind === 'monster' || !player.unitInstances[unit.id]?.isDead);
-      const matched = available.filter((unit) => actionText.includes(unit.name) || actionText.includes(unit.id) || (unit.kind === 'monster' && actionText.toLowerCase().includes(unit.source.enName.toLowerCase())));
+      const available = getWorldUnitsAtMap(player.currentMapId, player).filter((unit) => unit.population || !player.unitInstances[unit.id]?.isDead);
+      const matched = available.filter((unit) => actionText.includes(unit.name) || actionText.includes(unit.id) || (!!unit.enName && actionText.toLowerCase().includes(unit.enName.toLowerCase())));
       const encountered = player.encounteredUnitId ? getWorldUnitById(player.encounteredUnitId, player) : undefined;
       const target = matched.length === 1 ? matched[0] : matched.length === 0 ? encountered : undefined;
       const userMessage: StoryMessage = { id: `${Date.now()}-user`, sender: 'user', text: actionText, timestamp: new Date().toLocaleTimeString() };
@@ -622,8 +609,8 @@ export default function App() {
         setMessages((prev) => [...prev, userMessage, { id: `${Date.now()}-combat`, sender: 'system', text, timestamp: new Date().toLocaleTimeString() }]);
         return;
       }
-      if (!player.combat && target?.kind === 'monster' && map?.isSafeZone) {
-        setMessages((prev) => [...prev, userMessage, { id: `${Date.now()}-combat`, sender: 'system', text: '安全地區不會發生魔物戰鬥。', timestamp: new Date().toLocaleTimeString() }]);
+      if (!player.combat && target?.requiresEncounter && map?.isSafeZone) {
+        setMessages((prev) => [...prev, userMessage, { id: `${Date.now()}-combat`, sender: 'system', text: '安全地區不會遭遇敵人。', timestamp: new Date().toLocaleTimeString() }]);
         return;
       }
       if (player.combat && matched.length === 1 && matched[0].id !== player.combat.targetUnitId) {
@@ -638,11 +625,11 @@ export default function App() {
           : applyStateChanges(player, {
             storyText: '', suggestedActions: [], stateChanges: { unitDispositionChanges: [{ unitId: target.id, disposition: 'hostile' }] }
           }, 'game');
-        if (target.kind === 'monster' && player.encounteredUnitId !== target.id) {
+        if (target.requiresEncounter && player.encounteredUnitId !== target.id) {
           appendSystemMessage(`你尚未遭遇${target.name}；請先探索，等實際遭遇後再攻擊。`);
           return;
         }
-        const currentHp = target.kind === 'npc' ? provokedPlayer.unitInstances[target.id]?.currentHp ?? target.stats.hp : target.stats.hp;
+        const currentHp = target.requiresEncounter ? target.stats.hp : provokedPlayer.unitInstances[target.id]?.currentHp ?? target.stats.hp;
         const combatPlayer: PlayerState = { ...provokedPlayer, encounteredUnitId: target.id, combat: createCombat([provokedPlayer.unitId], [{ unitId: target.id, currentHp }]) };
         appendSystemMessage(`你${provokedPlayer === player ? '與' : '激怒並與'}已遭遇的${target.name}進入戰鬥！`);
         handleCombatAction(undefined, combatPlayer);
@@ -681,7 +668,7 @@ export default function App() {
       // 非安全地區的等待可能被敵人打斷，只經過到打斷為止的時間。
       const interruption = waitIntent.kind === 'duration' && waitIntent.minutes <= MAX_WAIT_MINUTES ? rollWaitInterruption(player, waitIntent.minutes) : undefined;
       const waited = waitIntent.kind === 'duration' ? waitGameTime(player, interruption?.elapsedMinutes ?? waitIntent.minutes) : player;
-      const interruptUnit = interruption?.monsterId ? getWorldUnitById(interruption.monsterId, player) : undefined;
+      const interruptUnit = interruption?.unitId ? getWorldUnitById(interruption.unitId, player) : undefined;
       const waitNext = interruptUnit && waited !== player ? { ...waited, encounteredUnitId: interruptUnit.id } : waited;
       const text = interruptUnit && interruption && waitNext !== player
         ? `⏳ 你等待了 ${formatDuration(interruption.elapsedMinutes)}，${interruptUnit.name}出現，等待被打斷！現在是 ${formatGameTime(waitNext.gameTimeMinutes)}。\n👁️ 遭遇：${interruptUnit.name}。已加入 HUD，可從右側開始戰鬥。`
@@ -789,17 +776,17 @@ export default function App() {
 
 ⚠️ 委託未成立：${questPosting.rejected.join('；')}。` : '';
       if (nextPlayer.isDead) nextPlayer = { ...nextPlayer, encounteredUnitId: undefined };
-      const requestedEncounter = aiResponse.encounterRequest?.monsterId;
+      const requestedEncounter = aiResponse.encounterRequest?.unitId;
       const requestedUnit = requestedEncounter ? getWorldUnitById(requestedEncounter) : undefined;
-      const requestedMonster = requestedUnit?.kind === 'monster' ? requestedUnit : undefined;
+      const encounterUnit = requestedUnit?.requiresEncounter ? requestedUnit : undefined;
       const currentMap = getMapById(player.currentMapId);
       const encounterAllowed = !nextPlayer.combat && !nextPlayer.isDead && canPlayerAct(nextPlayer) && !!currentMap && !currentMap.isSafeZone &&
-        !!requestedMonster && requestedMonster.mapIds.includes(currentMap.id) && currentMap.monstersPresent.includes(requestedMonster.id) &&
-        (!requestedMonster.source.requiredQuestId || nextPlayer.activeQuests.some((quest) => quest.questId === requestedMonster.source.requiredQuestId && quest.status === 'in_progress'));
-      const encounterNotice = encounterAllowed && requestedMonster
-        ? `\n\n👁️ 遭遇：${requestedMonster.name}。已加入 HUD，可從右側開始戰鬥。`
+        !!encounterUnit && encounterUnit.mapIds.includes(currentMap.id) && currentMap.unitsPresent.includes(encounterUnit.id) &&
+        (!encounterUnit.requiredQuestId || nextPlayer.activeQuests.some((quest) => quest.questId === encounterUnit.requiredQuestId && quest.status === 'in_progress'));
+      const encounterNotice = encounterAllowed && encounterUnit
+        ? `\n\n👁️ 遭遇：${encounterUnit.name}。已加入 HUD，可從右側開始戰鬥。`
         : '';
-      if (encounterAllowed && requestedMonster) nextPlayer = { ...nextPlayer, encounteredUnitId: requestedMonster.id };
+      if (encounterAllowed && encounterUnit) nextPlayer = { ...nextPlayer, encounteredUnitId: encounterUnit.id };
       const deathNotice = !player.isDead && nextPlayer.isDead
         ? '\n\n☠️ 你的生命值降至 0，角色死亡。這段冒險已結束，可從右側以新角色接續這個世界。'
         : '';
@@ -819,14 +806,14 @@ export default function App() {
           return reward?.description ?? `任務「${title}」已完成。`;
         }).join('\n')}`
         : '';
-      const newNpcTransfers = nextPlayer.transactionHistory.filter((record) => record.type === 'npc_transfer' &&
+      const newUnitTransfers = nextPlayer.transactionHistory.filter((record) => record.type === 'unit_transfer' &&
         !player.transactionHistory.some((previous) => previous.id === record.id));
-      const requestedNpcTransfers = resultToApply.stateChanges?.npcItemTransfers?.length ?? 0;
-      const successfulNpcTransfers = newNpcTransfers.filter((record) => record.description.startsWith('從 '));
-      const npcTransferNotice = successfulNpcTransfers.length || successfulNpcTransfers.length < requestedNpcTransfers
+      const requestedUnitTransfers = resultToApply.stateChanges?.unitItemTransfers?.length ?? 0;
+      const successfulUnitTransfers = newUnitTransfers.filter((record) => record.description.startsWith('從 '));
+      const unitTransferNotice = successfulUnitTransfers.length || successfulUnitTransfers.length < requestedUnitTransfers
         ? `\n\n📦 ${[
-          ...successfulNpcTransfers.map((record) => record.description),
-          ...(successfulNpcTransfers.length < requestedNpcTransfers ? ['NPC 不在場或持有物不足，未能取得敘事中提及的全部物品。'] : [])
+          ...successfulUnitTransfers.map((record) => record.description),
+          ...(successfulUnitTransfers.length < requestedUnitTransfers ? ['對方不在場或持有物不足，未能取得敘事中提及的全部物品。'] : [])
         ].join('\n')}`
         : '';
       const relationLabels = { friendly: '友善', neutral: '中立', hostile: '敵對' } as const;
@@ -881,7 +868,7 @@ export default function App() {
         {
           id: (Date.now() + 1).toString(),
           sender: 'ai',
-          text: `${storyText}${postedQuestNotice}${questNotice}${questCompletionNotice}${npcTransferNotice}${unitDispositionNotice}${encounterNotice}${serviceNotice}${locationNotice}${deathNotice}`,
+          text: `${storyText}${postedQuestNotice}${questNotice}${questCompletionNotice}${unitTransferNotice}${unitDispositionNotice}${encounterNotice}${serviceNotice}${locationNotice}${deathNotice}`,
           options: aiResponse.suggestedActions,
           travelOptions: textTravelIntent.kind === 'ambiguous'
             ? textTravelIntent.candidates.map((candidate) => ({ mapId: candidate.id, name: candidate.name }))

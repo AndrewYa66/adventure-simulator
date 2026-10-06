@@ -9,12 +9,12 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
   if (!changes) return player;
 
   const inventory = player.inventory.map((item) => ({ ...item }));
-  const defeatedMonsters = { ...player.defeatedMonsters };
+  const defeatedUnits = { ...player.defeatedUnits };
   let questExp = 0;
   let questGold = 0;
   const rewardItems: { itemId: string; quantity: number }[] = [];
   const activeQuests = player.activeQuests.map((quest) => ({ ...quest }));
-  const unitInstances = Object.fromEntries(Object.entries(player.unitInstances).map(([npcId, state]) => [npcId, {
+  const unitInstances = Object.fromEntries(Object.entries(player.unitInstances).map(([unitId, state]) => [unitId, {
     ...state,
     inventory: state.inventory.map((item) => ({ ...item }))
   }]));
@@ -29,17 +29,18 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
 
   for (const change of changes.unitDispositionChanges ?? []) {
     const unit = getWorldUnitById(change.unitId);
-    const isPresent = currentMap?.npcsPresent.includes(change.unitId) || currentMap?.monstersPresent.includes(change.unitId);
-    const isAlive = unit?.kind !== 'npc' || (!player.unitInstances[unit.id]?.isDead && player.unitInstances[unit.id]?.currentHp !== 0);
+    const isPresent = currentMap?.unitsPresent.includes(change.unitId);
+    // 族群樣板代表一群個體，個別擊倒不影響其餘個體的關係變更。
+    const isAlive = !!unit && (unit.population || (!player.unitInstances[unit.id]?.isDead && player.unitInstances[unit.id]?.currentHp !== 0));
     if (!unit || !isPresent || !isAlive || !['friendly', 'neutral', 'hostile'].includes(change.disposition)) continue;
     unitDispositionOverrides[unit.id] = change.disposition;
   }
 
   if (source === 'ai') {
-    for (const transfer of changes.npcItemTransfers ?? []) {
-      const unit = getWorldUnitById(transfer.npcId);
-      const state = unitInstances[transfer.npcId];
-      if (unit?.kind !== 'npc' || !unit.mapIds.includes(player.currentMapId) || !currentMap?.npcsPresent.includes(unit.id) ||
+    for (const transfer of changes.unitItemTransfers ?? []) {
+      const unit = getWorldUnitById(transfer.unitId);
+      const state = unitInstances[transfer.unitId];
+      if (!unit || !unit.mapIds.includes(player.currentMapId) || (unit.requiresEncounter && player.encounteredUnitId !== unit.id) ||
           getWorldUnitDisposition({ factionReputation: player.factionReputation, unitDispositionOverrides }, unit.id) === 'hostile' || !getItemById(transfer.itemId) ||
           !Number.isInteger(transfer.quantity) || transfer.quantity < 1 || !state || state.isDead || state.currentHp === 0) continue;
       const stock = state.inventory.find((entry) => entry.itemId === transfer.itemId);
@@ -49,7 +50,7 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
       const owned = inventory.find((entry) => entry.itemId === transfer.itemId);
       if (owned) owned.quantity += transfer.quantity;
       else inventory.push({ itemId: transfer.itemId, quantity: transfer.quantity });
-      recordTransaction('npc_transfer', `從 ${unit.name} 取得 ${getItemById(transfer.itemId)?.name ?? transfer.itemId} ×${transfer.quantity}`);
+      recordTransaction('unit_transfer', `從 ${unit.name} 取得 ${getItemById(transfer.itemId)?.name ?? transfer.itemId} ×${transfer.quantity}`);
     }
   }
 
@@ -75,16 +76,16 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
     if (existing.quantity <= 0) inventory.splice(inventory.indexOf(existing), 1);
   }
 
-  for (const defeat of (source === 'game' ? changes.defeatedMonsters ?? [] : [])) {
+  for (const defeat of (source === 'game' ? changes.defeatedUnits ?? [] : [])) {
     const currentMap = getMapById(player.currentMapId);
-    const unit = getWorldUnitById(defeat.monsterId);
-    if (unit?.kind === 'monster' && currentMap?.monstersPresent.includes(unit.id) && Number.isInteger(defeat.quantity) && defeat.quantity > 0) {
-      defeatedMonsters[defeat.monsterId] = (defeatedMonsters[defeat.monsterId] ?? 0) + defeat.quantity;
+    const unit = getWorldUnitById(defeat.unitId);
+    if (unit && currentMap?.unitsPresent.includes(unit.id) && Number.isInteger(defeat.quantity) && defeat.quantity > 0) {
+      defeatedUnits[defeat.unitId] = (defeatedUnits[defeat.unitId] ?? 0) + defeat.quantity;
       for (const active of activeQuests) {
         if (active.status !== 'in_progress') continue;
-        active.progress ??= { defeatedMonsters: {} };
-        const progress = active.progress.defeatedMonsters;
-        progress[defeat.monsterId] = (progress[defeat.monsterId] ?? 0) + defeat.quantity;
+        active.progress ??= { defeatedUnits: {} };
+        const progress = active.progress.defeatedUnits;
+        progress[defeat.unitId] = (progress[defeat.unitId] ?? 0) + defeat.quantity;
       }
     }
   }
@@ -94,8 +95,8 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
     const quest = findQuest(player, update.questId);
     const giverId = quest ? getActiveQuestGiverId(active, quest.questGiverId) : undefined;
     if (!active || !quest || !giverId || !canReachQuestGiver({ ...player, unitInstances, unitDispositionOverrides }, quest, giverId)) continue;
-    const defeatsMet = (quest.requirements.defeatMonsters ?? []).every((requirement) =>
-      (active.progress?.defeatedMonsters[requirement.monsterId] ?? 0) >= requirement.quantity
+    const defeatsMet = (quest.requirements.defeatUnits ?? []).every((requirement) =>
+      (active.progress?.defeatedUnits[requirement.unitId] ?? 0) >= requirement.quantity
     );
     const itemsMet = (quest.requirements.collectItems ?? []).every((requirement) =>
       (inventory.find((item) => item.itemId === requirement.itemId)?.quantity ?? 0) >= requirement.quantity
@@ -144,7 +145,7 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
         const received = giverState.inventory.find((entry) => entry.itemId === requirement.itemId);
         if (received) received.quantity += requirement.quantity;
         else giverState.inventory.push({ itemId: requirement.itemId, quantity: requirement.quantity });
-        recordTransaction('npc_transfer', `交付 ${getItemById(requirement.itemId)?.name ?? requirement.itemId} ×${requirement.quantity} 給 ${getUnitDisplayName(giverId)}`);
+        recordTransaction('unit_transfer', `交付 ${getItemById(requirement.itemId)?.name ?? requirement.itemId} ×${requirement.quantity} 給 ${getUnitDisplayName(giverId)}`);
       }
     }
   }
@@ -164,7 +165,7 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
   const exp = Math.max(0, player.exp + trustedExpChange + questExp);
   let hp = Math.max(0, player.hp + (changes.hpChange ?? 0));
   let mp = Math.max(0, player.mp + (changes.mpChange ?? 0));
-  // 升級規則與 NPC/魔物共用：累計經驗達等級基準表門檻即升級，升級時增加的資源上限同步補給。
+  // 升級規則與其他單位共用：累計經驗達等級基準表門檻即升級，升級時增加的資源上限同步補給。
   const level = resolveLevelFromExp(levelBenchmarksDatabase, player.level, exp, MAX_UNIT_LEVEL);
   const previousCaps = getPlayerResourceCaps(player);
   const caps = getPlayerResourceCaps({ ...player, level });
@@ -184,7 +185,7 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
     unitDispositionOverrides,
     inventory,
     storyFlags: player.storyFlags,
-    defeatedMonsters,
+    defeatedUnits,
     activeQuests,
     currentMapId: player.currentMapId,
     world

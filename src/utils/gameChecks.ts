@@ -39,7 +39,7 @@ export function getPlayerStatBreakdown(
   stat: ActionCheckResult['stat']
 ): PlayerStatBreakdown {
   const abilityStat = ['str', 'dex', 'con', 'int', 'wis', 'cha'].includes(stat);
-  // 戰鬥數值與 NPC/魔物同一公式（種族 × 職階 × 等級），玩家另加裝備。
+  // 戰鬥數值與其他單位同一公式（種族 × 職階 × 等級），玩家另加裝備。
   const baseStat = abilityStat
     ? player.abilities[stat as keyof PlayerState['abilities']]
     : getPlayerBaseStats(player)[stat as 'atk' | 'def' | 'spd'];

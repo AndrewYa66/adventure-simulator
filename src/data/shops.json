@@ -2,20 +2,28 @@
   {
     "id": "SHOP-001",
     "name": "凱斯的鐵匠鋪",
-    "npcId": "NPC-002",
+    "ownerUnitId": "NPC-002",
     "items": [
-      { "itemId": "ITEM-101" },
-      { "itemId": "ITEM-201" }
+      {
+        "itemId": "ITEM-101"
+      },
+      {
+        "itemId": "ITEM-201"
+      }
     ],
     "services": []
   },
   {
     "id": "SHOP-002",
     "name": "微風旅館雜貨櫃",
-    "npcId": "NPC-004",
+    "ownerUnitId": "NPC-004",
     "items": [
-      { "itemId": "ITEM-001" },
-      { "itemId": "ITEM-003" }
+      {
+        "itemId": "ITEM-001"
+      },
+      {
+        "itemId": "ITEM-003"
+      }
     ],
     "services": [
       {

@@ -36,7 +36,7 @@ sendPlayerAction(
 - **token 預算** `src/data/ai_context.json`：`totalBudgetChars`（整體字元上限，目前 20,000）、`maxCallsPerTurn`（每回合呼叫上限，目前 2：敘事 1 次 + 移動修正 1 次；設為 1 即不送修正請求）、`legacy.maxCharacters`／`maxDeedsPerCharacter`（5／5）、`worldEvents.maxEvents`（12）、`chronicle.maxLines`（10），以及可截斷區段的 `trimmableSections: { legacy, worldEvents, modifiers, chronicle }` 各自的 `priority`（數字越小越重要）與 `maxChars`。只有這四個歷史類區段可截斷；候選清單（地區、任務、遭遇、物品、可提議事件）與規則不截斷，避免 AI 看不到合法選項。截斷時先套用各區段上限，整體仍超出時從優先順序最低的區段繼續省略；列表從最舊的項目開始省略並在標籤註明省略筆數，歷代角色先省略各角色較舊的事蹟（每位保留最新一件，標示 `omittedDeeds`），最後才省略最早的角色。token 數以「中日韓文字 1 字 1 token、其他 4 字元 1 token」估算。2026-10-06 實測一般狀態約 13,200 字元（約 6,500 tokens）。
 - **組裝報告**：每次呼叫記錄 `AIContextReport`（總字元、估計 tokens、預算、是否超出、各區段字元／上限／省略數、完整系統提示與使用者提示）。開發模式（`import.meta.env.DEV`）在 HUD 顯示「AI 上下文」面板；模型設定頁顯示每回合呼叫上限與上一次請求的估計大小。正式版不顯示面板。
 - **歷代角色區段**：每位歷代角色（最多 5 位）提供 `generation`（代數）、名稱、種族職階等級、陣營、結束時間地點、`death`（死亡事件）與 `deeds`（事蹟）。事蹟為該角色任內（事件的 `characterSeq` 等於其代數）殺害 NPC 或頭目的死亡事件、未由殺害衍生的聲望事件（攻擊成員、完成委託）、以及 AI 提議並由玩家行動促成的劇本事件；一般魔物擊殺不列入。殺害造成的聲望事件以 `consequence` 附在死亡事件上，不重複列出。每件事蹟（與死亡事件）附上在場 NPC 的認知層級 `presentKnowledge`（見「世界事件、世界修正與世界規則」的認知層級），已列在此區段的事件不在世界事件區段重複；主持規則要求親眼目擊者被問到時明確說出前任冒險者做了什麼，傳聞者以聽說的口吻提到，公開消息者只知道結果。已壓縮進編年史的事件不再列為事蹟。
-- **回應格式版本**：回應加入 `formatVersion`，目前為 `2`（`AI_RESPONSE_FORMAT_VERSION`），Gemini JSON Schema 要求填入此值。可解析的版本為 1 與 2；沒有 `formatVersion` 的回應視為第 1 版（欄位與第 2 版相同）。版本號不支援的回應會被拒絕：顯示「格式版本不受支援，本回合未套用任何變更」，不顯示其敘事、不套用狀態、不重試。日後新增請求類型（劇情片段選擇、重要角色決策等）時提高版本號，並各自加上前端驗證。
+- **回應格式版本**：回應加入 `formatVersion`，目前為 `3`（`AI_RESPONSE_FORMAT_VERSION`），Gemini JSON Schema 要求填入此值。可解析的版本為 1、2、3；沒有 `formatVersion` 的回應視為第 1 版。第 3 版（單位模型合併）將單位欄位改名：`encounterRequest.monsterId` → `unitId`、`stateChanges.npcItemTransfers[].npcId` → `unitItemTransfers[].unitId`、`defeatedMonsters[].monsterId` → `defeatedUnits[].unitId`；第 1、2 版回應的舊欄位名會在解析時轉成新名稱，第 3 版使用舊欄位名則視為格式錯誤。版本號不支援的回應會被拒絕：顯示「格式版本不受支援，本回合未套用任何變更」，不顯示其敘事、不套用狀態、不重試。日後新增請求類型（劇情片段選擇、重要角色決策等）時提高版本號，並各自加上前端驗證。
 
 ## 提供者 API 呼叫
 
@@ -62,7 +62,7 @@ sendPlayerAction(
 
 ```json
 {
-  "formatVersion": 2,
+  "formatVersion": 3,
   "storyText": "你察覺林間傳來一陣急促的腳步聲。",
   "suggestedActions": ["躲到樹後", "拔出武器戒備"],
   "encounterRequest": null,
@@ -86,29 +86,51 @@ sendPlayerAction(
 
 有檢定時，`stat` 可為 `atk`、`def`、`spd`、`str`、`dex`、`con`、`int`、`wis`、`cha`，DC 限整數 5–25，且必須提供成功與失敗敘述。能力值檢定採 d20 + `floor((能力值 - 10) / 2)` + 種族/職階的 `checkBonuses`；攻防速使用種族 × 職階 × 等級公式計算的數值加上裝備加值（見下方「單位成長」）。成功時套用 `stateChanges`，失敗時套用 `failureStateChanges`。失敗分支不能發放經驗、道具、任務完成或擊敗怪物紀錄。
 
-`encounterRequest` 只能指向本地區、已解鎖且玩家確實看見/接觸的魔物；遊戲驗證後才將其顯示在 HUD。每個單位明確定義預設對玩家關係（友善、中立、敵對），實際關係依「個人關係覆寫 → 所屬勢力聲望等級 → 單位預設值」判定（見「勢力聲望與勢力間關係」）；`stateChanges.unitDispositionChanges` 只能變更目前地區存活單位的關係，遊戲會保存覆寫。九大陣營描述價值傾向，不直接決定敵友；敵對 NPC 不可提供任務或交易，敵對 NPC 與已遭遇的敵對魔物都可由 HUD 發起戰鬥。NPC 與魔物的實例狀態（等級、經驗、HP、死亡、持有物）保存在玩家快照的 `unitInstances`；擊倒 NPC 時玩家取得該 NPC 實例的全部持有物與金幣（記錄於交易紀錄，NPC 持有物清空），並依劇本 `rules.npcKillGrantsExp`（目前為 `true`）以與魔物相同的公式獲得經驗；殺害的後果由勢力聲望承擔。明確攻擊友善/中立單位會視為挑釁並轉為敵對。
+`encounterRequest`（`{ "unitId": "..." }`）只能指向本地區、已解鎖且玩家確實看見/接觸的需遭遇單位；遊戲驗證後才將其顯示在 HUD。每個單位明確定義預設對玩家關係（友善、中立、敵對），實際關係依「個人關係覆寫 → 所屬勢力聲望等級 → 單位預設值」判定（見「勢力聲望與勢力間關係」）；`stateChanges.unitDispositionChanges` 只能變更目前地區存活單位的關係，遊戲會保存覆寫。九大陣營描述價值傾向，不直接決定敵友；敵對的單位不可提供任務或交易；敵對的地區居民與已遭遇的敵對單位都可由 HUD 發起戰鬥。單位的實例狀態（等級、經驗、HP、死亡、持有物）保存在 `unitInstances`；擊倒的結算見「單位模型」。明確攻擊友善/中立單位會視為挑釁並轉為敵對。
 
-`stateChanges` 支援 HP/MP/EXP/金幣增減、道具增加/移除、怪物擊敗紀錄、單位關係變更、任務接受及任務完成回報。劇情旗標不能由 AI 直接設定（舊格式的 `setFlags` 會被忽略），只能經由世界事件成立（見下方「世界事件、世界修正與世界規則」）。AI 只能對遊戲提供的「目前地區可接取任務」提出 `questAcceptances: ["QST-001"]`；玩家詢問任務不等於接受。HUD 按鈕及對話接受會共用同一驗證，確認玩家位於任務指定地圖、任務給予者 NPC 確實在場且存活、非敵對，且任務尚未接取或完成。靜態任務資料定義需求、獎勵值及上下限，完成時再次檢查需求；交付道具會從背包扣除，獎勵只發放一次。NPC 靜態資料以 ID、姓名、職稱、種族、職階、等級和所在地圖定義，數值由單位成長公式計算，可用 `statAdjustments` 做有上限的相對修正。地圖的 `npcsPresent` 使用 NPC ID。消耗品的 `usableInCombat` 布林欄位控制是否可在戰鬥中使用，描述文字只用於說明；consumable 的 `effect.hpRestore`/`effect.mpRestore` 定義固定回復量；玩家可從 HUD 使用背包中的消耗品，回復不會超過角色資源上限，無實際回復時不扣除道具。戰鬥中使用消耗品會觸發敵方反擊與 d20 閃避檢定。戰鬥狀態以 `{ "round": 1, "participants": [{ "unitId": "PLAYER-001", "side": "party" }, { "unitId": "NPC-001", "side": "enemy", "currentHp": 20 }], "targetUnitId": "NPC-001" }` 表示，預留 O35 多對多戰鬥；我方 HP 存於各自存檔/實例，敵方 HP 於戰鬥中追蹤。目前規則仍為玩家對單一敵人，不同種類仍套用專屬掉落/能力規則。玩家存檔包含穩定單位 ID `unitId: "PLAYER-001"`（存檔中必須為此保留 ID）；共用查詢 `resolveWorldUnit(player, unitId)` 可辨識玩家、NPC 與魔物，玩家視圖的 `stats` 以與 NPC/魔物相同的公式計算並加上裝備。玩家 ID 不可作為 `unitDispositionChanges`、`encounterRequest` 或戰鬥目標，NPC/魔物資料也不得使用此 ID。主動技能定義於 `skills.json`，由職階的 `skillUnlocks` 依等級解鎖，技能 effect 定義傷害倍率，程式以 `max(1, floor(玩家 ATK × multiplier) - 敵方 DEF)` 計算傷害；技能消耗 MP 並消耗玩家回合。地圖移動使用獨立欄位 `travelRequest`，格式為 `{ "destinationMapId": "MAP-002" }`。Gemini GenerateContent 請求會使用 JSON Schema 強制包含所有回應欄位，並將 `travelRequest.destinationMapId` 限制為本次可移動的相鄰地圖 ID、將 `encounterRequest.monsterId` 限制為可遭遇魔物 ID、將 `questAcceptances` 限制為本區可接取任務 ID、將 `unitDispositionChanges.unitId` 限制為當前地區單位 ID；這保證格式與欄位，不代表語意正確，因此遊戲端仍會驗證。只有玩家明確要求移動時才設定；模型收到的可移動地區清單包含相鄰地圖 ID、正式名稱、專屬別名及分類標籤。泛稱地點會根據可到達候選和上一個地區解析；若仍有多個候選，前端要求玩家選擇，不把泛稱綁定到單一地圖。若 AI 敘事聲稱玩家已移動，但缺少或填錯 `travelRequest`，系統會附上合法目的地清單要求模型重產一次完整 JSON（受 `ai_context.json` 的 `maxCallsPerTurn` 限制）；判斷敘事是否宣稱移動時，會略過引號內的對話（「」『』“”）以及移動動詞前帶有過去、假設或打算語氣（例如曾經、上次、打算、如果、等你）的句子，避免 NPC 談到其他地名時誤送修正請求；前端從玩家文字判斷的明確移動意圖（會優先於 AI 的 `travelRequest`）排除否定、詢問（含「嗎」與問號）、過去經歷（上次、以前、曾）與安危打聽，例如「你上次去那裡是什麼時候？」不算移動；仍無有效請求時不會移動，並會在對話明確提示。前端再次驗證地圖 ID、連通性及戰鬥狀態後，才更新 `currentMapId`。詢問地點、觀察或含糊意圖不會移動。回應不可用 `stateChanges` 修改地圖。
+`stateChanges` 支援 HP/MP/EXP/金幣增減、道具增加/移除、單位擊倒紀錄（`defeatedUnits`）、單位關係變更、任務接受及任務完成回報。劇情旗標不能由 AI 直接設定（舊格式的 `setFlags` 會被忽略），只能經由世界事件成立（見下方「世界事件、世界修正與世界規則」）。AI 只能對遊戲提供的「目前地區可接取任務」提出 `questAcceptances: ["QST-001"]`；玩家詢問任務不等於接受。HUD 按鈕及對話接受會共用同一驗證，確認玩家位於任務指定地圖、任務給予者（地區居民）確實在場且存活、非敵對，且任務尚未接取或完成。靜態任務資料定義需求、獎勵值及上下限，完成時再次檢查需求；交付道具會從背包扣除，獎勵只發放一次。單位樣板以 ID、名稱、稱號、種族、職階與等級定義，數值由單位成長公式計算，可用 `statAdjustments` 做有上限的相對修正；所在地由地圖的 `unitsPresent` 決定。消耗品的 `usableInCombat` 布林欄位控制是否可在戰鬥中使用，描述文字只用於說明；consumable 的 `effect.hpRestore`/`effect.mpRestore` 定義固定回復量；玩家可從 HUD 使用背包中的消耗品，回復不會超過角色資源上限，無實際回復時不扣除道具。戰鬥中使用消耗品會觸發敵方反擊與 d20 閃避檢定。戰鬥狀態以 `{ "round": 1, "participants": [{ "unitId": "PLAYER-001", "side": "party" }, { "unitId": "NPC-001", "side": "enemy", "currentHp": 20 }], "targetUnitId": "NPC-001" }` 表示，預留 O35 多對多戰鬥；我方 HP 存於各自存檔/實例，敵方 HP 於戰鬥中追蹤。目前規則仍為玩家對單一敵人。玩家存檔包含穩定單位 ID `unitId: "PLAYER-001"`（存檔中必須為此保留 ID）；共用查詢 `resolveWorldUnit(player, unitId)` 可辨識玩家與其他單位，玩家視圖的 `stats` 以相同公式計算並加上裝備。玩家 ID 不可作為 `unitDispositionChanges`、`encounterRequest` 或戰鬥目標，單位資料也不得使用此 ID。主動技能定義於 `skills.json`，由職階的 `skillUnlocks` 依等級解鎖，技能 effect 定義傷害倍率，程式以 `max(1, floor(玩家 ATK × multiplier) - 敵方 DEF)` 計算傷害；技能消耗 MP 並消耗玩家回合。地圖移動使用獨立欄位 `travelRequest`，格式為 `{ "destinationMapId": "MAP-002" }`。Gemini GenerateContent 請求會使用 JSON Schema 強制包含所有回應欄位，並將 `travelRequest.destinationMapId` 限制為本次可移動的相鄰地圖 ID、將 `encounterRequest.unitId` 限制為可遭遇單位 ID、將 `questAcceptances` 限制為本區可接取任務 ID、將 `unitDispositionChanges.unitId` 限制為當前地區單位 ID；這保證格式與欄位，不代表語意正確，因此遊戲端仍會驗證。只有玩家明確要求移動時才設定；模型收到的可移動地區清單包含相鄰地圖 ID、正式名稱、專屬別名及分類標籤。泛稱地點會根據可到達候選和上一個地區解析；若仍有多個候選，前端要求玩家選擇，不把泛稱綁定到單一地圖。若 AI 敘事聲稱玩家已移動，但缺少或填錯 `travelRequest`，系統會附上合法目的地清單要求模型重產一次完整 JSON（受 `ai_context.json` 的 `maxCallsPerTurn` 限制）；判斷敘事是否宣稱移動時，會略過引號內的對話（「」『』“”）以及移動動詞前帶有過去、假設或打算語氣（例如曾經、上次、打算、如果、等你）的句子，避免人物談到其他地名時誤送修正請求；前端從玩家文字判斷的明確移動意圖（會優先於 AI 的 `travelRequest`）排除否定、詢問（含「嗎」與問號）、過去經歷（上次、以前、曾）與安危打聽，例如「你上次去那裡是什麼時候？」不算移動；仍無有效請求時不會移動，並會在對話明確提示。前端再次驗證地圖 ID、連通性及戰鬥狀態後，才更新 `currentMapId`。詢問地點、觀察或含糊意圖不會移動。回應不可用 `stateChanges` 修改地圖。
 
 ## 角色建立、章節任務與特殊戰鬥
 
-新角色從 `playerSelectable` 職階中選擇，種族取自劇本設定的 `defaultPlayer.speciesId`；能力值、HP/MP 與攻防速依下方單位成長公式計算，起始裝備和物品由職階資料提供。角色可選九大陣營之一。靜態數值調整後，存檔中超出新上限的 HP/MP 會夾回上限，而非讓存檔失效。姓名與職稱只描述身份，不決定數值。NPC 的 `startingInventory`/`startingGold` 初始化為可保存的世界持有物；交易、任務交付和 NPC 物品轉移會改變此存檔狀態。
+新角色從 `playerSelectable` 職階中選擇，種族取自劇本設定的 `defaultPlayer.speciesId`；能力值、HP/MP 與攻防速依下方單位成長公式計算，起始裝備和物品由職階資料提供。角色可選九大陣營之一。靜態數值調整後，存檔中超出新上限的 HP/MP 會夾回上限，而非讓存檔失效。姓名與職稱只描述身份，不決定數值。單位的 `startingInventory`/`startingGold` 初始化為可保存的世界持有物；交易、任務交付和單位物品轉移會改變此存檔狀態。
+
+## 單位模型（units.json）
+
+玩家以外的所有單位使用同一個樣板結構 `UnitStatic`（`src/data/units.json`），不再區分 NPC 與魔物；引擎只看下列欄位，「人物」「魔物」只是劇本內容的說法。ID 沿用寫手的編號習慣（`NPC-xxx`、`MON-xxx`），引擎不依前綴判斷。
+
+| 欄位 | 意義 | 引擎行為 |
+| --- | --- | --- |
+| `population` | 族群樣板：代表一群可重複遭遇的個體 | 擊倒不寫死亡事件、依種族 `respawnDays` 重生；未設定即為具名的唯一個體（死亡永久、寫入死亡事件、不重生） |
+| `requiresEncounter` | 需要遭遇才會出現 | 進入地區時不在場，須探索遭遇（AI `encounterRequest` 或等待打斷）後才能交戰；安全地區不會遭遇；每次戰鬥以完整 HP 開始；成長上限為出沒地區建議等級 +3；可作為支線委託的討伐目標。未設定即為**地區居民**：進入地區即在場，可交談、交易、發布委託與成為委託接手者，戰鬥 HP 保留在實例中，成長上限為基準表最高等級 |
+| `isBoss` | 頭目 | 擊倒時顯示勝利訊息；不可同時是族群 |
+| `requiredQuestId` | 前置任務 | 只有此任務進行中時才能遭遇 |
+| `title`、`enName`、`tier`、`description`、`tactics` | 顯示與給 AI 的描述 | 顯示名稱為「稱號 + 名字」 |
+| `shopId` | 經營的商店 | 經營者在場（居民，或已遭遇的需遭遇單位）、存活、非敵對時可交易 |
+| `startingGold`、`startingInventory` | 初始持有物（世界實際庫存） | 交易、委託報酬、物品轉移與擊倒取得都以實例持有物為準 |
+| `loot` | 掉落表（`gold` 與 `dropItems[].chance`） | 擊倒時另外擲骰產生 |
+| `specialAbilities` | 特殊招式（可含 `combatAction`） | 敵方回合依 `triggerEveryRounds` 施放 |
+
+- **出現地點**：地圖的 `unitsPresent` 列出出現在該地區的單位（取代原本的 `npcsPresent`／`monstersPresent`）。單位的 `mapIds` 由此推得，`homeMapId` 為第一張列出它的地圖；地區居民只能列在一張地圖，族群樣板必須是需遭遇單位。
+- **擊倒**：任何單位都走同一流程：取得其持有物、依掉落表擲骰、記入 `defeatedUnits` 與任務進度、依公式給予經驗。地區居民的經驗可由 `scenario.json` 的 `rules.residentKillGrantsExp` 關閉（目前為 `true`），需遭遇單位一律給予；殺害的後果由勢力聲望承擔。唯一個體擊倒即永久死亡。
+- **商店**：`shops.json` 以 `ownerUnitId` 指向經營者，經營者的 `shopId` 必須指回該商店。
+- **任務需求**：`requirements.defeatUnits: [{ unitId, quantity }]`；玩家的擊倒計數為 `defeatedUnits`。
+- 共用查詢：`getWorldUnitById`、`getWorldUnitsAtMap`、`getResidentUnitIds(map)`、`getEncounterUnitIds(map)`（`src/data/staticData.ts`）。`validateWorldUnitData` 檢查上述規則與參照。
 
 ## 單位成長：種族、職階與等級
 
-玩家、NPC、魔物共用同一套單位模型與公式（`src/utils/unitGrowth.ts`）：
+玩家與所有單位共用同一套公式（`src/utils/unitGrowth.ts`）：
 
 - `species.json`：種族的數值倍率 `statMultipliers`（hp/mp/atk/def/spd）、能力值修正、檢定加值、擊倒經驗倍率、天生特性，以及可搭配的職階類別 `allowedClassCategories` 與是否允許無職階 `allowsNoClass`（例如野獸）。
 - `character_classes.json`：24 種職階，`category` 為 `combat`／`social`／`life`，含 `playerSelectable`、數值倍率、能力值修正、`checkBonuses`、`expRewardMultiplier`、`skillUnlocks`；玩家可選職階另需 `startingItems`/`startingEquipment`。
 - `level_benchmarks.json`：同等級強度基準表（Lv.1–10），定義各等級的標準 hp/mp/atk/def/spd、升級所需累計經驗 `requiredExp` 與基準擊倒經驗 `expReward`。
 - 有效數值 = `round(基準[等級] × 種族倍率 × 職階倍率) + statAdjustments`（玩家再加裝備）；能力值 = 10 + 種族修正 + 職階修正（1–30）；擊倒經驗 = `round(基準 expReward × 種族倍率 × 職階倍率)`，不由資料手填。
-- NPC/魔物資料是單位樣板（`speciesId`、`classId?`、`level`、`statAdjustments?`）；存檔的 `unitInstances` 是世界中實際的個體（`level`、`exp`、`currentHp`、`isDead`、`diedAtMinutes`、`gold`、`inventory`），數值依實例等級計算並疊加世界修正。存檔只保存與樣板預設不同的實例；讀檔時缺少的實例（包含靜態資料新增的單位）由樣板補上。
-- 升級規則共用：累計經驗達基準表 `requiredExp` 即升級，升級增加的 HP 上限同步補給。NPC 上限為基準表最高等級；魔物上限為出沒地區建議等級上限 +3。單位擊倒玩家時獲得玩家的擊倒經驗。
-- `npm run build` 會先執行 `npm run validate:data`（`scripts/validate-data.mjs`），拒絕不存在或不可搭配的種族/職階組合、超出基準表的等級、超過公式結果 50% 的 `statAdjustments`、超出地區上限的魔物等級、等級基準表不連續或遞減，以及劇本設定的無效起始地圖/職階。
+- `units.json` 是單位樣板（`speciesId`、`classId?`、`level`、`statAdjustments?`）；存檔的 `unitInstances` 是世界中實際的個體（`level`、`exp`、`currentHp`、`isDead`、`diedAtMinutes`、`gold`、`inventory`），數值依實例等級計算並疊加世界修正。存檔只保存與樣板預設不同的實例；讀檔時缺少的實例（包含靜態資料新增的單位）由樣板補上。
+- 升級規則共用：累計經驗達基準表 `requiredExp` 即升級，升級增加的 HP 上限同步補給。地區居民上限為基準表最高等級；需遭遇單位上限為出沒地區建議等級上限 +3。單位擊倒玩家時獲得玩家的擊倒經驗。
+- `npm run build` 會先執行 `npm run validate:data`（`scripts/validate-data.mjs`），拒絕不存在或不可搭配的種族/職階組合、超出基準表的等級、超過公式結果 50% 的 `statAdjustments`、超出地區上限的需遭遇單位等級、地圖與商店的單位參照、等級基準表不連續或遞減，以及劇本設定的無效起始地圖/職階。
 
 ## 劇本設定
 
-`src/data/scenario.json` 集中存放劇本專屬內容：規則開關 `rules`（`npcKillGrantsExp`：擊倒 NPC 是否給經驗）、新角色接續設定 `succession`（`relatedLabel` 選項文字、`reputationInheritRatio` 聲望繼承比例，可省略）、主持人定位 `gmRole`、起始地圖/金幣/遊戲時間 `start`、預設角色 `defaultPlayer`（名稱、種族、職階、陣營）、開場文字 `opening`（`introText`、`resetText`、可用 `{name}`/`{className}` 的 `newCharacterText`、`suggestedActions`）、輸入框提示 `inputPlaceholder`，以及不屬於世界觀、玩家不可憑空取出的物品詞彙 `anachronisticItemTerms`。`src/` 程式碼（不含 `src/data/`）不出現具體內容 ID 或名稱，替換劇本資料即可更換開場與起始地點。
+`src/data/scenario.json` 集中存放劇本專屬內容：規則開關 `rules`（`residentKillGrantsExp`：擊倒地區居民是否給經驗）、新角色接續設定 `succession`（`relatedLabel` 選項文字、`reputationInheritRatio` 聲望繼承比例，可省略）、主持人定位 `gmRole`、起始地圖/金幣/遊戲時間 `start`、預設角色 `defaultPlayer`（名稱、種族、職階、陣營）、開場文字 `opening`（`introText`、`resetText`、可用 `{name}`/`{className}` 的 `newCharacterText`、`suggestedActions`）、輸入框提示 `inputPlaceholder`，以及不屬於世界觀、玩家不可憑空取出的物品詞彙 `anachronisticItemTerms`。`src/` 程式碼（不含 `src/data/`）不出現具體內容 ID 或名稱，替換劇本資料即可更換開場與起始地點。
 
 新手章節任務為 `QST-001` 清理綠林古道，完成後解鎖 `QST-002` 討伐哥布林酋長；`MAP-003` 哥布林巢穴需先接取 QST-002 才能進入，UI 和對話移動共用地圖解鎖驗證。`MON-003` 格羅姆・裂牙每第三回合使用「裂地重擊」，玩家進行敏捷 DC 14 檢定；失敗時受到 `floor(敵方 ATK × 1.5) - floor(玩家 DEF / 4)` 傷害，存活時昏迷一回合並跳過下一個行動。一般敵方反擊依防禦 DC 擲骰。HP 降至 0 即死亡，昏迷只由獨立狀態效果表示。
 
@@ -116,7 +138,7 @@ sendPlayerAction(
 
 明確的自我傷害指令（例如「對自己造成 1 點傷害」或「自殘 10 點生命」）由前端解析數值並直接套用 `hpChange`，不依賴 AI 是否正確輸出狀態欄位；若辨識到自傷意圖但無法確定數值，會先請玩家補充，不送交模型敘事。實際扣血不超過目前 HP，HP 歸零仍觸發死亡。其他會改變遊戲狀態的 AI 行動須使用 `stateChanges`、`travelRequest` 或 `checkRequest` 對應欄位，遊戲端才會更新狀態和 HUD。劇本設定 `anachronisticItemTerms` 所列、不屬於世界觀的物品要求（比對時忽略大小寫、空白與連字號）會在送 AI 前拒絕；AI 亦不可透過敘事或 `addItems` 生成庫存之外的物品。
 
-商店由 `shops.json` 定義 NPC、商品清單及服務，NPC 以 `shopId` 關聯商店。玩家只能在商店 NPC 所在且該 NPC 出現在當前地圖時交易，戰鬥、死亡或昏迷時禁止交易。買賣需同時檢查玩家金幣/物品與商人金幣/庫存，並同步轉移雙方資產；任務道具不可出售。購買的武器、防具及飾品可從背包裝備。旅店提供 5 金幣的休息服務，恢復 HP/MP、推進遊戲時間 8 小時，並將費用轉入旅店老闆持有金幣；服務可由 HUD 按鈕或 AI 對話使用，兩者共用 `purchaseService` 規則。AI 回應必須包含 `serviceRequest`，格式為 `{ "shopId": "SHOP-002", "serviceId": "SERVICE-REST-001" }` 或 `null`；只可選擇遊戲提供的「當前可使用服務」（商店 NPC 在場、存活、非敵對，Gemini JSON Schema 以 enum 限制），且只在玩家明確要求使用服務時設定。前端驗證後才扣款、轉帳、恢復並推進時間，失敗時在對話中說明原因；AI 不可用 `hpChange`/`goldChange` 描述同一服務。同一回合若同時移動，服務請求不處理。服務與物品交易均保留最近 100 筆交易紀錄。遊戲時鐘以玩家存檔的 `gameTimeMinutes`（自世界開始經過的分鐘數，新角色為第 1 天 08:00）保存。時間只在有效行動完成後依行動類型固定推進：對話/任務接取與交付/一般 AI 回合 10 分鐘、買賣 10 分鐘、地區移動 2 小時、旅店休息 8 小時、每個戰鬥回合（含逃跑與昏迷失去的回合）1 分鐘、裝備/非戰鬥使用道具或治療技能/自傷 1 分鐘；被拒絕或要求釐清的行動不耗時。AI 回合若同時移動，只計移動耗時；若透過 `serviceRequest` 成功使用服務，只計服務耗時。原地等待是唯一可變時長的行動：玩家明確輸入時長（例如「等待 2 小時」「等一個半小時」「等 30 分鐘」「在這裡待三天」）時由前端解析並推進時間，不呼叫 AI；單次上限 8 小時，超過則不推進，並提示玩家原本要求的時長、上限與目前時間。以天、週、月、年為單位的時長（「等兩天」「等一整天」「等半天」「等幾天」）也會解析並拒絕；「睡／休息／度過」加上一天以上的時長同樣攔截，較短的休息照常交給 AI（例如使用旅店服務）。「三天後」「一天內」是時間點而非時長，不視為等待。等待只推進時間、不回復 HP/MP；戰鬥中、昏迷或死亡時不可等待。未指定時長的「原地等待」會要求玩家補充時長；「等到天亮」「等天亮」等依時段等待尚未支援（需日夜時段），會提示改用時長；「等一下」「等待村長回覆」等不含時長的句子照常交給 AI，但仍只計一般回合 10 分鐘。目前時間顯示於 HUD 與快照恢復訊息，並以「第 N 天 HH:MM」提供給 AI 上下文，AI 不能自行推進時間。任務交付必須在任務給予者所在區域進行，玩家可由 HUD 交付；需求道具轉入 NPC 持有物，獎勵物品/金幣只能從 NPC 現有存量發放，不足時標記短缺，不會憑空生成。AI 的 `npcItemTransfers` 只能轉移當前在場 NPC 實際持有且存在於靜態資料庫的物品。
+商店由 `shops.json` 定義經營者 `ownerUnitId`、商品清單及服務，經營者以 `shopId` 指回商店。玩家只能在經營者出現在當前地圖時交易，戰鬥、死亡或昏迷時禁止交易。買賣需同時檢查玩家金幣/物品與商人金幣/庫存，並同步轉移雙方資產；任務道具不可出售。購買的武器、防具及飾品可從背包裝備。旅店提供 5 金幣的休息服務，恢復 HP/MP、推進遊戲時間 8 小時，並將費用轉入旅店老闆持有金幣；服務可由 HUD 按鈕或 AI 對話使用，兩者共用 `purchaseService` 規則。AI 回應必須包含 `serviceRequest`，格式為 `{ "shopId": "SHOP-002", "serviceId": "SERVICE-REST-001" }` 或 `null`；只可選擇遊戲提供的「當前可使用服務」（經營者在場、存活、非敵對，Gemini JSON Schema 以 enum 限制），且只在玩家明確要求使用服務時設定。前端驗證後才扣款、轉帳、恢復並推進時間，失敗時在對話中說明原因；AI 不可用 `hpChange`/`goldChange` 描述同一服務。同一回合若同時移動，服務請求不處理。服務與物品交易均保留最近 100 筆交易紀錄。遊戲時鐘以玩家存檔的 `gameTimeMinutes`（自世界開始經過的分鐘數，新角色為第 1 天 08:00）保存。時間只在有效行動完成後依行動類型固定推進：對話/任務接取與交付/一般 AI 回合 10 分鐘、買賣 10 分鐘、地區移動 2 小時、旅店休息 8 小時、每個戰鬥回合（含逃跑與昏迷失去的回合）1 分鐘、裝備/非戰鬥使用道具或治療技能/自傷 1 分鐘；被拒絕或要求釐清的行動不耗時。AI 回合若同時移動，只計移動耗時；若透過 `serviceRequest` 成功使用服務，只計服務耗時。原地等待是唯一可變時長的行動：玩家明確輸入時長（例如「等待 2 小時」「等一個半小時」「等 30 分鐘」「在這裡待三天」）時由前端解析並推進時間，不呼叫 AI；單次上限 8 小時，超過則不推進，並提示玩家原本要求的時長、上限與目前時間。以天、週、月、年為單位的時長（「等兩天」「等一整天」「等半天」「等幾天」）也會解析並拒絕；「睡／休息／度過」加上一天以上的時長同樣攔截，較短的休息照常交給 AI（例如使用旅店服務）。「三天後」「一天內」是時間點而非時長，不視為等待。等待只推進時間、不回復 HP/MP；戰鬥中、昏迷或死亡時不可等待。未指定時長的「原地等待」會要求玩家補充時長；「等到天亮」「等天亮」等依時段等待尚未支援（需日夜時段），會提示改用時長；「等一下」「等待村長回覆」等不含時長的句子照常交給 AI，但仍只計一般回合 10 分鐘。目前時間顯示於 HUD 與快照恢復訊息，並以「第 N 天 HH:MM」提供給 AI 上下文，AI 不能自行推進時間。任務交付必須在任務給予者所在區域進行，玩家可由 HUD 交付；需求道具轉入委託人持有物，獎勵物品/金幣只能從委託人現有存量發放，不足時標記短缺，不會憑空生成。AI 的 `unitItemTransfers` 只能轉移當前在場居民（或已遭遇的單位）實際持有且存在於靜態資料庫的物品。
 
 戰鬥外可施放已解鎖的資源技能。範例「急救術」消耗 5 MP 恢復最多 20 HP；若 MP 不足或 HP 已滿，不消耗資源。戰鬥中的傷害技能與戰鬥外治療技能依效果類型分別提供，MP 消耗和效果由程式結算。
 
@@ -218,7 +240,7 @@ sendPlayerAction(
 - **匯出／匯入**：存檔管理可將一個世界的所有欄位匯出為 JSON（`format: "adventure-simulator-world"`）。匯入時驗證格式、版本、劇本與每個欄位內容，任何欄位無效即整份拒絕；一律以新世界 ID 匯入，不覆蓋任何現有存檔，寫入中途失敗會移除已寫入的欄位。
 - **容量管理**：存檔管理顯示本遊戲在 localStorage 的估計用量（以約 5 MB 上限計），達 80% 時警示；寫入失敗（例如容量不足）時 HUD 提示匯出備份，其他欄位不受影響。事件紀錄超過 200 件即壓縮成編年史，且存檔只保存有差異的單位實例；目前容量足夠，暫不改用 IndexedDB。
 
-存檔帶有 `schemaVersion`（`saveStorage.ts` 的 `SAVE_SCHEMA_VERSION`，目前為 7）。開發階段每次變更存檔格式就將版本加一；版本不符、缺少欄位或格式無效的存檔直接捨棄，不提供舊格式遷移；舊版單一快照（`TRPG_GAME_SESSION`、`TRPG_PLAYER_STATE`）在啟動時移除。正式上線後才開始為舊版本撰寫遷移。
+存檔帶有 `schemaVersion`（`saveStorage.ts` 的 `SAVE_SCHEMA_VERSION`，目前為 8）。開發階段每次變更存檔格式就將版本加一；版本不符、缺少欄位或格式無效的存檔直接捨棄，不提供舊格式遷移；舊版單一快照（`TRPG_GAME_SESSION`、`TRPG_PLAYER_STATE`）在啟動時移除。正式上線後才開始為舊版本撰寫遷移。
 
 ## 金鑰安全限制
 

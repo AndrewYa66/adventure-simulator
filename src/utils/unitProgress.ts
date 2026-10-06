@@ -9,8 +9,8 @@ export interface UnitExpResult {
 }
 
 /**
- * NPC/魔物實例獲得經驗並依等級基準表升級（與玩家同一升級規則）。
- * 魔物上限為出沒地區建議等級 +3；升級增加的 HP 上限同步補到目前 HP。死亡個體不再成長。
+ * 單位實例獲得經驗並依等級基準表升級（與玩家同一升級規則）。
+ * 需遭遇單位的上限為出沒地區建議等級 +3；升級增加的 HP 上限同步補到目前 HP。死亡個體不再成長。
  */
 export function grantUnitExp(instances: Record<string, UnitInstance>, unitId: string, amount: number, world?: { modifiers: WorldModifier[] }): UnitExpResult | undefined {
   const template = unitTemplatesDatabase().find((entry) => entry.id === unitId);

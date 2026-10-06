@@ -1,7 +1,7 @@
 import React from 'react';
 import { AIContextDebugPanel } from './AIContextDebugPanel';
 import type { PlayerState } from '../types/game';
-import { canPlayerEnterMap, factionData, factionsDatabase, getCharacterClassById, getFactionById, getFactionRelation, getFactionReputation, getItemById, getMapById, describeUnitBuild, getLevelBenchmark, getReputationTier, getSpeciesById, getPlayerResourceCaps, getQuestById, getShopForNpc, getUnlockedSkills, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap } from '../data/staticData';
+import { canPlayerEnterMap, factionData, factionsDatabase, getCharacterClassById, getFactionById, getFactionRelation, getFactionReputation, getItemById, getMapById, describeUnitBuild, getLevelBenchmark, getReputationTier, getSpeciesById, getPlayerResourceCaps, getQuestById, getShopForUnit, getUnlockedSkills, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap } from '../data/staticData';
 import { getPlayerStatBreakdown, STAT_LABELS } from '../utils/gameChecks';
 import { canAcceptQuest, canTurnInQuest, getQuestGiverName, isGeneratedQuest, listVisibleQuests } from '../utils/questRules';
 import { canPlayerAct, isPlayerUnconscious } from '../utils/playerStatus';
@@ -37,7 +37,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
   const unlockedSkills = getUnlockedSkills(player.classId, player.level);
 
   const currentMap = getMapById(player.currentMapId);
-  const presentNpcs = getWorldUnitsAtMap(player.currentMapId, player).filter((unit) => unit.kind === 'npc');
+  const presentResidents = getWorldUnitsAtMap(player.currentMapId, player).filter((unit) => !unit.requiresEncounter);
   const weapon = player.equipped.weaponItemId ? getItemById(player.equipped.weaponItemId) : null;
   const armor = player.equipped.armorItemId ? getItemById(player.equipped.armorItemId) : null;
   const combatStats = (['atk', 'def', 'spd'] as const).map((stat) => ({
@@ -154,21 +154,20 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
 
       <div>
         <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #444' }}>🧑‍🤝‍🧑 當前地區人物</h4>
-        {presentNpcs.map((unit) => {
-          const npc = unit.source;
+        {presentResidents.map((unit) => {
           const stats = unit.stats;
           const disposition = getWorldUnitDisposition(player, unit.id);
-          const npcState = player.unitInstances[npc.id];
+          const unitState = player.unitInstances[unit.id];
           const dispositionLabel = disposition === 'friendly' ? '友善' : disposition === 'hostile' ? '敵對' : '中立';
-          return <div key={npc.id} style={{ marginBottom: '7px', fontSize: '12px' }}>
-            <strong>{npc.name}・{npc.title}</strong>{unit.factionId && <span style={{ color: '#9fa8da', marginLeft: '6px' }}>［{getFactionById(unit.factionId)?.name ?? unit.factionId}］</span>}
-            <div style={{ color: '#aaa' }}>{describeUnitBuild(unit)} · 關係：{dispositionLabel} · HP {npcState?.currentHp ?? stats.hp}/{stats.hp} · ATK {stats.atk} · DEF {stats.def} · SPD {stats.spd}{npcState?.isDead ? ' · 已死亡' : ''}</div>
-            {!npcState?.isDead && disposition === 'hostile' && <button onClick={() => onStartCombat(npc.id)} disabled={!canPlayerAct(player) || !!player.combat} style={{ margin: '4px 0', padding: '4px 7px' }}>挑戰 {npc.name}</button>}
-            {!npcState?.isDead && <div style={{ color: '#888' }}>持有：金幣 {npcState?.gold ?? 0} · {(npcState?.inventory ?? []).map((entry) => `${getItemById(entry.itemId)?.name ?? entry.itemId} ×${entry.quantity}`).join('、') || '無物品'}</div>}
+          return <div key={unit.id} style={{ marginBottom: '7px', fontSize: '12px' }}>
+            <strong>{unit.name}{unit.title ? `・${unit.title}` : ''}</strong>{unit.factionId && <span style={{ color: '#9fa8da', marginLeft: '6px' }}>［{getFactionById(unit.factionId)?.name ?? unit.factionId}］</span>}
+            <div style={{ color: '#aaa' }}>{describeUnitBuild(unit)} · 關係：{dispositionLabel} · HP {unitState?.currentHp ?? stats.hp}/{stats.hp} · ATK {stats.atk} · DEF {stats.def} · SPD {stats.spd}{unitState?.isDead ? ' · 已死亡' : ''}</div>
+            {!unitState?.isDead && disposition === 'hostile' && <button onClick={() => onStartCombat(unit.id)} disabled={!canPlayerAct(player) || !!player.combat} style={{ margin: '4px 0', padding: '4px 7px' }}>挑戰 {unit.name}</button>}
+            {!unitState?.isDead && <div style={{ color: '#888' }}>持有：金幣 {unitState?.gold ?? 0} · {(unitState?.inventory ?? []).map((entry) => `${getItemById(entry.itemId)?.name ?? entry.itemId} ×${entry.quantity}`).join('、') || '無物品'}</div>}
             {(() => {
-              const shop = getShopForNpc(npc);
+              const shop = getShopForUnit(unit.source);
               if (!shop) return null;
-              if (npcState?.isDead) return null;
+              if (unitState?.isDead) return null;
               const unavailable = !canPlayerAct(player) || !!player.combat || disposition === 'hostile';
               return <div style={{ marginTop: '5px', padding: '6px', background: '#29251d', borderRadius: '4px' }}>
                 <strong>🪙 {shop.name} · 金幣 {player.gold}</strong>
@@ -176,7 +175,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
                   const item = getItemById(listing.itemId);
                   if (!item) return null;
                   const price = listing.buyPrice ?? item.buyPrice;
-                  const stock = player.unitInstances[npc.id]?.inventory.find((entry) => entry.itemId === item.id)?.quantity ?? 0;
+                  const stock = player.unitInstances[unit.id]?.inventory.find((entry) => entry.itemId === item.id)?.quantity ?? 0;
                   return <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '4px', marginTop: '4px' }}>
                     <span>{item.name} · {price} 金幣 · 庫存 {stock}</span>
                     <button disabled={unavailable || player.gold < price || stock <= 0} onClick={() => onBuyItem(shop.id, item.id)}>購買</button>
@@ -200,7 +199,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
             })()}
           </div>;
         })}
-        {!presentNpcs.length && <div style={{ color: '#888', fontSize: '12px' }}>目前沒有在場人物。</div>}
+        {!presentResidents.length && <div style={{ color: '#888', fontSize: '12px' }}>目前沒有在場人物。</div>}
       </div>
 
       <div>
@@ -216,13 +215,13 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
           </div>;
         })() : (() => {
           const unit = player.encounteredUnitId ? getWorldUnitById(player.encounteredUnitId, player) : undefined;
-          const monster = unit?.kind === 'monster' ? unit : undefined;
-          const disposition = monster ? getWorldUnitDisposition(player, monster.id) : undefined;
+          const encountered = unit?.requiresEncounter ? unit : undefined;
+          const disposition = encountered ? getWorldUnitDisposition(player, encountered.id) : undefined;
           const dispositionLabel = disposition === 'friendly' ? '友善' : disposition === 'hostile' ? '敵對' : '中立';
-          return monster && currentMap?.monstersPresent.includes(monster.id)
+          return encountered && currentMap?.unitsPresent.includes(encountered.id)
             ? <div>
-              <div style={{ color: '#ffcc80', fontSize: '12px', marginBottom: '5px' }}>已遭遇：{monster.name}（{dispositionLabel}）</div>
-              {disposition === 'hostile' && <button onClick={() => onStartCombat(monster.id)} disabled={!canPlayerAct(player)} style={{ display: 'block', margin: '4px 0', padding: '5px 8px', background: '#4a2525', color: '#ffcdd2', border: '1px solid #844', borderRadius: '4px', cursor: canPlayerAct(player) ? 'pointer' : 'not-allowed' }}>挑戰 {monster.name}</button>}
+              <div style={{ color: '#ffcc80', fontSize: '12px', marginBottom: '5px' }}>已遭遇：{encountered.name}（{dispositionLabel}）</div>
+              {disposition === 'hostile' && <button onClick={() => onStartCombat(encountered.id)} disabled={!canPlayerAct(player)} style={{ display: 'block', margin: '4px 0', padding: '5px 8px', background: '#4a2525', color: '#ffcdd2', border: '1px solid #844', borderRadius: '4px', cursor: canPlayerAct(player) ? 'pointer' : 'not-allowed' }}>挑戰 {encountered.name}</button>}
             </div>
             : <div style={{ color: '#aaa', fontSize: '12px' }}>{currentMap?.isSafeZone ? '安全地區沒有敵人。' : '尚未遭遇敵人；探索或搜索周遭以觸發遭遇。'}</div>;
         })()}
@@ -245,11 +244,10 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
             </div>}
             {status === 'in_progress' && active?.giverUnitId && <div style={{ color: '#ffcc80' }}>原委託人已身亡，改由 {getQuestGiverName(player, quest)} 接手</div>}
             {status && <div style={{ marginTop: '4px', color: '#bbb' }}>
-              {(quest.requirements.defeatMonsters ?? []).map((requirement) => {
-                const count = active?.progress?.defeatedMonsters[requirement.monsterId] ?? 0;
-                const unit = getWorldUnitById(requirement.monsterId);
-                const name = unit?.kind === 'monster' ? unit.name : requirement.monsterId;
-                return <div key={requirement.monsterId}>擊敗 {name}: {Math.min(count, requirement.quantity)}/{requirement.quantity}</div>;
+              {(quest.requirements.defeatUnits ?? []).map((requirement) => {
+                const count = active?.progress?.defeatedUnits[requirement.unitId] ?? 0;
+                const name = getWorldUnitById(requirement.unitId)?.name ?? requirement.unitId;
+                return <div key={requirement.unitId}>擊敗 {name}: {Math.min(count, requirement.quantity)}/{requirement.quantity}</div>;
               })}
               {(quest.requirements.collectItems ?? []).map((requirement) => {
                 const item = getItemById(requirement.itemId);

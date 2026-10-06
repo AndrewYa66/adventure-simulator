@@ -53,10 +53,33 @@ const isItemChangeList = (value: unknown): boolean =>
     isRecord(item) && typeof item.itemId === 'string' && Number.isInteger(item.quantity) && (item.quantity as number) > 0
   );
 
-const isMonsterDefeatList = (value: unknown): boolean =>
+const isUnitDefeatList = (value: unknown): boolean =>
   Array.isArray(value) && value.every((entry) =>
-    isRecord(entry) && typeof entry.monsterId === 'string' && entry.quantity === 1
+    isRecord(entry) && typeof entry.unitId === 'string' && entry.quantity === 1
   );
+
+/** 第 1、2 版回應的單位欄位使用舊名稱；轉為第 3 版名稱後再驗證。格式不符的舊欄位原樣保留，交給驗證拒絕。 */
+function upgradeLegacyUnitFields(value: Record<string, unknown>): Record<string, unknown> {
+  const rename = (entries: unknown, from: string) => Array.isArray(entries)
+    ? entries.map((entry) => isRecord(entry) && from in entry ? (({ [from]: id, ...rest }) => ({ unitId: id, ...rest }))(entry) : entry)
+    : entries;
+  const upgradeChanges = (changes: unknown) => {
+    if (!isRecord(changes)) return changes;
+    const { npcItemTransfers, defeatedMonsters, ...rest } = changes;
+    return {
+      ...rest,
+      ...(npcItemTransfers !== undefined ? { unitItemTransfers: rename(npcItemTransfers, 'npcId') } : {}),
+      ...(defeatedMonsters !== undefined ? { defeatedUnits: rename(defeatedMonsters, 'monsterId') } : {})
+    };
+  };
+  const encounter = value.encounterRequest;
+  return {
+    ...value,
+    encounterRequest: isRecord(encounter) && 'monsterId' in encounter ? { unitId: encounter.monsterId } : encounter,
+    stateChanges: upgradeChanges(value.stateChanges),
+    failureStateChanges: upgradeChanges(value.failureStateChanges)
+  };
+}
 
 const isUnitDispositionChangeList = (value: unknown): boolean =>
   Array.isArray(value) && value.every((entry) =>
@@ -79,8 +102,11 @@ function readUnsupportedFormatVersion(text: string): string | undefined {
   }
 }
 
-function parseAIResponse(value: unknown): AIResponsePayload | null {
-  if (!isRecord(value) || readFormatVersion(value) === null || typeof value.storyText !== 'string' || !Array.isArray(value.suggestedActions) ||
+function parseAIResponse(raw: unknown): AIResponsePayload | null {
+  const version = isRecord(raw) ? readFormatVersion(raw) : null;
+  if (!isRecord(raw) || version === null) return null;
+  const value = version < 3 ? upgradeLegacyUnitFields(raw) : raw;
+  if (typeof value.storyText !== 'string' || !Array.isArray(value.suggestedActions) ||
       !value.suggestedActions.every((action) => typeof action === 'string')) return null;
 
   if (value.travelRequest !== undefined && value.travelRequest !== null &&
@@ -88,7 +114,7 @@ function parseAIResponse(value: unknown): AIResponsePayload | null {
   if (value.serviceRequest !== undefined && value.serviceRequest !== null &&
       (!isRecord(value.serviceRequest) || typeof value.serviceRequest.shopId !== 'string' || typeof value.serviceRequest.serviceId !== 'string')) return null;
   if (value.encounterRequest !== undefined && value.encounterRequest !== null &&
-      (!isRecord(value.encounterRequest) || typeof value.encounterRequest.monsterId !== 'string')) return null;
+      (!isRecord(value.encounterRequest) || typeof value.encounterRequest.unitId !== 'string')) return null;
 
   if (value.checkRequest !== undefined && value.checkRequest !== null) {
     const check = value.checkRequest;
@@ -109,11 +135,11 @@ function parseAIResponse(value: unknown): AIResponsePayload | null {
     }
     if (changes.addItems !== undefined && !isItemChangeList(changes.addItems)) return false;
     if (changes.removeItems !== undefined && !isItemChangeList(changes.removeItems)) return false;
-    if (changes.npcItemTransfers !== undefined && (!Array.isArray(changes.npcItemTransfers) || !changes.npcItemTransfers.every((transfer) =>
-      isRecord(transfer) && typeof transfer.npcId === 'string' && typeof transfer.itemId === 'string' &&
+    if (changes.unitItemTransfers !== undefined && (!Array.isArray(changes.unitItemTransfers) || !changes.unitItemTransfers.every((transfer) =>
+      isRecord(transfer) && typeof transfer.unitId === 'string' && typeof transfer.itemId === 'string' &&
       !!getItemById(transfer.itemId) && Number.isInteger(transfer.quantity) && (transfer.quantity as number) > 0 && (transfer.quantity as number) <= 99
     ))) return false;
-    if (changes.defeatedMonsters !== undefined && !isMonsterDefeatList(changes.defeatedMonsters)) return false;
+    if (changes.defeatedUnits !== undefined && !isUnitDefeatList(changes.defeatedUnits)) return false;
     if (changes.unitDispositionChanges !== undefined && !isUnitDispositionChangeList(changes.unitDispositionChanges)) return false;
     if (changes.questUpdates !== undefined && (!Array.isArray(changes.questUpdates) || !changes.questUpdates.every((quest) =>
       isRecord(quest) && typeof quest.questId === 'string' && quest.status === 'completed'
@@ -125,10 +151,10 @@ function parseAIResponse(value: unknown): AIResponsePayload | null {
     if (isRecord(changes) && changes.questAcceptances !== undefined &&
         (!Array.isArray(changes.questAcceptances) || !changes.questAcceptances.every((questId) => typeof questId === 'string'))) return null;
   }
-  if (isRecord(value.stateChanges) && value.stateChanges.defeatedMonsters !== undefined &&
+  if (isRecord(value.stateChanges) && value.stateChanges.defeatedUnits !== undefined &&
       (!isRecord(value.checkRequest) || value.checkRequest.stat !== 'atk')) return null;
   if (isRecord(value.failureStateChanges) &&
-      ['expChange', 'addItems', 'npcItemTransfers', 'defeatedMonsters', 'unitDispositionChanges', 'questUpdates', 'questAcceptances'].some((field) => field in (value.failureStateChanges as Record<string, unknown>))) return null;
+      ['expChange', 'addItems', 'unitItemTransfers', 'defeatedUnits', 'unitDispositionChanges', 'questUpdates', 'questAcceptances'].some((field) => field in (value.failureStateChanges as Record<string, unknown>))) return null;
 
   if (value.questProposals !== undefined && value.questProposals !== null && (!Array.isArray(value.questProposals) || !value.questProposals.every((proposal) =>
     isRecord(proposal) && typeof proposal.templateId === 'string' && typeof proposal.giverId === 'string' && typeof proposal.targetUnitId === 'string' &&
@@ -152,7 +178,7 @@ function parseAIResponse(value: unknown): AIResponsePayload | null {
     delete rest.rewardItems;
     return rest;
   });
-  return { ...value, formatVersion: readFormatVersion(value)!, storyText, stateChanges, travelRequest, eventProposals, questProposals } as unknown as AIResponsePayload;
+  return { ...value, formatVersion: version, storyText, stateChanges, travelRequest, eventProposals, questProposals } as unknown as AIResponsePayload;
 }
 
 /**
@@ -239,7 +265,7 @@ export async function sendPlayerAction(
   playerState: PlayerState,
   actionText: string,
   storyHistory: string[],
-  /** 同一世界中已結束的歷代角色，供傳聞與 NPC 回憶。 */
+  /** 同一世界中已結束的歷代角色，供傳聞與人物回憶。 */
   characterHistory: CharacterHistoryEntry[] = []
 ): Promise<AIResponsePayload> {
   const cleanApiKey = apiKey.trim();

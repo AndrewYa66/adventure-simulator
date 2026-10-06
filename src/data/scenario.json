@@ -17,12 +17,21 @@
     "introText": "你站在橡木村的微風旅館門口，陽光微微灑落。村長埃爾德正在公會告示板前發布關於野外哥布林襲擊的委託。你準備好開啟冒險了嗎？",
     "resetText": "新的冒險即將開始。你站在橡木村的微風旅館門口，村長正等待冒險者前來。",
     "newCharacterText": "新的冒險即將開始。{name}（{className}）來到橡木村，村長埃爾德正在公會告示板前等候冒險者。",
-    "suggestedActions": ["向村長詢問任務細節", "前往綠林古道探索", "檢查背包裝備"]
+    "suggestedActions": [
+      "向村長詢問任務細節",
+      "前往綠林古道探索",
+      "檢查背包裝備"
+    ]
   },
   "inputPlaceholder": "自由輸入你的行動（例如：拔出短劍朝哥布林砍去...）",
-  "anachronisticItemTerms": ["手榴彈", "巴雷特", "AK-47", "槍械"],
+  "anachronisticItemTerms": [
+    "手榴彈",
+    "巴雷特",
+    "AK-47",
+    "槍械"
+  ],
   "rules": {
-    "npcKillGrantsExp": true
+    "residentKillGrantsExp": true
   },
   "succession": {
     "relatedLabel": "以前任冒險者的同鄉或親友身分出發（各勢力記得你們的關係，繼承一半的聲望變化）",

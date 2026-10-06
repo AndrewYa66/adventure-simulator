@@ -37,8 +37,8 @@ export const getQuestGiverName = (player: Pick<PlayerState, 'activeQuests'>, que
 export function canReachQuestGiver(player: QuestGiverSource, quest: QuestStatic, giverId: string): boolean {
   const map = getMapById(player.currentMapId);
   const giver = getWorldUnitById(giverId);
-  return !!map && giver?.kind === 'npc' && !player.unitInstances[giver.id]?.isDead && player.unitInstances[giver.id]?.currentHp !== 0 &&
-    getWorldUnitDisposition(player, giver.id) !== 'hostile' && giver.mapIds.includes(map.id) && map.npcsPresent.includes(giver.id) &&
+  return !!map && !!giver && !giver.requiresEncounter && !player.unitInstances[giver.id]?.isDead && player.unitInstances[giver.id]?.currentHp !== 0 &&
+    getWorldUnitDisposition(player, giver.id) !== 'hostile' && giver.mapIds.includes(map.id) &&
     (giverId !== quest.questGiverId || map.id === quest.mapId);
 }
 
@@ -55,8 +55,8 @@ export function canAcceptQuest(player: PlayerState, quest: QuestStatic): boolean
 export function canTurnInQuest(player: PlayerState, quest: QuestStatic): boolean {
   const active = player.activeQuests.find((entry) => entry.questId === quest.id && entry.status === 'in_progress');
   if (!active || !canReachQuestGiver(player, quest, getActiveQuestGiverId(active, quest.questGiverId))) return false;
-  const defeatsMet = (quest.requirements.defeatMonsters ?? []).every((requirement) =>
-    (active.progress?.defeatedMonsters[requirement.monsterId] ?? 0) >= requirement.quantity
+  const defeatsMet = (quest.requirements.defeatUnits ?? []).every((requirement) =>
+    (active.progress?.defeatedUnits[requirement.unitId] ?? 0) >= requirement.quantity
   );
   const itemsMet = (quest.requirements.collectItems ?? []).every((requirement) =>
     (player.inventory.find((item) => item.itemId === requirement.itemId)?.quantity ?? 0) >= requirement.quantity
@@ -71,7 +71,7 @@ export function acceptQuest(player: PlayerState, quest: QuestStatic): PlayerStat
     activeQuests: [...player.activeQuests, {
       questId: quest.id,
       status: 'in_progress',
-      progress: { defeatedMonsters: {} }
+      progress: { defeatedUnits: {} }
     }]
   };
 }

@@ -8,8 +8,6 @@ import type {
   FactionStatic,
   LevelBenchmarkStatic,
   MapStatic,
-  MonsterStatic,
-  NpcStatic,
   UnitInstance,
   PlayerState,
   QuestStatic,
@@ -24,6 +22,7 @@ import type {
   UnitBuild,
   UnitDisposition,
   UnitStatBlock,
+  UnitStatic,
   WorldModifier,
   WorldRuntimeState,
   WorldUnitStatic
@@ -35,8 +34,7 @@ import rawItems from './items.json';
 import rawCharacterClasses from './character_classes.json';
 import rawLevelBenchmarks from './level_benchmarks.json';
 import rawMaps from './maps.json';
-import rawMonsters from './monsters.json';
-import rawNpcs from './npcs.json';
+import rawUnits from './units.json';
 import rawQuests from './quests.json';
 import rawShops from './shops.json';
 import rawSkills from './skills.json';
@@ -52,8 +50,7 @@ export const itemsDatabase: ItemStatic[] = rawItems as ItemStatic[];
 export const characterClassesDatabase: CharacterClassStatic[] = rawCharacterClasses as CharacterClassStatic[];
 export const levelBenchmarksDatabase: LevelBenchmarkStatic[] = rawLevelBenchmarks as LevelBenchmarkStatic[];
 export const mapsDatabase: MapStatic[] = rawMaps as MapStatic[];
-export const monstersDatabase: MonsterStatic[] = rawMonsters as MonsterStatic[];
-export const npcsDatabase: NpcStatic[] = rawNpcs as NpcStatic[];
+export const unitsDatabase: UnitStatic[] = rawUnits as UnitStatic[];
 export const questsDatabase: QuestStatic[] = rawQuests as QuestStatic[];
 export const shopsDatabase: ShopStatic[] = rawShops as ShopStatic[];
 export const skillsDatabase: SkillStatic[] = rawSkills as SkillStatic[];
@@ -69,11 +66,11 @@ export const aiContextConfig: AIContextConfigStatic = rawAIContext as AIContextC
 export const getQuestTemplateById = (id: string): QuestTemplateStatic | undefined =>
   questTemplatesDatabase.find((template) => template.id === id);
 
-/** 玩家的穩定單位 ID；NPC/魔物資料不得使用此 ID。 */
+/** 玩家的穩定單位 ID；單位資料不得使用此 ID。 */
 export const PLAYER_UNIT_ID = 'PLAYER-001';
 
-/** 魔物成長上限：所在地區建議等級上限 +3（已確認的設計決策「難度」）。 */
-const MONSTER_LEVEL_CAP_OVER_REGION = 3;
+/** 需遭遇單位的成長上限：所在地區建議等級上限 +3（已確認的設計決策「難度」）。 */
+const ENCOUNTER_LEVEL_CAP_OVER_REGION = 3;
 
 // ==========================================
 // 靜態資料查詢 Helper Functions
@@ -95,7 +92,7 @@ export const getSkillById = (id: string): SkillStatic | undefined =>
 export const playerSelectableClasses = (): CharacterClassStatic[] =>
   characterClassesDatabase.filter((characterClass) => characterClass.playerSelectable);
 
-/** 基準表中的最高等級；玩家與 NPC 的成長上限。 */
+/** 基準表中的最高等級；玩家與地區居民的成長上限。 */
 export const MAX_UNIT_LEVEL = Math.max(...levelBenchmarksDatabase.map((entry) => entry.level));
 
 /** 取得等級基準；超出表格時使用最高等級列。 */
@@ -130,7 +127,7 @@ type PlayerBuildSource = Pick<PlayerState, 'speciesId' | 'classId' | 'level'> & 
 
 const FALLBACK_STATS: UnitStatBlock = { hp: 1, mp: 0, atk: 0, def: 0, spd: 0 };
 
-/** 玩家未含裝備的數值；與 NPC/魔物同一公式。 */
+/** 玩家未含裝備的數值；與其他單位同一公式。 */
 export const getPlayerBaseStats = (player: PlayerBuildSource): UnitStatBlock => {
   const stats = getUnitBuildStats({ speciesId: player.speciesId, classId: player.classId, level: player.level }) ?? FALLBACK_STATS;
   return player.world ? applyWorldModifiers(stats, {
@@ -162,39 +159,31 @@ const getMapLevelCeiling = (map: MapStatic): number | undefined => {
   return levels.length ? Math.max(...levels) : undefined;
 };
 
-/** 魔物等級上限：出沒地區建議等級上限的最大值 +3，且不超過基準表。 */
-export const getMonsterLevelCap = (monsterId: string): number => {
-  const ceilings = mapsDatabase.filter((map) => map.monstersPresent.includes(monsterId))
+/** 地圖列出的單位（居民與需遭遇的單位）。 */
+export const isUnitListedOnMap = (map: MapStatic, unitId: string): boolean => map.unitsPresent.includes(unitId);
+
+/** 需遭遇單位的等級上限：出沒地區建議等級上限的最大值 +3，且不超過基準表。 */
+export const getEncounterLevelCap = (unitId: string): number => {
+  const ceilings = mapsDatabase.filter((map) => isUnitListedOnMap(map, unitId))
     .flatMap((map) => {
       const ceiling = getMapLevelCeiling(map);
       return ceiling === undefined ? [] : [ceiling];
     });
-  return ceilings.length ? Math.min(MAX_UNIT_LEVEL, Math.max(...ceilings) + MONSTER_LEVEL_CAP_OVER_REGION) : MAX_UNIT_LEVEL;
+  return ceilings.length ? Math.min(MAX_UNIT_LEVEL, Math.max(...ceilings) + ENCOUNTER_LEVEL_CAP_OVER_REGION) : MAX_UNIT_LEVEL;
 };
 
-/** 舊查詢介面：已無外部呼叫端，僅供共同查詢層內部使用。 */
-const getMonsterById = (id: string): MonsterStatic | undefined => {
-  return monstersDatabase.find((monster) => monster.id === id);
-};
-
-/** 舊查詢介面：已無外部呼叫端，僅供共同查詢層內部使用。 */
-const getNpcById = (id: string): NpcStatic | undefined =>
-  npcsDatabase.find((npc) => npc.id === id);
+/** 單位樣板（units.json）。 */
+export const getUnitTemplateById = (id: string): UnitStatic | undefined =>
+  unitsDatabase.find((unit) => unit.id === id);
 
 export const getShopById = (id: string): ShopStatic | undefined =>
   shopsDatabase.find((shop) => shop.id === id);
 
-export const getShopForNpc = (npc: NpcStatic): ShopStatic | undefined =>
-  npc.shopId ? getShopById(npc.shopId) : undefined;
+export const getShopForUnit = (unit: UnitStatic): ShopStatic | undefined =>
+  unit.shopId ? getShopById(unit.shopId) : undefined;
 
-const toUnitBase = (unit: NpcStatic | MonsterStatic) => ({
-  id: unit.id, name: unit.name, title: unit.title, alignment: unit.alignment, defaultDisposition: unit.defaultDisposition,
-  speciesId: unit.speciesId, classId: unit.classId, level: unit.level, statAdjustments: unit.statAdjustments,
-  factionId: unit.factionId, occupation: unit.occupation, dormantUntilOccupation: unit.dormantUntilOccupation
-});
-
-/** 所有 NPC/魔物單位樣板（UnitTemplate）。 */
-export const unitTemplatesDatabase = (): (NpcStatic | MonsterStatic)[] => [...npcsDatabase, ...monstersDatabase];
+/** 所有單位樣板（玩家以外）。 */
+export const unitTemplatesDatabase = (): UnitStatic[] => unitsDatabase;
 
 /** 單位查詢的世界狀態來源；可直接傳入 PlayerState（執行期合併狀態）。 */
 export interface UnitWorldSource {
@@ -204,33 +193,25 @@ export interface UnitWorldSource {
 }
 
 /**
- * Shared lookup adapter. Legacy NPC/monster records and their IDs remain unchanged.
+ * 共用單位查詢。
  * 傳入世界狀態時，數值與擊倒獎勵依實例目前等級計算並套用世界修正；否則使用樣板等級與靜態數值。
  */
 export const getWorldUnitById = (id: string, source?: UnitWorldSource): WorldUnitStatic | undefined => {
-  const instances = source?.unitInstances;
-  const npc = getNpcById(id);
-  const monster = getMonsterById(id);
-  if (Boolean(npc) === Boolean(monster)) return undefined;
-  const template = (npc ?? monster)!;
-  const level = instances?.[id]?.level ?? template.level;
+  const template = getUnitTemplateById(id);
+  if (!template) return undefined;
+  const level = source?.unitInstances?.[id]?.level ?? template.level;
   const build = { ...template, level };
   const baseStats = getUnitBuildStats(build);
   if (!baseStats) return undefined;
   const expReward = getUnitExpReward(build);
-  const mapIds = npc ? [npc.mapId] : mapsDatabase.filter((map) => map.monstersPresent.includes(monster!.id)).map((map) => map.id);
+  const mapIds = mapsDatabase.filter((map) => isUnitListedOnMap(map, id)).map((map) => map.id);
   const stats = applyWorldModifiers(baseStats, { unitId: id, speciesId: template.speciesId, mapIds }, source?.world?.modifiers, source?.gameTimeMinutes);
-
-  if (npc) {
-    return { ...toUnitBase(npc), level, kind: 'npc', title: npc.title, stats, expReward, mapIds, source: npc };
-  }
-
-  return { ...toUnitBase(monster!), level, kind: 'monster', stats, expReward, mapIds, source: monster! };
+  return { ...template, level, stats, expReward, mapIds, homeMapId: mapIds[0] ?? '', source: template };
 };
 
-/** 單位成長上限：魔物受出沒地區限制，NPC 以基準表最高等級為限。 */
+/** 單位成長上限：需遭遇的單位受出沒地區限制，地區居民以基準表最高等級為限。 */
 export const getUnitLevelCap = (unitId: string): number =>
-  getMonsterById(unitId) ? getMonsterLevelCap(unitId) : MAX_UNIT_LEVEL;
+  getUnitTemplateById(unitId)?.requiresEncounter ? getEncounterLevelCap(unitId) : MAX_UNIT_LEVEL;
 
 /** 到達某等級所需的累計經驗（實例初始經驗）。 */
 export const getBaseExpForLevel = (level: number): number =>
@@ -247,14 +228,13 @@ export const describeUnitBuild = (build: UnitBuild): string => {
  * 單位實例預設值（取自樣板）；新存檔建立與存檔中缺少的單位共用。
  * 潛伏單位（dormantUntilOccupation）預設為潛伏狀態，經由「他方佔領」出現時以 awake 建立。
  */
-export const createDefaultUnitInstance = (template: NpcStatic | MonsterStatic, options: { awake?: boolean } = {}): UnitInstance => {
-  const npc = 'mapId' in template ? template : undefined;
+export const createDefaultUnitInstance = (template: UnitStatic, options: { awake?: boolean } = {}): UnitInstance => {
   const dormant = template.dormantUntilOccupation === true && !options.awake;
   return {
     level: template.level,
     exp: getBaseExpForLevel(template.level),
-    gold: npc?.startingGold ?? 0,
-    inventory: (npc?.startingInventory ?? []).flatMap((entry) =>
+    gold: template.startingGold ?? 0,
+    inventory: (template.startingInventory ?? []).flatMap((entry) =>
       getItemById(entry.itemId) && Number.isInteger(entry.quantity) && entry.quantity > 0 ? [{ ...entry }] : []),
     currentHp: dormant ? 0 : getWorldUnitById(template.id)?.stats.hp ?? 1,
     isDead: dormant,
@@ -265,17 +245,25 @@ export const createDefaultUnitInstance = (template: NpcStatic | MonsterStatic, o
 export const createDefaultUnitInstances = (): Record<string, UnitInstance> =>
   Object.fromEntries(unitTemplatesDatabase().map((template) => [template.id, createDefaultUnitInstance(template)]));
 
-/** Return the normalized units referenced by a map, preserving NPC and monster order. 潛伏中的單位不在場，不列出。 */
+/** 地圖上列出的單位（依資料順序）。潛伏中的單位不在場，不列出。 */
 export const getWorldUnitsAtMap = (mapId: string, source?: UnitWorldSource): WorldUnitStatic[] => {
   const map = getMapById(mapId);
   if (!map) return [];
-  return [...map.npcsPresent, ...map.monstersPresent]
+  return map.unitsPresent
     .flatMap((unitId) => {
       if (source?.unitInstances?.[unitId]?.isDormant) return [];
       const unit = getWorldUnitById(unitId, source);
       return unit ? [unit] : [];
     });
 };
+
+/** 地區居民（進入地區即在場、可交談；不含需遭遇的單位）的 ID。 */
+export const getResidentUnitIds = (map: MapStatic): string[] =>
+  map.unitsPresent.filter((unitId) => getUnitTemplateById(unitId)?.requiresEncounter !== true);
+
+/** 需遭遇才出現的單位 ID。 */
+export const getEncounterUnitIds = (map: MapStatic): string[] =>
+  map.unitsPresent.filter((unitId) => getUnitTemplateById(unitId)?.requiresEncounter === true);
 
 // ==========================================
 // 勢力（O38）
@@ -304,7 +292,7 @@ export const getFactionReputation = (player: Pick<PlayerState, 'factionReputatio
   player.factionReputation[factionId] ?? getFactionById(factionId)?.initialReputation ?? 0;
 
 export const getUnitFactionId = (unitId: string): string | undefined =>
-  (getNpcById(unitId) ?? getMonsterById(unitId))?.factionId;
+  getUnitTemplateById(unitId)?.factionId;
 
 /** 勢力關係的存檔鍵：兩個勢力 ID 排序後以「|」相連。 */
 export const factionRelationKey = (a: string, b: string): string => [a, b].sort().join('|');
@@ -338,10 +326,10 @@ export const getWorldUnitDisposition = (
 export const getEventById = (id: string): EventStatic | undefined =>
   eventsDatabase.find((event) => event.id === id);
 
-/** 單位顯示名稱：NPC 為「職稱 + 名字」；找不到時回傳 ID。 */
+/** 單位顯示名稱：有稱號時為「稱號 + 名字」；找不到時回傳 ID。 */
 export const getUnitDisplayName = (unitId: string): string => {
   const unit = getWorldUnitById(unitId);
-  return unit ? `${unit.kind === 'npc' ? unit.title : ''}${unit.name}` : unitId;
+  return unit ? `${unit.title ?? ''}${unit.name}` : unitId;
 };
 
 export const getQuestById = (id: string): QuestStatic | undefined => {
@@ -444,7 +432,7 @@ export function validateGrowthData(): string[] {
   return issues;
 }
 
-/** Validate the existing split NPC/monster files against the shared unit contract. */
+/** 驗證單位資料（units.json）、地圖列出的單位與商店經營者。 */
 export function validateWorldUnitData(): string[] {
   const issues: string[] = [];
   const seenIds = new Set<string>();
@@ -453,7 +441,7 @@ export function validateWorldUnitData(): string[] {
     '混亂中立', '守序邪惡', '中立邪惡', '混亂邪惡'
   ]);
 
-  for (const unit of [...npcsDatabase, ...monstersDatabase]) {
+  for (const unit of unitsDatabase) {
     if (typeof unit.id !== 'string' || !unit.id.trim() || typeof unit.name !== 'string' || !unit.name.trim()) {
       issues.push('單位缺少有效的 ID 或名稱');
     }
@@ -463,29 +451,31 @@ export function validateWorldUnitData(): string[] {
     if (unit.alignment !== undefined && !validAlignments.has(unit.alignment)) issues.push(`${unit.id}: 無效陣營 ${unit.alignment}`);
     if (!['friendly', 'neutral', 'hostile'].includes(unit.defaultDisposition)) issues.push(`${unit.id}: 無效預設關係 ${unit.defaultDisposition}`);
     validateUnitBuild(unit.id, unit, issues);
-  }
 
-  for (const npc of npcsDatabase) {
-    const map = getMapById(npc.mapId);
-    if (!map || !map.npcsPresent.includes(npc.id)) issues.push(`${npc.id}: 所在地圖 ${npc.mapId} 未正確列出此 NPC`);
-    if (npc.shopId) {
-      const shop = getShopById(npc.shopId);
-      if (!shop || shop.npcId !== npc.id) issues.push(`${npc.id}: 商店參照 ${npc.shopId} 無效`);
+    const listedOn = mapsDatabase.filter((map) => isUnitListedOnMap(map, unit.id));
+    if (!listedOn.length) issues.push(`${unit.id}: 未被任何地圖的 unitsPresent 列出`);
+    if (!unit.requiresEncounter && listedOn.length > 1) issues.push(`${unit.id}: 地區居民只能列在一張地圖（目前 ${listedOn.map((map) => map.id).join('、')}）`);
+    // 族群代表可重複遭遇的一群個體；居民的戰鬥 HP 會保留，兩者不相容。
+    if (unit.population && !unit.requiresEncounter) issues.push(`${unit.id}: 族群樣板（population）須同時為需遭遇單位（requiresEncounter）`);
+    if (unit.population && unit.isBoss) issues.push(`${unit.id}: 頭目不可是族群樣板`);
+    if (unit.shopId) {
+      const shop = getShopById(unit.shopId);
+      if (!shop || shop.ownerUnitId !== unit.id) issues.push(`${unit.id}: 商店參照 ${unit.shopId} 無效`);
+    }
+    if (unit.requiredQuestId && !getQuestById(unit.requiredQuestId)) issues.push(`${unit.id}: 找不到前置任務 ${unit.requiredQuestId}`);
+    if (unit.requiresEncounter && unit.level > getEncounterLevelCap(unit.id)) issues.push(`${unit.id}: 等級 ${unit.level} 超過出沒地區上限 ${getEncounterLevelCap(unit.id)}`);
+    for (const drop of unit.loot?.dropItems ?? []) {
+      if (!getItemById(drop.itemId) || !(drop.chance > 0 && drop.chance <= 1)) issues.push(`${unit.id}: 掉落物 ${drop.itemId} 無效或機率不在 0～1`);
     }
   }
 
-  for (const monster of monstersDatabase) {
-    if (!mapsDatabase.some((map) => map.monstersPresent.includes(monster.id))) issues.push(`${monster.id}: 未被任何地圖列為可遭遇敵人`);
-    if (monster.requiredQuestId && !getQuestById(monster.requiredQuestId)) issues.push(`${monster.id}: 找不到前置任務 ${monster.requiredQuestId}`);
-    if (monster.level > getMonsterLevelCap(monster.id)) issues.push(`${monster.id}: 等級 ${monster.level} 超過出沒地區上限 ${getMonsterLevelCap(monster.id)}`);
+  for (const shop of shopsDatabase) {
+    if (getUnitTemplateById(shop.ownerUnitId)?.shopId !== shop.id) issues.push(`${shop.id}: 經營者 ${shop.ownerUnitId} 不存在或未指向此商店`);
   }
 
   for (const map of mapsDatabase) {
-    for (const npcId of map.npcsPresent) {
-      if (!npcsDatabase.some((npc) => npc.id === npcId && npc.mapId === map.id)) issues.push(`${map.id}: NPC 參照 ${npcId} 無效或所在地不一致`);
-    }
-    for (const monsterId of map.monstersPresent) {
-      if (!getMonsterById(monsterId)) issues.push(`${map.id}: 怪物參照 ${monsterId} 無效`);
+    for (const unitId of map.unitsPresent) {
+      if (!getUnitTemplateById(unitId)) issues.push(`${map.id}: 單位參照 ${unitId} 無效`);
     }
   }
 
@@ -643,8 +633,7 @@ export function validateFactionData(): string[] {
     if (unit.factionId !== undefined && !getFactionById(unit.factionId)) issues.push(`${unit.id}: 找不到所屬勢力 ${unit.factionId}`);
     if (unit.occupation) {
       const occupier = unitTemplatesDatabase().find((entry) => entry.id === unit.occupation!.byUnitId);
-      const sharedMap = mapsDatabase.some((map) => [...map.npcsPresent, ...map.monstersPresent].includes(unit.id) &&
-        [...map.npcsPresent, ...map.monstersPresent].includes(unit.occupation!.byUnitId));
+      const sharedMap = mapsDatabase.some((map) => isUnitListedOnMap(map, unit.id) && isUnitListedOnMap(map, unit.occupation!.byUnitId));
       if (!occupier) issues.push(`${unit.id}: 找不到佔領單位 ${unit.occupation.byUnitId}`);
       else if (!occupier.dormantUntilOccupation) issues.push(`${unit.id}: 佔領單位 ${occupier.id} 必須設定 dormantUntilOccupation`);
       if (occupier && !sharedMap) issues.push(`${unit.id}: 佔領單位 ${unit.occupation.byUnitId} 必須出現在同一張地圖`);
@@ -657,7 +646,7 @@ export function validateFactionData(): string[] {
     if (unit.dormantUntilOccupation && questsDatabase.some((quest) => quest.questGiverId === unit.id)) issues.push(`${unit.id}: 潛伏單位不可擔任任務給予者`);
   }
 
-  if (typeof scenario.rules?.npcKillGrantsExp !== 'boolean') issues.push(`劇本 ${scenario.id}: rules.npcKillGrantsExp 須為布林值`);
+  if (typeof scenario.rules?.residentKillGrantsExp !== 'boolean') issues.push(`劇本 ${scenario.id}: rules.residentKillGrantsExp 須為布林值`);
   if (scenario.succession) {
     const ratio = scenario.succession.reputationInheritRatio;
     if (!scenario.succession.relatedLabel?.trim()) issues.push(`劇本 ${scenario.id}: succession.relatedLabel 不可為空`);
