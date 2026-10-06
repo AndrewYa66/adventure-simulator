@@ -418,6 +418,22 @@ export interface QuestTemplateStatic {
   excludes?: { flags?: string[] };
 }
 
+/** 可截斷的 AI 上下文區段；其餘區段（規則、候選清單）不截斷，避免 AI 看不到合法選項。 */
+export type AIContextTrimmableSectionId = 'legacy' | 'worldEvents' | 'modifiers' | 'chronicle';
+
+/** AI 上下文組裝設定（O39）：每回合呼叫上限與 token 預算（以字元計）。 */
+export interface AIContextConfigStatic {
+  /** 每回合 AI 呼叫上限（主持人敘事 1 次 + 修正請求）。 */
+  maxCallsPerTurn: number;
+  /** 系統提示的整體字元上限；超出時依優先順序截斷可截斷區段。 */
+  totalBudgetChars: number;
+  legacy: { maxCharacters: number; maxDeedsPerCharacter: number };
+  worldEvents: { maxEvents: number };
+  chronicle: { maxLines: number };
+  /** priority 數字越小越重要；超出整體預算時先截斷數字大的區段。 */
+  trimmableSections: Record<AIContextTrimmableSectionId, { priority: number; maxChars: number }>;
+}
+
 export interface QuestTemplateDataStatic {
   limits: {
     /** 全世界同時開放（含已接取未完成）的動態委託上限。 */
@@ -504,6 +520,10 @@ export interface WorldEvent {
   changes?: { setFlags?: string[]; clearFlags?: string[]; modifierIds?: string[]; questIds?: string[]; unitIds?: string[]; factionIds?: string[] };
   /** 玩家聲望變化（勢力 ID 與變化量）。 */
   reputationChanges?: { factionId: string; change: number }[];
+  /** 事件發生時在世的玩家角色代數（PlayerState.characterSeq）。 */
+  characterSeq?: number;
+  /** 由另一事件衍生時的來源事件 ID，例如殺害造成的聲望變化引用死亡事件。 */
+  sourceEventId?: string;
 }
 
 /** 世界修正：一律為相對值（加減或倍率），疊加在公式數值之上，靜態數值調整後仍自動生效。 */
@@ -540,6 +560,8 @@ export interface WorldRuntimeState {
 export interface PlayerState {
   /** 玩家穩定單位 ID，固定為 PLAYER_UNIT_ID。 */
   unitId: string;
+  /** 此角色在世界中的代數（第一位角色為 1，接續的新角色依序加一）；事件以此連結到歷代角色。 */
+  characterSeq: number;
   name: string;
   /** 玩家種族；新角色取自劇本預設種族。 */
   speciesId: string;
@@ -634,6 +656,8 @@ export type WorldStateKey = typeof WORLD_STATE_KEYS[number];
 
 /** 已結束的歷代角色紀錄；供 AI 傳聞與 NPC 對話素材，死亡遺物（O26）之後由此擴充。 */
 export interface CharacterHistoryEntry {
+  /** 角色代數，對應事件的 characterSeq。 */
+  characterSeq: number;
   name: string;
   speciesId: string;
   classId: string;
@@ -697,6 +721,8 @@ export interface WorldExportFile {
 
 /** AI 結構化回應 (Gemini 回傳格式) */
 export interface AIResponsePayload {
+  /** 回應格式版本（O39）；沒有版本號的回應解析為 1。 */
+  formatVersion?: number;
   storyText: string;
   suggestedActions: string[];
   encounterRequest?: { monsterId: string } | null;

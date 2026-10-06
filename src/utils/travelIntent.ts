@@ -18,6 +18,12 @@ const directionPhrases = /(前往|前去|走到|移動到|移动到|進入|进�
 
 /** 移動動詞後多少字內出現其他地區名稱才算宣稱換區。 */
 const MOVE_CLAIM_WINDOW = 16;
+/** 移動動詞前多少字內檢查非實際移動的語氣。 */
+const MOVE_CLAIM_LOOKBEHIND = 6;
+/** 引號內的對話（NPC 的回憶、建議）不是敘事宣稱，比對前移除。 */
+const quotedSpeech = /「[^」]*」|『[^』]*』|“[^”]*”|"[^"]*"/gu;
+/** 動詞前出現這些詞時，代表過去經歷、假設或打算，不是玩家此刻已移動。 */
+const nonActualMovePrefix = /(曾|曾經|上次|以前|過去|当年|當年|打算|準備|准备|計劃|计划|想要|想|要|將|将|會|会|可以|能|若|如果|假如|等你|一旦|才能)\s*$/u;
 
 /**
  * 敘事是否宣稱玩家已移動到「其他地區」。只有移動動詞後緊接其他地圖的名稱、別名或分類詞才算；
@@ -31,8 +37,10 @@ export function storyClaimsPlayerMoved(text: string, currentMapId: string): bool
     ...(map.locationTags ?? []).filter((tag) => !currentTags.has(tag)).flatMap((tag) => destinationCategoryPhrases[tag] ?? [])
   ]).filter((label) => label.length >= 2);
   const moveVerb = /(?:抵達|抵达|到達|到达|來到|来到|回到|返回|走進|走进|踏入|進入|进入|回到了|到了)/gu;
-  for (const match of text.matchAll(moveVerb)) {
-    const following = text.slice(match.index + match[0].length, match.index + match[0].length + MOVE_CLAIM_WINDOW);
+  const narration = text.replace(quotedSpeech, (speech) => ' '.repeat(speech.length));
+  for (const match of narration.matchAll(moveVerb)) {
+    if (nonActualMovePrefix.test(narration.slice(Math.max(0, match.index - MOVE_CLAIM_LOOKBEHIND), match.index))) continue;
+    const following = narration.slice(match.index + match[0].length, match.index + match[0].length + MOVE_CLAIM_WINDOW);
     if (otherLabels.some((label) => following.includes(label))) return true;
   }
   return false;

@@ -1,6 +1,8 @@
-import type { DeathCause, EventStatic, PlayerState, UnitInstance, WorldEvent, WorldModifier, WorldRuntimeState } from '../types/game';
+import type { CharacterHistoryEntry, DeathCause, EventStatic, PlayerState, UnitInstance, WorldEvent, WorldModifier, WorldRuntimeState } from '../types/game';
 import {
+  aiContextConfig,
   createDefaultUnitInstance,
+  describeUnitBuild,
   eventsDatabase,
   getCharacterClassById,
   getEventById,
@@ -73,7 +75,7 @@ function appendEvent(state: PlayerState, event: Omit<WorldEvent, 'id' | 'awareFa
   const world = state.world;
   const { knownByFactions, ...fields } = event;
   const awareFactionIds = getAwareFactionIds(state, { knownBy: event.knownBy, mapId: event.mapId, witnessUnitIds: event.witnessUnitIds, knownByFactions });
-  const created: WorldEvent = { id: `WE-${String(world.nextEventSeq).padStart(5, '0')}`, ...fields, awareFactionIds };
+  const created: WorldEvent = { id: `WE-${String(world.nextEventSeq).padStart(5, '0')}`, ...fields, awareFactionIds, characterSeq: state.characterSeq };
   return { state: { ...state, world: { ...world, events: [...world.events, created], nextEventSeq: world.nextEventSeq + 1 } }, event: created };
 }
 
@@ -297,6 +299,9 @@ export function applyScenarioEvent(state: PlayerState, event: EventStatic, cause
   }).state;
 }
 
+/** AI 提議（玩家行動促成）的事件原因；歷代角色事蹟以此辨識。 */
+export const AI_PROPOSAL_CAUSE = 'AI 提議';
+
 /** AI 目前可提議的事件：觸發方式為 aiProposal 且條件成立。 */
 export const getProposableEvents = (state: PlayerState): EventStatic[] =>
   eventsDatabase.filter((event) => event.trigger === 'aiProposal' && canTriggerEvent(state, event));
@@ -308,7 +313,7 @@ export function applyEventProposals(state: PlayerState, eventIds: readonly strin
   for (const eventId of new Set(eventIds)) {
     const event = getEventById(eventId);
     if (event?.trigger !== 'aiProposal') continue;
-    const result = applyScenarioEvent(next, event, 'AI 提議');
+    const result = applyScenarioEvent(next, event, AI_PROPOSAL_CAUSE);
     if (result !== next) applied.push(event);
     next = result;
   }
@@ -362,7 +367,7 @@ export function finalizeWorld(previous: PlayerState, next: PlayerState, hints: R
 }
 
 /** 寫入一筆玩家聲望變化事件；只有得知此事的勢力列在 changes 中。 */
-function recordReputationChange(previous: PlayerState, state: PlayerState, reason: string, changes: { factionId: string; change: number }[], witnessUnitIds: string[]): PlayerState {
+function recordReputationChange(previous: PlayerState, state: PlayerState, reason: string, changes: { factionId: string; change: number }[], witnessUnitIds: string[], sourceEventId?: string): PlayerState {
   const merged = mergeReputationChanges(changes);
   if (!merged.length) return state;
   const applied = applyReputationChanges(state, merged);
@@ -370,7 +375,7 @@ function recordReputationChange(previous: PlayerState, state: PlayerState, reaso
     type: 'reputation_change', gameTimeMinutes: state.gameTimeMinutes, mapId: previous.currentMapId,
     summary: `${reason}；聲望變化：${describeReputationChanges(state, merged)}。`,
     knownBy: 'faction', knownByFactions: merged.map((change) => change.factionId), witnessUnitIds, cause: '玩家行動',
-    changes: { factionIds: merged.map((change) => change.factionId) }, reputationChanges: merged
+    changes: { factionIds: merged.map((change) => change.factionId) }, reputationChanges: merged, ...(sourceEventId ? { sourceEventId } : {})
   }).state;
 }
 
@@ -415,7 +420,7 @@ function applyActionReputation(previous: PlayerState, current: PlayerState, newD
         changes.push({ factionId, change: reputationRules.enemyMemberKilled });
       }
     }
-    state = recordReputationChange(previous, state, `${playerName}殺害了${death.death!.victimName}`, changes, death.witnessUnitIds);
+    state = recordReputationChange(previous, state, `${playerName}殺害了${death.death!.victimName}`, changes, death.witnessUnitIds, death.id);
   }
 
   for (const active of state.activeQuests) {
@@ -435,8 +440,6 @@ function applyActionReputation(previous: PlayerState, current: PlayerState, newD
 export const findLatestPlayerDeath = (state: PlayerState): WorldEvent | undefined =>
   [...state.world.events].reverse().find((event) => event.type === 'unit_death' && event.death?.victimUnitId === PLAYER_UNIT_ID);
 
-const EVENTS_FOR_AI = 12;
-
 /**
  * 提供給 AI 的世界事件：所在地區、全世界周知、或與在場 NPC 相關（目擊或死者原屬此地）的近期事件。
  * 目擊者名單隨附，AI 依此區分「誰知道細節」。
@@ -450,7 +453,7 @@ export function getWorldContextForAI(state: PlayerState) {
     (event.knownBy === 'faction' && event.awareFactionIds.some((factionId) => presentFactions.includes(factionId))) ||
     (event.death && getWorldUnitById(event.death.victimUnitId)?.mapIds.includes(state.currentMapId)));
   return {
-    events: relevant.slice(-EVENTS_FOR_AI).map((event) => ({
+    events: relevant.slice(-aiContextConfig.worldEvents.maxEvents).map((event) => ({
       id: event.id,
       time: formatGameTime(event.gameTimeMinutes),
       place: getMapById(event.mapId)?.name ?? event.mapId,
@@ -460,10 +463,55 @@ export function getWorldContextForAI(state: PlayerState) {
       ...(event.knownBy === 'faction' ? { knownByFactions: event.awareFactionIds.map((factionId) => getFactionById(factionId)?.name ?? factionId) } : {}),
       witnesses: event.witnessUnitIds.map((unitId) => ({ id: unitId, name: getUnitDisplayName(unitId) }))
     })),
-    chronicle: state.world.chronicle.slice(-10),
+    chronicle: state.world.chronicle.slice(-aiContextConfig.chronicle.maxLines),
     modifiers: state.world.modifiers.map((modifier) => ({
       scope: modifier.scope, stat: modifier.stat, change: modifier.op === 'add' ? `${modifier.value >= 0 ? '+' : ''}${modifier.value}` : `×${modifier.value}`,
       ...(modifier.expiresAtMinutes !== undefined ? { until: formatGameTime(modifier.expiresAtMinutes) } : {})
     }))
   };
+}
+
+/** 歷代角色的事蹟：該角色任內殺害 NPC 或頭目、聲望事件（含完成委託）、玩家行動促成的劇本事件；一般魔物擊殺不列入。 */
+function isCharacterDeed(event: WorldEvent): boolean {
+  if (event.type === 'unit_death') return event.death?.killerUnitId === PLAYER_UNIT_ID && event.death.victimUnitId !== PLAYER_UNIT_ID && isUniqueUnit(event.death.victimUnitId);
+  // 殺害造成的聲望事件併入死亡事件的 consequence，不重複列出。
+  if (event.type === 'reputation_change') return !event.sourceEventId;
+  return event.type === 'scenario_event' && event.cause === AI_PROPOSAL_CAUSE;
+}
+
+/**
+ * 提供給 AI 的歷代角色紀錄：每位角色附上其死亡事件與事蹟（最新 maxDeeds 件），
+ * 並標出目前在場、親眼目擊的 NPC，讓 AI 能把前任冒險者與其造成的事件連起來。
+ * 已壓縮進編年史的舊事件不再列出。
+ */
+export function getCharacterLegacyForAI(state: PlayerState, history: CharacterHistoryEntry[], maxCharacters: number, maxDeeds: number) {
+  const presentNpcIds = (getMapById(state.currentMapId)?.npcsPresent ?? []).filter((unitId) => isUnitAlive(state, unitId));
+  const describeEvent = (event: WorldEvent) => {
+    const consequence = event.type === 'unit_death'
+      ? state.world.events.find((entry) => entry.sourceEventId === event.id && entry.type === 'reputation_change')?.summary
+      : undefined;
+    return {
+      time: formatGameTime(event.gameTimeMinutes),
+      place: getMapById(event.mapId)?.name ?? event.mapId,
+      summary: event.summary,
+      ...(event.detail ? { detail: event.detail } : {}),
+      ...(consequence ? { consequence } : {}),
+      witnesses: event.witnessUnitIds.map(getUnitDisplayName),
+      presentWitnesses: event.witnessUnitIds.filter((unitId) => presentNpcIds.includes(unitId)).map(getUnitDisplayName)
+    };
+  };
+  return history.slice(-maxCharacters).map((entry) => {
+    const death = entry.deathEventId ? state.world.events.find((event) => event.id === entry.deathEventId) : undefined;
+    const deeds = state.world.events.filter((event) => event.characterSeq === entry.characterSeq && isCharacterDeed(event)).slice(-maxDeeds);
+    return {
+      generation: entry.characterSeq,
+      name: getCharacterDisplayName(entry),
+      build: describeUnitBuild(entry),
+      alignment: entry.alignment,
+      endedAt: formatGameTime(entry.endedAtMinutes),
+      place: getMapById(entry.mapId)?.name ?? entry.mapId,
+      death: death ? describeEvent(death) : entry.deathSummary ? { summary: entry.deathSummary } : undefined,
+      deeds: deeds.map(describeEvent)
+    };
+  });
 }

@@ -23,11 +23,20 @@ sendPlayerAction(
   apiKey: string,
   playerState: PlayerState,
   actionText: string,
-  storyHistory: string[]
+  storyHistory: string[],
+  characterHistory?: CharacterHistoryEntry[]
 ): Promise<AIResponsePayload>
 ```
 
-`settings.provider` 為 `gemini` 或 `openai`；`settings.model` 為該服務的模型 ID。近期劇情只傳入最後四筆。
+`settings.provider` 為 `gemini` 或 `openai`；`settings.model` 為該服務的模型 ID。近期劇情只傳入最後四筆；`characterHistory` 是同一世界的歷代角色紀錄。系統提示與 Gemini JSON Schema 由上下文組裝器 `buildAIContext`（`src/services/aiContext.ts`）產生，見下方「AI 上下文組裝與回應格式版本」。
+
+## AI 上下文組裝與回應格式版本（O39）
+
+- **區段**：系統提示由具名區段組成，依序為 `player`（玩家狀態、背包、裝備）、`legacy`（歷代角色）、`location`（所在與相鄰地區）、`npcs`、`factions`、`quests`、`encounters`（戰鬥、遭遇候選、服務）、`items`（靜態物品清單）、`flags`、`worldEvents`、`chronicle`、`modifiers`、`proposableEvents`、`rules`（主持規則與 JSON 範例）。設定條目、角色卡與劇情片段區段待 O36／O31 加入。
+- **token 預算** `src/data/ai_context.json`：`totalBudgetChars`（整體字元上限，目前 20,000）、`maxCallsPerTurn`（每回合呼叫上限，目前 2：敘事 1 次 + 移動修正 1 次；設為 1 即不送修正請求）、`legacy.maxCharacters`／`maxDeedsPerCharacter`（5／5）、`worldEvents.maxEvents`（12）、`chronicle.maxLines`（10），以及可截斷區段的 `trimmableSections: { legacy, worldEvents, modifiers, chronicle }` 各自的 `priority`（數字越小越重要）與 `maxChars`。只有這四個歷史類區段可截斷；候選清單（地區、任務、遭遇、物品、可提議事件）與規則不截斷，避免 AI 看不到合法選項。截斷時先套用各區段上限，整體仍超出時從優先順序最低的區段繼續省略；列表從最舊的項目開始省略並在標籤註明省略筆數，歷代角色先省略各角色較舊的事蹟（每位保留最新一件，標示 `omittedDeeds`），最後才省略最早的角色。token 數以「中日韓文字 1 字 1 token、其他 4 字元 1 token」估算。2026-10-06 實測一般狀態約 13,200 字元（約 6,500 tokens）。
+- **組裝報告**：每次呼叫記錄 `AIContextReport`（總字元、估計 tokens、預算、是否超出、各區段字元／上限／省略數、完整系統提示與使用者提示）。開發模式（`import.meta.env.DEV`）在 HUD 顯示「AI 上下文」面板；模型設定頁顯示每回合呼叫上限與上一次請求的估計大小。正式版不顯示面板。
+- **歷代角色區段**：每位歷代角色（最多 5 位）提供 `generation`（代數）、名稱、種族職階等級、陣營、結束時間地點、`death`（死亡事件）與 `deeds`（事蹟）。事蹟為該角色任內（事件的 `characterSeq` 等於其代數）殺害 NPC 或頭目的死亡事件、未由殺害衍生的聲望事件（攻擊成員、完成委託）、以及 AI 提議並由玩家行動促成的劇本事件；一般魔物擊殺不列入。殺害造成的聲望事件以 `consequence` 附在死亡事件上，不重複列出。每件事蹟附 `witnesses`（全部目擊者）與 `presentWitnesses`（此刻在場且存活的目擊者）；主持規則要求在場目擊者被問到時明確說出前任冒險者做了什麼，非目擊者只轉述公開結果。已壓縮進編年史的事件不再列為事蹟。
+- **回應格式版本**：回應加入 `formatVersion`，目前為 `2`（`AI_RESPONSE_FORMAT_VERSION`），Gemini JSON Schema 要求填入此值。可解析的版本為 1 與 2；沒有 `formatVersion` 的回應視為第 1 版（欄位與第 2 版相同）。版本號不支援的回應會被拒絕：顯示「格式版本不受支援，本回合未套用任何變更」，不顯示其敘事、不套用狀態、不重試。日後新增請求類型（劇情片段選擇、重要角色決策等）時提高版本號，並各自加上前端驗證。
 
 ## 提供者 API 呼叫
 
@@ -49,10 +58,11 @@ sendPlayerAction(
 
 ## 共用回應資料格式
 
-成功回應必須包含 `storyText` 和 `suggestedActions`。其他欄位可省略：
+成功回應必須包含 `storyText` 和 `suggestedActions`。其他欄位可省略（`formatVersion` 省略時視為第 1 版，見上方「回應格式版本」）：
 
 ```json
 {
+  "formatVersion": 2,
   "storyText": "你察覺林間傳來一陣急促的腳步聲。",
   "suggestedActions": ["躲到樹後", "拔出武器戒備"],
   "encounterRequest": null,
@@ -78,7 +88,7 @@ sendPlayerAction(
 
 `encounterRequest` 只能指向本地區、已解鎖且玩家確實看見/接觸的魔物；遊戲驗證後才將其顯示在 HUD。每個單位明確定義預設對玩家關係（友善、中立、敵對），實際關係依「個人關係覆寫 → 所屬勢力聲望等級 → 單位預設值」判定（見「勢力聲望與勢力間關係」）；`stateChanges.unitDispositionChanges` 只能變更目前地區存活單位的關係，遊戲會保存覆寫。九大陣營描述價值傾向，不直接決定敵友；敵對 NPC 不可提供任務或交易，敵對 NPC 與已遭遇的敵對魔物都可由 HUD 發起戰鬥。NPC 與魔物的實例狀態（等級、經驗、HP、死亡、持有物）保存在玩家快照的 `unitInstances`；擊倒 NPC 時玩家取得該 NPC 實例的全部持有物與金幣（記錄於交易紀錄，NPC 持有物清空），並依劇本 `rules.npcKillGrantsExp`（目前為 `true`）以與魔物相同的公式獲得經驗；殺害的後果由勢力聲望承擔。明確攻擊友善/中立單位會視為挑釁並轉為敵對。
 
-`stateChanges` 支援 HP/MP/EXP/金幣增減、道具增加/移除、怪物擊敗紀錄、單位關係變更、任務接受及任務完成回報。劇情旗標不能由 AI 直接設定（舊格式的 `setFlags` 會被忽略），只能經由世界事件成立（見下方「世界事件、世界修正與世界規則」）。AI 只能對遊戲提供的「目前地區可接取任務」提出 `questAcceptances: ["QST-001"]`；玩家詢問任務不等於接受。HUD 按鈕及對話接受會共用同一驗證，確認玩家位於任務指定地圖、任務給予者 NPC 確實在場且存活、非敵對，且任務尚未接取或完成。靜態任務資料定義需求、獎勵值及上下限，完成時再次檢查需求；交付道具會從背包扣除，獎勵只發放一次。NPC 靜態資料以 ID、姓名、職稱、種族、職階、等級和所在地圖定義，數值由單位成長公式計算，可用 `statAdjustments` 做有上限的相對修正。地圖的 `npcsPresent` 使用 NPC ID。消耗品的 `usableInCombat` 布林欄位控制是否可在戰鬥中使用，描述文字只用於說明；consumable 的 `effect.hpRestore`/`effect.mpRestore` 定義固定回復量；玩家可從 HUD 使用背包中的消耗品，回復不會超過角色資源上限，無實際回復時不扣除道具。戰鬥中使用消耗品會觸發敵方反擊與 d20 閃避檢定。戰鬥狀態以 `{ "round": 1, "participants": [{ "unitId": "PLAYER-001", "side": "party" }, { "unitId": "NPC-001", "side": "enemy", "currentHp": 20 }], "targetUnitId": "NPC-001" }` 表示，預留 O35 多對多戰鬥；我方 HP 存於各自存檔/實例，敵方 HP 於戰鬥中追蹤。目前規則仍為玩家對單一敵人，不同種類仍套用專屬掉落/能力規則。玩家存檔包含穩定單位 ID `unitId: "PLAYER-001"`（存檔中必須為此保留 ID）；共用查詢 `resolveWorldUnit(player, unitId)` 可辨識玩家、NPC 與魔物，玩家視圖的 `stats` 以與 NPC/魔物相同的公式計算並加上裝備。玩家 ID 不可作為 `unitDispositionChanges`、`encounterRequest` 或戰鬥目標，NPC/魔物資料也不得使用此 ID。主動技能定義於 `skills.json`，由職階的 `skillUnlocks` 依等級解鎖，技能 effect 定義傷害倍率，程式以 `max(1, floor(玩家 ATK × multiplier) - 敵方 DEF)` 計算傷害；技能消耗 MP 並消耗玩家回合。地圖移動使用獨立欄位 `travelRequest`，格式為 `{ "destinationMapId": "MAP-002" }`。Gemini GenerateContent 請求會使用 JSON Schema 強制包含所有回應欄位，並將 `travelRequest.destinationMapId` 限制為本次可移動的相鄰地圖 ID、將 `encounterRequest.monsterId` 限制為可遭遇魔物 ID、將 `questAcceptances` 限制為本區可接取任務 ID、將 `unitDispositionChanges.unitId` 限制為當前地區單位 ID；這保證格式與欄位，不代表語意正確，因此遊戲端仍會驗證。只有玩家明確要求移動時才設定；模型收到的可移動地區清單包含相鄰地圖 ID、正式名稱、專屬別名及分類標籤。泛稱地點會根據可到達候選和上一個地區解析；若仍有多個候選，前端要求玩家選擇，不把泛稱綁定到單一地圖。若 AI 敘事聲稱玩家已移動，但缺少或填錯 `travelRequest`，系統會附上合法目的地清單要求模型重產一次完整 JSON；仍無有效請求時不會移動，並會在對話明確提示。前端再次驗證地圖 ID、連通性及戰鬥狀態後，才更新 `currentMapId`。詢問地點、觀察或含糊意圖不會移動。回應不可用 `stateChanges` 修改地圖。
+`stateChanges` 支援 HP/MP/EXP/金幣增減、道具增加/移除、怪物擊敗紀錄、單位關係變更、任務接受及任務完成回報。劇情旗標不能由 AI 直接設定（舊格式的 `setFlags` 會被忽略），只能經由世界事件成立（見下方「世界事件、世界修正與世界規則」）。AI 只能對遊戲提供的「目前地區可接取任務」提出 `questAcceptances: ["QST-001"]`；玩家詢問任務不等於接受。HUD 按鈕及對話接受會共用同一驗證，確認玩家位於任務指定地圖、任務給予者 NPC 確實在場且存活、非敵對，且任務尚未接取或完成。靜態任務資料定義需求、獎勵值及上下限，完成時再次檢查需求；交付道具會從背包扣除，獎勵只發放一次。NPC 靜態資料以 ID、姓名、職稱、種族、職階、等級和所在地圖定義，數值由單位成長公式計算，可用 `statAdjustments` 做有上限的相對修正。地圖的 `npcsPresent` 使用 NPC ID。消耗品的 `usableInCombat` 布林欄位控制是否可在戰鬥中使用，描述文字只用於說明；consumable 的 `effect.hpRestore`/`effect.mpRestore` 定義固定回復量；玩家可從 HUD 使用背包中的消耗品，回復不會超過角色資源上限，無實際回復時不扣除道具。戰鬥中使用消耗品會觸發敵方反擊與 d20 閃避檢定。戰鬥狀態以 `{ "round": 1, "participants": [{ "unitId": "PLAYER-001", "side": "party" }, { "unitId": "NPC-001", "side": "enemy", "currentHp": 20 }], "targetUnitId": "NPC-001" }` 表示，預留 O35 多對多戰鬥；我方 HP 存於各自存檔/實例，敵方 HP 於戰鬥中追蹤。目前規則仍為玩家對單一敵人，不同種類仍套用專屬掉落/能力規則。玩家存檔包含穩定單位 ID `unitId: "PLAYER-001"`（存檔中必須為此保留 ID）；共用查詢 `resolveWorldUnit(player, unitId)` 可辨識玩家、NPC 與魔物，玩家視圖的 `stats` 以與 NPC/魔物相同的公式計算並加上裝備。玩家 ID 不可作為 `unitDispositionChanges`、`encounterRequest` 或戰鬥目標，NPC/魔物資料也不得使用此 ID。主動技能定義於 `skills.json`，由職階的 `skillUnlocks` 依等級解鎖，技能 effect 定義傷害倍率，程式以 `max(1, floor(玩家 ATK × multiplier) - 敵方 DEF)` 計算傷害；技能消耗 MP 並消耗玩家回合。地圖移動使用獨立欄位 `travelRequest`，格式為 `{ "destinationMapId": "MAP-002" }`。Gemini GenerateContent 請求會使用 JSON Schema 強制包含所有回應欄位，並將 `travelRequest.destinationMapId` 限制為本次可移動的相鄰地圖 ID、將 `encounterRequest.monsterId` 限制為可遭遇魔物 ID、將 `questAcceptances` 限制為本區可接取任務 ID、將 `unitDispositionChanges.unitId` 限制為當前地區單位 ID；這保證格式與欄位，不代表語意正確，因此遊戲端仍會驗證。只有玩家明確要求移動時才設定；模型收到的可移動地區清單包含相鄰地圖 ID、正式名稱、專屬別名及分類標籤。泛稱地點會根據可到達候選和上一個地區解析；若仍有多個候選，前端要求玩家選擇，不把泛稱綁定到單一地圖。若 AI 敘事聲稱玩家已移動，但缺少或填錯 `travelRequest`，系統會附上合法目的地清單要求模型重產一次完整 JSON（受 `ai_context.json` 的 `maxCallsPerTurn` 限制）；判斷敘事是否宣稱移動時，會略過引號內的對話（「」『』“”）以及移動動詞前帶有過去、假設或打算語氣（例如曾經、上次、打算、如果、等你）的句子，避免 NPC 談到其他地名時誤送修正請求；仍無有效請求時不會移動，並會在對話明確提示。前端再次驗證地圖 ID、連通性及戰鬥狀態後，才更新 `currentMapId`。詢問地點、觀察或含糊意圖不會移動。回應不可用 `stateChanges` 修改地圖。
 
 ## 角色建立、章節任務與特殊戰鬥
 
@@ -118,9 +128,9 @@ sendPlayerAction(
 
 世界的永久變動只經由事件入口套用並寫入事件紀錄（`src/utils/worldEvents.ts`）。每次行動造成的狀態變更都會經過 `finalizeWorld(之前, 之後, 死因提示)`，依序：記錄新的死亡、處理委託人死亡、結算玩家所在地區、觸發自動事件、移除過期的世界修正、壓縮事件紀錄。讀檔與換角色不是行動，不經過此流程。
 
-- **事件紀錄** `world.events`（只增不改）：`{ id, type, gameTimeMinutes, mapId, summary, detail?, knownBy, witnessUnitIds, awareFactionIds, cause, death?, eventId?, changes?, reputationChanges? }`。`type` 為 `unit_death`、`unit_respawn`、`unit_occupation`（他方佔領）、`quest_failed`、`quest_transferred`（委託接手）、`reputation_change`（玩家聲望變化）、`scenario_event`。`summary` 是公開結果，`detail` 是經過與兇手等細節；`witnessUnitIds` 是事件發生時在場且存活的 NPC 與交戰中/已遭遇的魔物。`knownBy` 為 `witnesses`（目擊者）、`faction`（同勢力）、`region`（本地區）或 `world`（全世界）；`awareFactionIds` 在寫入時依傳播範圍決定：目擊者 → 目擊者所屬勢力；同勢力 → 指定勢力加目擊者勢力；本地區 → 另加在該地區有存活成員的勢力；全世界 → 所有勢力。超過 200 件時，最舊的事件壓縮成 `world.chronicle` 的一行摘要（最多 100 行）。
+- **事件紀錄** `world.events`（只增不改）：`{ id, type, gameTimeMinutes, mapId, summary, detail?, knownBy, witnessUnitIds, awareFactionIds, cause, death?, eventId?, changes?, reputationChanges?, characterSeq?, sourceEventId? }`。`characterSeq` 是事件發生時在世的玩家角色代數（每個事件寫入時都會標記），用來把事件連結到歷代角色；`sourceEventId` 是衍生事件的來源，例如殺害造成的聲望事件引用該死亡事件。`type` 為 `unit_death`、`unit_respawn`、`unit_occupation`（他方佔領）、`quest_failed`、`quest_transferred`（委託接手）、`reputation_change`（玩家聲望變化）、`scenario_event`。`summary` 是公開結果，`detail` 是經過與兇手等細節；`witnessUnitIds` 是事件發生時在場且存活的 NPC 與交戰中/已遭遇的魔物。`knownBy` 為 `witnesses`（目擊者）、`faction`（同勢力）、`region`（本地區）或 `world`（全世界）；`awareFactionIds` 在寫入時依傳播範圍決定：目擊者 → 目擊者所屬勢力；同勢力 → 指定勢力加目擊者勢力；本地區 → 另加在該地區有存活成員的勢力；全世界 → 所有勢力。超過 200 件時，最舊的事件壓縮成 `world.chronicle` 的一行摘要（最多 100 行）。
 - **死亡事件**：NPC、頭目與玩家角色死亡時寫入，`death` 記錄死者、死因（`combat` 戰鬥、`self_inflicted` 自我了斷、`misadventure` 意外或風險行動、`unknown`）與兇手。呼叫端提供死因提示；未提供時依事件前的戰鬥狀態推斷。玩家角色的歷代紀錄以 `deathEventId`/`deathSummary` 引用死亡事件。一般魔物樣板代表一群個體，擊敗不寫死亡事件；頭目（`isBoss`）是唯一個體，擊敗即永久死亡。
-- **知識範圍（暫定，正式規則見 O34）**：AI 收到目前地區、全世界周知、與在場 NPC 相關（目擊或死者原屬此地），或在場 NPC 所屬勢力得知的同勢力事件，取最近 12 件，加上編年史摘要。目擊者知道 `detail`；其他人只知道 `summary`，可轉述傳聞但不可斷定兇手或經過。
+- **知識範圍（暫定，正式規則見 O34）**：AI 收到目前地區、全世界周知、與在場 NPC 相關（目擊或死者原屬此地），或在場 NPC 所屬勢力得知的同勢力事件，取最近 12 件（`ai_context.json` 的 `worldEvents.maxEvents`），加上編年史摘要（最近 10 行）。目擊者知道 `detail`；其他人只知道 `summary`，可轉述傳聞但不可斷定兇手或經過。
 - **靜態事件** `src/data/events.json`：`{ id, title, trigger: "auto" | "aiProposal", requires?: { flags, unitsAlive, unitsDead, mapIds, reputation, factionRelations }, excludes?: { flags }, effects: { setFlags?, clearFlags?, worldModifiers?, reputation?, factionRelations? }, knownBy, knownByFactions?, summary, aiHint? }`。勢力條件與效果見「勢力聲望與勢力間關係」；`knownBy: "faction"` 時必須列出 `knownByFactions`。每個事件只觸發一次（`world.firedEventIds`）。`auto` 事件在條件成立時自動觸發；`aiProposal` 事件只能由 AI 在回應的 `eventProposals`（事件 ID 陣列，必填，沒有時為空陣列）提議，遊戲驗證條件成立後才套用，有檢定時只在成功時考慮。Gemini JSON Schema 將 `eventProposals` 限制為目前可提議的事件 ID，沒有候選時只允許空陣列。
 - **世界修正** `world.modifiers`：`{ id, scope, stat, op, value, sourceEventId, expiresAtMinutes? }`，`scope` 為 `unit:<ID>`、`species:<ID>`、`map:<ID>`，`op` 為 `add`（整數加減）或 `multiply`（倍率）。一律為相對值：有效數值 = 公式數值先加總加減值、再乘以倍率後取整，因此調整靜態基礎數值後舊存檔的修正仍正確疊加。修正同樣作用於玩家（種族與所在地區）。事件的 `durationMinutes` 決定到期時間，到期後移除。
 - **世界規則**（寫死於前端）：單位死亡處理如上；委託人死亡時，由同勢力、同職階且存活的 NPC 接手（優先同一地區），進行中的委託記錄新委託人 `activeQuests[].giverUnitId`，交付改在接手者所在地進行並寫入 `quest_transferred` 事件；沒有人選時委託變為 `failed`。種族的 `respawnDays` 決定非唯一個體死亡後幾天由新個體補上（具名 NPC 與頭目不重生）。**他方佔領**：單位樣板可設 `occupation: { byUnitId, afterDays }`，此單位死亡滿 `afterDays` 天後不重生，改由 `byUnitId` 出現在原地並寫入 `unit_occupation` 事件；被佔領單位必須設 `dormantUntilOccupation: true`，在此之前為潛伏狀態（實例 `isDormant: true`、視為不在場，不會出現在 HUD、AI 上下文與遭遇候選，也不算「已死亡」）。目前只有會真正死亡的單位（NPC 與頭目）能觸發佔領。商店 NPC 存活時，其商品庫存每個遊戲日最多補回一次至起始數量。
@@ -204,11 +214,11 @@ sendPlayerAction(
 
 - **兩層存檔**：每個存檔欄位分為 `world`（世界存檔：`gameTimeMinutes`、`unitInstances`、`storyFlags`、世界狀態 `world`（事件紀錄、編年史、世界修正、已觸發事件、地區結算、勢力間關係、生成委託）與歷代角色紀錄 `characterHistory`）與 `character`（角色存檔：其餘玩家欄位，包含能力、背包、金幣、任務、戰鬥、單位對此角色的關係覆寫、各勢力聲望等）。哪些欄位屬於世界層由 `types/game.ts` 的 `WORLD_STATE_KEYS` 定義。執行期仍合併為 `PlayerState`，只在存讀檔時拆分與合併（`utils/saveStorage.ts`）。
 - **存檔欄位**：每個世界一個自動存檔（狀態變更且非 AI 回合進行中時覆寫）與 3 個手動存檔。每個世界只有一條時間線：讀取手動存檔即取代目前進度，之後的自動存檔從該時間點繼續。可有多個世界，存檔索引記錄目前世界；切換世界即讀取該世界的自動存檔。
-- **新角色接續**：角色死亡後可在同一世界建立新角色。世界層欄位保留，前一位角色以 `characterHistory`（名稱、種族、職階、等級、結束時間與地區、死亡事件 ID 與公開描述、攜帶物快照）記錄並提供給 AI 作為傳聞素材（最多 5 位）；新角色不繼承等級、背包、任務與單位關係；勢力聲望重置為初始值，或依劇本設定部分繼承（見「勢力聲望與勢力間關係」）。死亡遺物（O26）尚未實作，攜帶物快照留待之後使用。
+- **新角色接續**：角色死亡後可在同一世界建立新角色。世界層欄位保留，玩家狀態的 `characterSeq` 記錄角色代數（第一位為 1，接續的新角色加一）；前一位角色以 `characterHistory`（代數、名稱、種族、職階、等級、結束時間與地區、死亡事件 ID 與公開描述、攜帶物快照）記錄並提供給 AI 作為傳聞素材（最多 5 位，附上其事蹟，見「AI 上下文組裝與回應格式版本」）；新角色不繼承等級、背包、任務與單位關係；勢力聲望重置為初始值，或依劇本設定部分繼承（見「勢力聲望與勢力間關係」）。死亡遺物（O26）尚未實作，攜帶物快照留待之後使用。
 - **匯出／匯入**：存檔管理可將一個世界的所有欄位匯出為 JSON（`format: "adventure-simulator-world"`）。匯入時驗證格式、版本、劇本與每個欄位內容，任何欄位無效即整份拒絕；一律以新世界 ID 匯入，不覆蓋任何現有存檔，寫入中途失敗會移除已寫入的欄位。
 - **容量管理**：存檔管理顯示本遊戲在 localStorage 的估計用量（以約 5 MB 上限計），達 80% 時警示；寫入失敗（例如容量不足）時 HUD 提示匯出備份，其他欄位不受影響。事件紀錄超過 200 件即壓縮成編年史，且存檔只保存有差異的單位實例；目前容量足夠，暫不改用 IndexedDB。
 
-存檔帶有 `schemaVersion`（`saveStorage.ts` 的 `SAVE_SCHEMA_VERSION`，目前為 6）。開發階段每次變更存檔格式就將版本加一；版本不符、缺少欄位或格式無效的存檔直接捨棄，不提供舊格式遷移；舊版單一快照（`TRPG_GAME_SESSION`、`TRPG_PLAYER_STATE`）在啟動時移除。正式上線後才開始為舊版本撰寫遷移。
+存檔帶有 `schemaVersion`（`saveStorage.ts` 的 `SAVE_SCHEMA_VERSION`，目前為 7）。開發階段每次變更存檔格式就將版本加一；版本不符、缺少欄位或格式無效的存檔直接捨棄，不提供舊格式遷移；舊版單一快照（`TRPG_GAME_SESSION`、`TRPG_PLAYER_STATE`）在啟動時移除。正式上線後才開始為舊版本撰寫遷移。
 
 ## 金鑰安全限制
 

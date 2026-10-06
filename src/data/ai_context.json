@@ -1,0 +1,13 @@
+{
+  "maxCallsPerTurn": 2,
+  "totalBudgetChars": 20000,
+  "legacy": { "maxCharacters": 5, "maxDeedsPerCharacter": 5 },
+  "worldEvents": { "maxEvents": 12 },
+  "chronicle": { "maxLines": 10 },
+  "trimmableSections": {
+    "legacy": { "priority": 1, "maxChars": 2500 },
+    "worldEvents": { "priority": 2, "maxChars": 3000 },
+    "modifiers": { "priority": 3, "maxChars": 1000 },
+    "chronicle": { "priority": 4, "maxChars": 1000 }
+  }
+}

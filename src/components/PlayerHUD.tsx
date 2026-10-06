@@ -1,4 +1,5 @@
 import React from 'react';
+import { AIContextDebugPanel } from './AIContextDebugPanel';
 import type { PlayerState } from '../types/game';
 import { canPlayerEnterMap, factionData, factionsDatabase, getCharacterClassById, getFactionById, getFactionRelation, getFactionReputation, getItemById, getMapById, describeUnitBuild, getLevelBenchmark, getReputationTier, getSpeciesById, getPlayerResourceCaps, getQuestById, getShopForNpc, getUnlockedSkills, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap } from '../data/staticData';
 import { getPlayerStatBreakdown, STAT_LABELS } from '../utils/gameChecks';
@@ -73,6 +74,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
       <button onClick={onOpenSaveManager} style={{ padding: '7px 10px', backgroundColor: '#333', color: '#fff', border: '1px solid #666', borderRadius: '4px', cursor: 'pointer' }}>
         💾 存檔管理（存讀檔、匯出入、新世界）
       </button>
+      {import.meta.env.DEV && <AIContextDebugPanel />}
 
       {/* 血條與魔力條 */}
       <div>

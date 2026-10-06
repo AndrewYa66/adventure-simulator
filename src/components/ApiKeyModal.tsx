@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useSyncExternalStore } from 'react';
 import type { AIModelSettings, AIProvider } from '../services/aiModels';
 import { AI_PROVIDERS, getModels } from '../services/aiModels';
+import { getLastAIContextReport, subscribeAIContextReport } from '../services/aiContext';
+import { aiContextConfig } from '../data/staticData';
 
 interface ApiKeyModalProps {
   isOpen: boolean;
@@ -15,6 +17,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, currentSetting
   const [model, setModel] = useState(currentSettings.model);
   const [keys, setKeys] = useState(currentKeys);
 
+  const lastContext = useSyncExternalStore(subscribeAIContextReport, getLastAIContextReport);
   if (!isOpen) return null;
 
   const models = getModels(provider);
@@ -58,6 +61,10 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, currentSetting
           {provider === 'openai'
             ? 'OpenAI API Key 只保留在目前分頁記憶體中，不寫入存檔；呼叫仍由瀏覽器直接送出。'
             : 'Gemini API Key 會保存在此瀏覽器，方便下次使用。'}
+        </p>
+        <p data-testid="ai-usage-estimate" style={{ color: '#bbb', fontSize: '12px', lineHeight: 1.5, margin: '-10px 0 18px' }}>
+          每回合最多呼叫 AI {aiContextConfig.maxCallsPerTurn} 次（敘事 1 次，必要時再送 1 次修正）。
+          {lastContext ? ` 上一次請求約 ${lastContext.estimatedTokens.toLocaleString()} tokens（${lastContext.totalChars.toLocaleString()} 字元）。` : ''}
         </p>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>

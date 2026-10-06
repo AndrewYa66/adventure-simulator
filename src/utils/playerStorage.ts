@@ -21,7 +21,8 @@ function isWorldEvent(value: unknown): value is WorldEvent {
   if (!isRecord(value) || typeof value.id !== 'string' || !EVENT_TYPES.includes(String(value.type)) || !isValidGameTime(value.gameTimeMinutes) ||
       typeof value.mapId !== 'string' || typeof value.summary !== 'string' || (value.detail !== undefined && typeof value.detail !== 'string') ||
       !KNOWN_BY.includes(String(value.knownBy)) || !isStringArray(value.witnessUnitIds) || !isStringArray(value.awareFactionIds) || typeof value.cause !== 'string' ||
-      (value.eventId !== undefined && typeof value.eventId !== 'string')) return false;
+      (value.eventId !== undefined && typeof value.eventId !== 'string') || (value.sourceEventId !== undefined && typeof value.sourceEventId !== 'string') ||
+      (value.characterSeq !== undefined && (!Number.isSafeInteger(value.characterSeq) || (value.characterSeq as number) < 1))) return false;
   if (value.reputationChanges !== undefined && !(Array.isArray(value.reputationChanges) && value.reputationChanges.every((change) =>
     isRecord(change) && typeof change.factionId === 'string' && Number.isInteger(change.change)))) return false;
   if (value.death !== undefined) {
@@ -118,7 +119,8 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
       !Array.isArray(value.activeQuests) || value.unitId !== PLAYER_UNIT_ID || typeof value.speciesId !== 'string' ||
       typeof value.setupComplete !== 'boolean' || !isValidGameTime(value.gameTimeMinutes) || !isRecord(value.unitInstances) ||
       !isRecord(value.abilities) || !Array.isArray(value.statusEffects) || !Array.isArray(value.transactionHistory) ||
-      !isRecord(value.defeatedMonsters) || !isRecord(value.unitDispositionOverrides) || !isRecord(value.factionReputation)) return null;
+      !isRecord(value.defeatedMonsters) || !isRecord(value.unitDispositionOverrides) || !isRecord(value.factionReputation) ||
+      !Number.isSafeInteger(value.characterSeq) || (value.characterSeq as number) < 1) return null;
   const world = normalizeWorldState(value.world);
   if (!world) return null;
 
@@ -266,6 +268,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
 
   return {
     unitId: PLAYER_UNIT_ID,
+    characterSeq: value.characterSeq as number,
     name: value.name.trim(),
     speciesId,
     classId,

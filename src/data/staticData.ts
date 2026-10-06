@@ -14,6 +14,7 @@ import type {
   PlayerState,
   QuestStatic,
   QuestTemplateDataStatic,
+  AIContextConfigStatic,
   QuestTemplateStatic,
   ReputationTierStatic,
   ScenarioStatic,
@@ -44,6 +45,7 @@ import rawScenario from './scenario.json';
 import rawEvents from './events.json';
 import rawFactions from './factions.json';
 import rawQuestTemplates from './quest_templates.json';
+import rawAIContext from './ai_context.json';
 
 // 進行靜態型別轉型，確保導出的資料陣列完全符合 DTO 規範
 export const itemsDatabase: ItemStatic[] = rawItems as ItemStatic[];
@@ -62,6 +64,7 @@ export const factionData: FactionDataStatic = rawFactions as FactionDataStatic;
 export const factionsDatabase: FactionStatic[] = factionData.factions;
 export const questTemplateData: QuestTemplateDataStatic = rawQuestTemplates as QuestTemplateDataStatic;
 export const questTemplatesDatabase: QuestTemplateStatic[] = questTemplateData.templates;
+export const aiContextConfig: AIContextConfigStatic = rawAIContext as AIContextConfigStatic;
 
 export const getQuestTemplateById = (id: string): QuestTemplateStatic | undefined =>
   questTemplatesDatabase.find((template) => template.id === id);

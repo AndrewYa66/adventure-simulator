@@ -20,7 +20,7 @@ import { isStoryMessage, normalizePlayerState } from './playerStorage';
  * 存檔格式版本；開發階段每次變更存檔格式就加一，版本不符的存檔直接捨棄，不撰寫遷移程式。
  * 正式上線後才開始為舊版本提供遷移。
  */
-export const SAVE_SCHEMA_VERSION = 6;
+export const SAVE_SCHEMA_VERSION = 7;
 
 export const AUTO_SLOT_ID: SaveSlotId = 'auto';
 export const MANUAL_SLOT_IDS: SaveSlotId[] = ['manual-1', 'manual-2', 'manual-3'];
@@ -93,7 +93,7 @@ export function splitPlayerState(player: PlayerState, characterHistory: Characte
 function normalizeCharacterHistory(value: unknown): CharacterHistoryEntry[] | null {
   if (!Array.isArray(value)) return null;
   return value.flatMap((entry) => {
-    if (!isRecord(entry) || typeof entry.name !== 'string' || typeof entry.speciesId !== 'string' || !getSpeciesById(entry.speciesId) ||
+    if (!isRecord(entry) || !Number.isSafeInteger(entry.characterSeq) || (entry.characterSeq as number) < 1 || typeof entry.name !== 'string' || typeof entry.speciesId !== 'string' || !getSpeciesById(entry.speciesId) ||
         typeof entry.classId !== 'string' || !getCharacterClassById(entry.classId) || typeof entry.alignment !== 'string' ||
         !Number.isInteger(entry.level) || !Number.isSafeInteger(entry.endedAtMinutes) || typeof entry.mapId !== 'string' ||
         !getMapById(entry.mapId) || entry.reason !== 'death' || !Number.isSafeInteger(entry.gold) || !Array.isArray(entry.inventory) ||
@@ -339,7 +339,7 @@ export function getStorageUsage(): StorageUsage {
 export function createHistoryEntry(player: PlayerState): CharacterHistoryEntry {
   const death = player.isDead ? findLatestPlayerDeath(player) : undefined;
   return {
-    name: player.name, speciesId: player.speciesId, classId: player.classId, alignment: player.alignment, level: player.level,
+    characterSeq: player.characterSeq, name: player.name, speciesId: player.speciesId, classId: player.classId, alignment: player.alignment, level: player.level,
     endedAtMinutes: player.gameTimeMinutes, mapId: player.currentMapId, reason: 'death',
     ...(death ? { deathEventId: death.id, deathSummary: death.summary } : {}),
     inventory: player.inventory.map((entry) => ({ ...entry })), gold: player.gold
@@ -348,7 +348,7 @@ export function createHistoryEntry(player: PlayerState): CharacterHistoryEntry {
 
 /** 在同一世界接續新角色：保留世界層欄位，其餘取自新建角色。 */
 export function continueWorldWithCharacter(previous: PlayerState, newCharacter: PlayerState): PlayerState {
-  const next = { ...newCharacter };
+  const next = { ...newCharacter, characterSeq: previous.characterSeq + 1 };
   for (const key of WORLD_STATE_KEYS) (next as Record<string, unknown>)[key] = previous[key];
   return next;
 }

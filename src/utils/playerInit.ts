@@ -17,6 +17,7 @@ export const createInitialPlayer = (
 
   return {
     unitId: PLAYER_UNIT_ID,
+    characterSeq: 1,
     name: playerName,
     speciesId,
     classId: characterClass.id,
