@@ -128,9 +128,10 @@ export function getStoryletCandidates(state: PlayerState): { storylet: StoryletS
   }).sort((a, b) => b.storylet.priority - a.storylet.priority);
 }
 
-/** 目標是否已達成（只看結果，不論由誰達成）。 */
+/** 目標是否已達成（只看結果，不論由誰達成）；威脅消除與抵達地點另可由 orFlag 旗標成立而完成。 */
 export function isStoryletGoalMet(state: PlayerState, storylet: StoryletStatic): boolean {
   const goal = storylet.goal;
+  if (goal.type !== 'flagSet' && goal.orFlag && state.storyFlags[goal.orFlag] === true) return true;
   if (goal.type === 'threatRemoved') return goal.unitIds.every((unitId) => hasDied(state, unitId));
   if (goal.type === 'locationReached') return state.currentMapId === goal.mapId;
   return state.storyFlags[goal.flag] === true;

@@ -30,11 +30,11 @@
       "isDefault": true,
       "requires": { "mapIds": ["MAP-001"] },
       "giver": { "fallback": "notice_board" },
-      "goal": { "type": "threatRemoved", "unitIds": ["MON-003"], "summary": "討伐哥布林酋長格羅姆・裂牙" },
+      "goal": { "type": "threatRemoved", "unitIds": ["MON-003"], "orFlag": "酋長被說服", "summary": "解除哥布林酋長格羅姆・裂牙的威脅" },
       "onComplete": {
         "advanceAct": true,
-        "endingTraits": { "哥布林酋長": "已死" },
-        "summary": "哥布林酋長格羅姆・裂牙已死，冒險者公會撤下了懸賞告示。",
+        "endingTraits": { "古道威脅": "已解除" },
+        "summary": "哥布林酋長格羅姆・裂牙不再威脅古道，冒險者公會撤下了懸賞告示。",
         "knownBy": "region"
       },
       "scene": {
@@ -85,12 +85,12 @@
         "scope": "world",
         "fallback": "letter"
       },
-      "goal": { "type": "threatRemoved", "unitIds": ["MON-003"], "summary": "消除哥布林酋長格羅姆・裂牙的威脅" },
+      "goal": { "type": "threatRemoved", "unitIds": ["MON-003"], "orFlag": "酋長被說服", "summary": "消除哥布林酋長格羅姆・裂牙的威脅" },
       "onComplete": {
         "eventIds": ["EVT-004"],
         "advanceAct": true,
-        "endingTraits": { "哥布林酋長": "已死" },
-        "summary": "哥布林酋長格羅姆・裂牙倒下，盤據古道的威脅解除。",
+        "endingTraits": { "古道威脅": "已解除" },
+        "summary": "哥布林酋長格羅姆・裂牙不再盤據古道，威脅解除。",
         "knownBy": "region"
       },
       "scene": {

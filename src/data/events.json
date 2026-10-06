@@ -40,6 +40,17 @@
     "aiHint": "玩家在橡木村明確向村長或村民警告哥布林的威脅，且對方採信時。"
   },
   {
+    "id": "EVT-005",
+    "title": "酋長同意撤離",
+    "trigger": "aiProposal",
+    "requires": { "mapIds": ["MAP-003"], "unitsAlive": ["MON-003"] },
+    "excludes": { "flags": ["酋長被說服"] },
+    "effects": { "setFlags": ["酋長被說服"] },
+    "knownBy": "region",
+    "summary": "格羅姆・裂牙同意率領哥布林撤離巢穴，不再騷擾古道。",
+    "aiHint": "玩家在哥布林巢穴與格羅姆・裂牙交涉，以說服或威嚇檢定成功，讓他同意率族人撤離時。"
+  },
+  {
     "id": "EVT-004",
     "title": "古道恢復通行",
     "trigger": "storylet",
@@ -49,6 +60,6 @@
       "reputation": [{ "factionId": "FAC-001", "change": 10 }]
     },
     "knownBy": "region",
-    "summary": "哥布林酋長倒下後，綠林古道恢復了通行，商隊重新上路。"
+    "summary": "哥布林酋長的威脅解除後，綠林古道恢復了通行，商隊重新上路。"
   }
 ]

@@ -215,7 +215,7 @@ sendPlayerAction(
   - 片段：`{ id: "STORY-幕-編號", actId, title, priority (0–100), isDefault?, requires?, excludes?, giver, goal, onComplete, scene }`。
     - `requires`：`{ flags, unitsAlive, unitsDead, mapIds, reputation, factionRelations }`，勢力條件與事件共用 `matchesFactionConditions`；`mapIds` 是發生地點。
     - `giver`：`{ preferredUnitId?, role?: { classIds?, factionIds?, minLevel? }, scope?: "map" | "world", fallback: "notice_board" | "letter" | "relic" | "none" }`；`relic` 需 O26，第一版驗證會拒絕。
-    - `goal`：`{ type: "threatRemoved", unitIds }`（唯一單位都已死亡）、`{ type: "locationReached", mapId }`（玩家抵達）或 `{ type: "flagSet", flag }`（旗標成立），都另有給玩家看的 `summary`。
+    - `goal`：`{ type: "threatRemoved", unitIds, orFlag? }`（唯一單位都已死亡）、`{ type: "locationReached", mapId, orFlag? }`（玩家抵達）或 `{ type: "flagSet", flag }`（旗標成立），都另有給玩家看的 `summary`；`orFlag` 旗標成立時同樣算完成（另一種解法，旗標由 AI 提議事件等設定）。
     - `onComplete`：`{ eventIds?, setFlags?, advanceAct?, endingTraits?, summary, knownBy? }`；`eventIds` 須為 `trigger: "storylet"` 的事件。
     - `scene`：`{ purpose, mustConvey, tone?, keyLines?, playerChoices?, forbidden, giverAbsent? }`，提供給 AI。
 - **候選** `getStoryletCandidates(state)`：

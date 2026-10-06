@@ -433,10 +433,11 @@ export type StoryletGiverChannel = 'notice_board' | 'letter' | 'relic' | 'none';
 /**
  * 劇情片段目標：以結果定義，由他人或事件達成時同樣推進。
  * threatRemoved：列出的唯一單位都已死亡；locationReached：玩家抵達地圖；flagSet：旗標成立（說服、得知真相等由事件設定旗標）。
+ * orFlag：另一種解法（例如說服對方離開）由事件設定此旗標時，同樣算完成。
  */
 export type StoryletGoal =
-  | { type: 'threatRemoved'; unitIds: string[]; summary: string }
-  | { type: 'locationReached'; mapId: string; summary: string }
+  | { type: 'threatRemoved'; unitIds: string[]; orFlag?: string; summary: string }
+  | { type: 'locationReached'; mapId: string; orFlag?: string; summary: string }
   | { type: 'flagSet'; flag: string; summary: string };
 
 /** 幕：主線的大階段與收斂點。 */

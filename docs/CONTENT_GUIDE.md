@@ -80,6 +80,7 @@ content/
 | 保底管道 | giver.fallback：告示板→notice_board、書信→letter、遺物→relic、無→none |
 | 目標類型 | goal.type：威脅消除→threatRemoved、抵達地點→locationReached；說服角色、保護角色、得知真相、其他→flagSet（目標對象填旗標，由 AI 提議事件設定）；物品送達尚未支援（見下方說明） |
 | 目標對象 | 威脅消除→goal.unitIds（唯一單位 ID，可多個；族群魔物如 `哥布林@MAP-003` 尚未支援）、抵達地點→goal.mapId、旗標→goal.flag |
+| 或旗標成立 | goal.orFlag（只用於威脅消除、抵達地點） |
 | 目標說明 | goal.summary |
 | 完成事件／完成旗標 | onComplete.eventIds（事件的觸發方式須為「劇情片段完成」）／onComplete.setFlags |
 | 推進下一幕 | onComplete.advanceAct |

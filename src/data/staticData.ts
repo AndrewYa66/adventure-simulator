@@ -797,6 +797,7 @@ export function validateStoryData(): string[] {
     } else if (goal?.type === 'flagSet') {
       if (!isFlag(goal.flag)) issues.push(`${label}: 目標旗標名稱無效`);
     } else issues.push(`${label}: 無效的目標類型 ${(goal as { type?: string } | undefined)?.type}`);
+    if ((goal?.type === 'threatRemoved' || goal?.type === 'locationReached') && goal.orFlag !== undefined && !isFlag(goal.orFlag)) issues.push(`${label}: 「或旗標成立」的旗標名稱無效`);
 
     const onComplete = storylet.onComplete;
     if (!onComplete?.summary?.trim()) issues.push(`${label}: 缺少完成描述`);
