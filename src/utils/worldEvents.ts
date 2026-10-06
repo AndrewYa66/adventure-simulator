@@ -440,29 +440,81 @@ function applyActionReputation(previous: PlayerState, current: PlayerState, newD
 export const findLatestPlayerDeath = (state: PlayerState): WorldEvent | undefined =>
   [...state.world.events].reverse().find((event) => event.type === 'unit_death' && event.death?.victimUnitId === PLAYER_UNIT_ID);
 
+/** 在場且存活的 NPC（會說話、可被打聽的人）。 */
+const getPresentNpcIds = (state: PlayerState) => (getMapById(state.currentMapId)?.npcsPresent ?? []).filter((unitId) => isUnitAlive(state, unitId));
+
 /**
- * 提供給 AI 的世界事件：所在地區、全世界周知、或與在場 NPC 相關（目擊或死者原屬此地）的近期事件。
- * 目擊者名單隨附，AI 依此區分「誰知道細節」。
+ * 某個單位對事件的認知層級（O39）；undefined 代表不知道。
+ * - witnessed 親眼目擊：事件的目擊者，知道經過與兇手，不會淡化成傳說。
+ * - rumor 傳聞：與目擊者同勢力但未在場，聽說了兇手或死因，不知道經過。
+ * - public 公開消息：得知事件的勢力成員、全世界周知事件、或住在事件地區的無勢力 NPC，只知道結果。
+ * - legend 傳說：傳聞或公開消息超過設定天數後，只剩模糊的往事。
  */
-export function getWorldContextForAI(state: PlayerState) {
-  const map = getMapById(state.currentMapId);
-  const presentNpcIds = (map?.npcsPresent ?? []).filter((unitId) => isUnitAlive(state, unitId));
+export type EventKnowledgeLevel = 'witnessed' | 'rumor' | 'public' | 'legend';
+
+const KNOWLEDGE_LABELS: Record<EventKnowledgeLevel, string> = { witnessed: '親眼目擊', rumor: '傳聞', public: '公開消息', legend: '傳說' };
+const KNOWLEDGE_ORDER: EventKnowledgeLevel[] = ['witnessed', 'rumor', 'public', 'legend'];
+
+/** 與目擊者同勢力、未在場的單位是否聽說了經過（只有帶細節的事件才有傳聞）。 */
+const hearsDetail = (event: WorldEvent, factionId: string | undefined) =>
+  !!event.detail && !!factionId && getFactionsOfUnits(event.witnessUnitIds).includes(factionId);
+
+export function getEventKnowledgeLevel(state: PlayerState, event: WorldEvent, unitId: string): EventKnowledgeLevel | undefined {
+  if (event.witnessUnitIds.includes(unitId)) return 'witnessed';
+  const factionId = getUnitFactionId(unitId);
+  const unit = getWorldUnitById(unitId);
+  const heard = hearsDetail(event, factionId);
+  const knowsResult = heard || event.knownBy === 'world' || (!!factionId && event.awareFactionIds.includes(factionId)) ||
+    (!factionId && event.knownBy === 'region' && unit?.kind === 'npc' && unit.source.mapId === event.mapId);
+  if (!knowsResult) return undefined;
+  if (state.gameTimeMinutes - event.gameTimeMinutes >= aiContextConfig.knowledge.legendAfterDays * MINUTES_PER_DAY) return 'legend';
+  return heard ? 'rumor' : 'public';
+}
+
+/** 各認知層級能說出的內容；經過（detail）只交給親眼目擊者。 */
+function describeKnowledge(event: WorldEvent, level: EventKnowledgeLevel): string {
+  if (level === 'witnessed') return event.detail ?? event.summary;
+  if (level === 'legend') return `很久以前的事：${event.summary}細節已經模糊。`;
+  if (level === 'public') return event.summary;
+  const hearsay = event.death?.killerName ? `聽說是${event.death.killerName}下的手` : `聽說死因是${event.cause}`;
+  return `${event.summary}${hearsay}，但不清楚經過。`;
+}
+
+/** 事件的 AI 描述：公開結果，加上在場 NPC 依認知層級分組能說的內容；沒有在場目擊者時不提供經過。 */
+function describeEventForAI(state: PlayerState, event: WorldEvent, presentNpcIds: string[]) {
+  const groups = new Map<EventKnowledgeLevel, string[]>();
+  for (const unitId of presentNpcIds) {
+    const level = getEventKnowledgeLevel(state, event, unitId);
+    if (level) groups.set(level, [...(groups.get(level) ?? []), getUnitDisplayName(unitId)]);
+  }
+  const presentKnowledge = KNOWLEDGE_ORDER.flatMap((level) => groups.has(level) ? [{
+    level: KNOWLEDGE_LABELS[level],
+    npcs: groups.get(level)!,
+    knows: describeKnowledge(event, level),
+    ...(level === 'rumor' ? { heardFrom: event.witnessUnitIds.filter((unitId) => getWorldUnitById(unitId)?.kind === 'npc').map(getUnitDisplayName) } : {})
+  }] : []);
+  return {
+    id: event.id,
+    time: formatGameTime(event.gameTimeMinutes),
+    place: getMapById(event.mapId)?.name ?? event.mapId,
+    summary: event.summary,
+    ...(presentKnowledge.length ? { presentKnowledge } : {})
+  };
+}
+
+/**
+ * 提供給 AI 的世界事件：所在地區、全世界周知、或與在場 NPC 相關（目擊、同勢力得知或死者原屬此地）的近期事件。
+ * 每件事附上在場 NPC 的認知層級；excludeEventIds（已在歷代角色區段列出的事件）不重複列出。
+ */
+export function getWorldContextForAI(state: PlayerState, excludeEventIds: readonly string[] = []) {
+  const presentNpcIds = getPresentNpcIds(state);
   const presentFactions = getFactionsOfUnits(presentNpcIds);
-  const relevant = state.world.events.filter((event) => event.mapId === state.currentMapId || event.knownBy === 'world' ||
+  const relevant = state.world.events.filter((event) => !excludeEventIds.includes(event.id) && (event.mapId === state.currentMapId || event.knownBy === 'world' ||
     event.witnessUnitIds.some((unitId) => presentNpcIds.includes(unitId)) ||
     (event.knownBy === 'faction' && event.awareFactionIds.some((factionId) => presentFactions.includes(factionId))) ||
-    (event.death && getWorldUnitById(event.death.victimUnitId)?.mapIds.includes(state.currentMapId)));
+    (event.death && getWorldUnitById(event.death.victimUnitId)?.mapIds.includes(state.currentMapId))));
   return {
-    events: relevant.slice(-aiContextConfig.worldEvents.maxEvents).map((event) => ({
-      id: event.id,
-      time: formatGameTime(event.gameTimeMinutes),
-      place: getMapById(event.mapId)?.name ?? event.mapId,
-      summary: event.summary,
-      ...(event.detail ? { detail: event.detail } : {}),
-      knownBy: event.knownBy,
-      ...(event.knownBy === 'faction' ? { knownByFactions: event.awareFactionIds.map((factionId) => getFactionById(factionId)?.name ?? factionId) } : {}),
-      witnesses: event.witnessUnitIds.map((unitId) => ({ id: unitId, name: getUnitDisplayName(unitId) }))
-    })),
+    events: relevant.slice(-aiContextConfig.worldEvents.maxEvents).map((event) => describeEventForAI(state, event, presentNpcIds)),
     chronicle: state.world.chronicle.slice(-aiContextConfig.chronicle.maxLines),
     modifiers: state.world.modifiers.map((modifier) => ({
       scope: modifier.scope, stat: modifier.stat, change: modifier.op === 'add' ? `${modifier.value >= 0 ? '+' : ''}${modifier.value}` : `×${modifier.value}`,
@@ -481,24 +533,16 @@ function isCharacterDeed(event: WorldEvent): boolean {
 
 /**
  * 提供給 AI 的歷代角色紀錄：每位角色附上其死亡事件與事蹟（最新 maxDeeds 件），
- * 並標出目前在場、親眼目擊的 NPC，讓 AI 能把前任冒險者與其造成的事件連起來。
+ * 每件事附上在場 NPC 的認知層級，讓 AI 能把前任冒險者與其造成的事件連起來，又不讓未目擊者說出經過。
  * 已壓縮進編年史的舊事件不再列出。
  */
 export function getCharacterLegacyForAI(state: PlayerState, history: CharacterHistoryEntry[], maxCharacters: number, maxDeeds: number) {
-  const presentNpcIds = (getMapById(state.currentMapId)?.npcsPresent ?? []).filter((unitId) => isUnitAlive(state, unitId));
+  const presentNpcIds = getPresentNpcIds(state);
   const describeEvent = (event: WorldEvent) => {
     const consequence = event.type === 'unit_death'
       ? state.world.events.find((entry) => entry.sourceEventId === event.id && entry.type === 'reputation_change')?.summary
       : undefined;
-    return {
-      time: formatGameTime(event.gameTimeMinutes),
-      place: getMapById(event.mapId)?.name ?? event.mapId,
-      summary: event.summary,
-      ...(event.detail ? { detail: event.detail } : {}),
-      ...(consequence ? { consequence } : {}),
-      witnesses: event.witnessUnitIds.map(getUnitDisplayName),
-      presentWitnesses: event.witnessUnitIds.filter((unitId) => presentNpcIds.includes(unitId)).map(getUnitDisplayName)
-    };
+    return { ...describeEventForAI(state, event, presentNpcIds), ...(consequence ? { consequence } : {}) };
   };
   return history.slice(-maxCharacters).map((entry) => {
     const death = entry.deathEventId ? state.world.events.find((event) => event.id === entry.deathEventId) : undefined;

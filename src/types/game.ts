@@ -430,6 +430,8 @@ export interface AIContextConfigStatic {
   legacy: { maxCharacters: number; maxDeedsPerCharacter: number };
   worldEvents: { maxEvents: number };
   chronicle: { maxLines: number };
+  /** 傳聞或公開消息經過多少遊戲日後變成「傳說」（親眼目擊者不受影響）。 */
+  knowledge: { legendAfterDays: number };
   /** priority 數字越小越重要；超出整體預算時先截斷數字大的區段。 */
   trimmableSections: Record<AIContextTrimmableSectionId, { priority: number; maxChars: number }>;
 }

@@ -4,6 +4,7 @@
   "legacy": { "maxCharacters": 5, "maxDeedsPerCharacter": 5 },
   "worldEvents": { "maxEvents": 12 },
   "chronicle": { "maxLines": 10 },
+  "knowledge": { "legendAfterDays": 30 },
   "trimmableSections": {
     "legacy": { "priority": 1, "maxChars": 2500 },
     "worldEvents": { "priority": 2, "maxChars": 3000 },

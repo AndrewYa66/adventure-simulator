@@ -129,8 +129,9 @@ function buildRules(): string {
 - 一般戰鬥由遊戲規則結算，不可敘事中自行宣告擊敗或扣除怪物。
 - 每次回應都必須包含 serviceRequest；只有玩家明確要求使用、購買某項服務（例如住店、休息一晚）時，才從「當前可使用服務」清單填入 shopId 與 serviceId，否則設為 null。詢問價格或服務內容不算使用。服務的費用、恢復效果與耗時由遊戲端結算，不可同時用 hpChange/mpChange/goldChange 描述同一服務，也不可在 storyText 宣稱已付款或已恢復；若清單中沒有對應服務，只能說明目前無法使用。
 - 遊戲時間由遊戲依行動類型推進；玩家要求原地等待時由遊戲處理，AI 不可在敘事中自行跳過時間。玩家要求等待、睡覺或停留數天等長時間時，本回合只經過一般回合時間：storyText 不得描述數小時以上的時間流逝，應說明單次等待上限為 8 小時，請玩家分次等待或使用旅店休息。
-- 世界事件與死因只能依「世界事件紀錄」與「歷代角色」敘述，不可捏造未記錄的死亡、兇手或世界變化。NPC 只有出現在該事件 witnesses 中才知道 detail（誰下手、如何發生）；其他人只知道 summary 的公開結果，可以轉述傳聞或猜測，但不可斷定兇手或經過。目前玩家角色若不是當時在場的人，也只能從在場目擊者口中得知細節。
-- 「歷代角色」的 death 與 deeds 是前任冒險者生前造成的既成事實（detail 中的人名就是該前任冒險者，不是目前玩家）。presentWitnesses 列出的是此刻在場、親眼目擊的 NPC：被問到前任冒險者或相關事件時，他們必須明確說出是哪一位前任冒險者（name）、做了什麼（依 detail）、何時何地，不可含糊帶過或推說不清楚；不在 witnesses 中的人只能轉述 summary 的公開結果或傳聞。前任冒險者不可復活，玩家也不可取得其物品。
+- 世界事件與死因只能依「世界事件紀錄」「歷代角色」與「世界編年史」敘述，不可捏造未記錄的死亡、兇手或世界變化。
+- 認知層級：每件事的 presentKnowledge 列出此刻在場 NPC 對它的認知，NPC 只能說出自己層級的 knows 內容。「親眼目擊」者肯定、具體地說出經過與兇手（被問到時必須明確說出是誰、做了什麼、何時何地，不可含糊帶過或推說不清楚）；「傳聞」者只能以聽說的口吻提到兇手或死因，不知道經過，可建議去問 heardFrom 中的目擊者；「公開消息」者只知道結果，可以猜測但不可斷定兇手；「傳說」者以久遠往事的口吻模糊帶過。沒有列在該事件 presentKnowledge 中的 NPC 不知道這件事。旁白也不可向玩家揭露在場者都不知道的經過；玩家角色只能從 NPC 口中得知。
+- 「歷代角色」的 death 與 deeds 是前任冒險者生前造成的既成事實，該前任冒險者不是目前玩家，不可復活，玩家也不可取得其物品；NPC 是否知道某件事與該前任冒險者有關，同樣只依該事件的 presentKnowledge。
 - 每次回應都必須包含 eventProposals（陣列）；只有玩家行動確實促成「可提議的世界事件」所描述的情況（符合 when 說明）時，才填入該事件 ID，否則為空陣列。事件效果由遊戲驗證後套用，storyText 可描述促成事件的經過，但不可自行宣告超出事件描述的世界改變。
 - 每次回應都必須包含 questProposals（陣列，最多一件）。只有玩家在本回合明確向在場人物詢問工作、委託或需要幫忙的事時，才從「可發布的支線委託」提議：templateId、giverId（玩家詢問的對象；若玩家未指定對象則選清單中的人）、targetUnitId（收集範本另填 itemId，討伐範本 itemId 為 null）、quantity（在範圍內）。閒聊、交易、詢問劇本任務或 NPC 自己想找人幫忙都不算，questProposals 必須為空陣列；不可讓 NPC 主動提出委託。報酬、標題、目標與經驗值由遊戲依範本與委託人持有物決定（約為 rewardValuePerQuantity × quantity 的價值），storyText 不可說出具體報酬數字，也不可宣稱玩家已接下委託；發布後玩家需另外表示接受。
 - 只有玩家行動或明確世界事件確實改變了當前地區單位對玩家的關係時，才在 stateChanges.unitDispositionChanges 回報單位 ID 與 friendly/neutral/hostile；純對話、陣營傾向或臆測不能改變關係。單位關係變更須與 storyText 敘事一致。
@@ -222,8 +223,10 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
   const availableServices = getAvailableServices(playerState);
   const encounteredUnit = playerState.encounteredUnitId ? getWorldUnitById(playerState.encounteredUnitId, playerState) : undefined;
   const playerUnit = getPlayerWorldUnit(playerState);
-  const worldContext = getWorldContextForAI(playerState);
   const legacy: LegacyEntry[] = getCharacterLegacyForAI(playerState, characterHistory, aiContextConfig.legacy.maxCharacters, aiContextConfig.legacy.maxDeedsPerCharacter);
+  // 歷代角色區段已列出的事件不在世界事件區段重複。
+  const legacyEventIds = legacy.flatMap((entry) => [entry.death, ...entry.deeds].flatMap((event) => event && 'id' in event ? [event.id as string] : []));
+  const worldContext = getWorldContextForAI(playerState, legacyEventIds);
   const questPostingOptions = getQuestPostingOptions(playerState);
   const openGeneratedQuests = playerState.world.generatedQuests.filter((quest) => quest.status === 'open')
     .map((quest) => ({ id: quest.id, title: quest.title, giver: quest.questGiver, objective: quest.objective, deadline: formatGameTime(quest.expiresAtMinutes),
@@ -247,7 +250,7 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
     ) },
     { id: 'legacy', dropped: 0, droppedEntries: 0, list: {
       shrink: () => shrinkLegacy(legacy),
-      label: `歷代角色（同一世界中已故的前任冒險者，第 ${playerState.characterSeq} 代為目前玩家；generation 為代數，death 為其死因，deeds 為其生前造成的重大事件（omittedDeeds 為省略的較舊事蹟數），presentWitnesses 為此刻在場的目擊者）`,
+      label: `歷代角色（同一世界中已故的前任冒險者，第 ${playerState.characterSeq} 代為目前玩家；generation 為代數，death 為其死因，deeds 為其生前造成的重大事件（omittedDeeds 為省略的較舊事蹟數）；presentKnowledge 見下方「認知層級」規則）`,
       entries: legacy
     } },
     { id: 'location', dropped: 0, droppedEntries: 0, text: lines(
@@ -277,10 +280,10 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
     { id: 'items', dropped: 0, droppedEntries: 0, text: `- 世界靜態物品清單（只可使用這些 ID/名稱）: ${JSON.stringify(itemsDatabase.map((item) => ({ id: item.id, name: item.name, type: item.type })))}` },
     { id: 'flags', dropped: 0, droppedEntries: 0, text: `- 劇情旗標 (Flags，只能經由世界事件成立，AI 不可直接設定): ${JSON.stringify(playerState.storyFlags || {})}` },
     { id: 'worldEvents', dropped: 0, droppedEntries: 0, list: {
-      label: '世界事件紀錄（遊戲規則寫入的既成事實，依時間排序；summary 是公開消息，detail 是經過與兇手等細節，只有 witnesses 列出的單位親眼看見）',
+      label: '世界事件紀錄（遊戲規則寫入的既成事實，依時間排序；summary 是公開結果，presentKnowledge 是在場 NPC 各自的認知層級與能說的內容）',
       entries: worldContext.events
     } },
-    { id: 'chronicle', dropped: 0, droppedEntries: 0, list: { label: '世界編年史（較舊事件的摘要）', entries: worldContext.chronicle } },
+    { id: 'chronicle', dropped: 0, droppedEntries: 0, list: { label: '世界編年史（較舊事件的摘要，屬於傳說：人們只模糊記得，細節與兇手不可考）', entries: worldContext.chronicle } },
     { id: 'modifiers', dropped: 0, droppedEntries: 0, list: { label: '生效中的世界修正（已計入上方各單位數值）', entries: worldContext.modifiers } },
     { id: 'proposableEvents', dropped: 0, droppedEntries: 0, text: `- 可提議的世界事件（eventProposals 只可選這些 ID）: ${JSON.stringify(proposableEvents)}` },
     { id: 'rules', dropped: 0, droppedEntries: 0, text: buildRules() }

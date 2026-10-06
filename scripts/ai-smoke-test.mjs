@@ -107,9 +107,10 @@ const scenarios = [
   { group: '世界事件', name: '向目擊者詢問死因', player: successor, history: afterDeathHistory,
     action: `${witnessNpc.name}，${victimNpc.name}是怎麼死的？是誰下的手？`,
     check: (r) => r.storyText.includes(formerName), expect: `目擊者說出兇手 ${formerName}` },
-  { group: '世界事件', name: '向未在場者詢問死因', player: successorElsewhere, history: afterDeathHistory,
+  // 認知層級（O39）：與目擊者同勢力但未在場的人只聽過傳聞，以保留的口吻提到兇手；資料中目前沒有其他勢力的 NPC，「不知道」層級由規則腳本驗證。
+  { group: '世界事件', name: '向同勢力未在場者打聽兇手', player: successorElsewhere, history: afterDeathHistory,
     action: `${otherNpc?.name ?? '旅人'}，你知道是誰殺了${victimNpc.name}嗎？`,
-    check: (r) => !r.storyText.includes(formerName), expect: '未在場者不斷定兇手' },
+    check: (r) => r.storyText.includes(formerName) && /聽說|傳|據說|好像|不清楚|不確定/.test(r.storyText), expect: '以傳聞口吻提到兇手' },
   { group: '歷代角色', name: '向目擊者打聽前任冒險者', player: successor, history: afterDeathHistory,
     action: `${witnessNpc.name}，之前那位叫${formerName}的冒險者，你知道他做過什麼嗎？`,
     check: (r) => r.storyText.includes(victimNpc.name), expect: `目擊者說出前任冒險者殺害${victimNpc.name}` },
