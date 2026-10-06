@@ -74,25 +74,22 @@ content/
 | 需要旗標／排除旗標 | requires.flags／excludes.flags |
 | 需要存活／需要死亡 | requires.unitsAlive／requires.unitsDead |
 | 發生地點 | requires.mapIds |
-| 首選給予者 | giver.preferred |
-| 給予者職階／給予者勢力 | giver.role.classIds／giver.role.factionIds |
+| 首選給予者 | giver.preferredUnitId |
+| 給予者職階／給予者勢力／給予者最低等級 | giver.role.classIds／giver.role.factionIds／giver.role.minLevel |
+| 接手範圍 | giver.scope：本地→map、全世界→world（預設本地） |
 | 保底管道 | giver.fallback：告示板→notice_board、書信→letter、遺物→relic、無→none |
 | 目標類型 | goal.type：威脅消除→threatRemoved、抵達地點→locationReached；說服角色、保護角色、得知真相、其他→flagSet（目標對象填旗標，由 AI 提議事件設定）；物品送達尚未支援（見下方說明） |
 | 目標對象 | 威脅消除→goal.unitIds（唯一單位 ID，可多個；族群魔物如 `哥布林@MAP-003` 尚未支援）、抵達地點→goal.mapId、旗標→goal.flag |
+| 目標說明 | goal.summary |
 | 完成事件／完成旗標 | onComplete.eventIds（事件的觸發方式須為「劇情片段完成」）／onComplete.setFlags |
 | 推進下一幕 | onComplete.advanceAct |
 | 結局特徵 | onComplete.endingTraits（`項目:值` 拆為鍵值） |
+| 完成描述／完成傳播範圍 | onComplete.summary／onComplete.knownBy：目擊者→witnesses、本地區→region、全世界→world（預設本地區） |
 
 內文：場面目的→purpose、必須傳達的資訊→mustConvey、情緒基調→tone、關鍵台詞→keyLines、可能的玩家選擇與後果→playerChoices、禁止事項→forbidden、給予者不在時→giverAbsent（以上合為 `scene`）。
 
-遊戲資料格式見 `src/data/story.json` 與 `docs/API.md`「主線：幕與劇情片段」（O31 第一版，目前是手寫的範例資料，O36 建置腳本完成後由 `content/story/` 產生）。與範本的差異，待範本更新（`content/` 由寫手維護，需先確認）：
+遊戲資料格式見 `src/data/story.json` 與 `docs/API.md`「主線：幕與劇情片段」（O31 第一版，目前是手寫的範例資料，O36 建置腳本完成後由 `content/story/` 產生）。範本與寫手指南已於 2026-10-06 補上目標說明、完成描述、完成傳播範圍、接手範圍與給予者最低等級。
 
-- 遊戲端需要而範本還沒有的欄位：
-  - 目標說明 `goal.summary`：給玩家看的一句話，例如「前往綠林古道查看情況」；
-  - 完成描述 `onComplete.summary`：完成時寫入事件紀錄的公開結果；
-  - 完成描述的傳播範圍 `onComplete.knownBy`：預設本地區；
-  - 接手範圍 `giver.scope`：本地（發生地點或首選者居所）或全世界，預設本地；
-  - 給予者最低等級 `giver.role.minLevel`。
 - 「保底管道」第一版只支援告示板與書信；遺物需死亡遺物（O26）。預設片段不可指定首選給予者或給予者職階／勢力。
 - 「物品送達」需要「交給非發布者」的交付規則，暫不支援；需要時改用旗標目標。
 
