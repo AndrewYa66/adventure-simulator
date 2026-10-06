@@ -1,6 +1,7 @@
 import type { AIResponsePayload, PlayerState } from '../types/game';
-import { getItemById, getMapById, getPlayerResourceCaps, getQuestById, getWorldUnitById, getWorldUnitDisposition, levelBenchmarksDatabase, MAX_UNIT_LEVEL } from '../data/staticData';
-import { acceptQuest, canReachQuestGiver, getActiveQuestGiverId } from './questRules';
+import { getItemById, getMapById, getUnitDisplayName, getPlayerResourceCaps, getWorldUnitById, getWorldUnitDisposition, levelBenchmarksDatabase, MAX_UNIT_LEVEL } from '../data/staticData';
+import { acceptQuest, canReachQuestGiver, findQuest, getActiveQuestGiverId, isGeneratedQuest } from './questRules';
+import { markGeneratedQuestCompleted } from './generatedQuests';
 import { resolveLevelFromExp } from './unitGrowth';
 
 export function applyStateChanges(player: PlayerState, response: AIResponsePayload, source: 'ai' | 'game' = 'ai'): PlayerState {
@@ -24,6 +25,7 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
     if (transactionHistory.length > 100) transactionHistory.length = 100;
   };
   const currentMap = getMapById(player.currentMapId);
+  let world = player.world;
 
   for (const change of changes.unitDispositionChanges ?? []) {
     const unit = getWorldUnitById(change.unitId);
@@ -52,7 +54,7 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
   }
 
   for (const questId of changes.questAcceptances ?? []) {
-    const quest = getQuestById(questId);
+    const quest = findQuest(player, questId);
     if (!quest) continue;
     const accepted = acceptQuest({ ...player, activeQuests, unitDispositionOverrides }, quest);
     if (accepted) activeQuests.push(accepted.activeQuests[accepted.activeQuests.length - 1]);
@@ -89,7 +91,7 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
 
   for (const update of changes.questUpdates ?? []) {
     const active = activeQuests.find((entry) => entry.questId === update.questId && entry.status === 'in_progress');
-    const quest = getQuestById(update.questId);
+    const quest = findQuest(player, update.questId);
     const giverId = quest ? getActiveQuestGiverId(active, quest.questGiverId) : undefined;
     if (!active || !quest || !giverId || !canReachQuestGiver({ ...player, unitInstances, unitDispositionOverrides }, quest, giverId)) continue;
     const defeatsMet = (quest.requirements.defeatMonsters ?? []).every((requirement) =>
@@ -100,29 +102,39 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
     );
     if (!defeatsMet || !itemsMet) continue;
     active.status = 'completed';
-    const limits = quest.rewardLimits;
-    const bounded = (amount: number, range?: { min: number; max: number }) =>
-      range ? Math.max(range.min, Math.min(range.max, amount)) : amount;
-    questExp += bounded(quest.rewards.exp, limits?.exp);
     const giverState = unitInstances[giverId];
-    const requestedGold = bounded(quest.rewards.gold, limits?.gold);
-    const paidGold = Math.min(requestedGold, giverState?.gold ?? 0);
-    questGold += paidGold;
-    if (giverState) giverState.gold -= paidGold;
-    const shortfalls: string[] = [];
-    if (paidGold < requestedGold) shortfalls.push(`金幣短缺 ${requestedGold - paidGold}`);
-    for (const reward of quest.rewards.items ?? []) {
-      const desired = Math.min(reward.quantity, limits?.maxItemQuantity ?? reward.quantity);
-      const stock = giverState?.inventory.find((entry) => entry.itemId === reward.itemId);
-      const granted = Math.min(desired, stock?.quantity ?? 0);
-      if (granted > 0) {
-        rewardItems.push({ itemId: reward.itemId, quantity: granted });
-        stock!.quantity -= granted;
-        if (stock!.quantity === 0) giverState!.inventory.splice(giverState!.inventory.indexOf(stock!), 1);
+    if (isGeneratedQuest(quest)) {
+      // 生成委託的報酬已於發布時自委託人預扣保留，完成時全額發放。
+      questExp += quest.rewards.exp;
+      questGold += quest.rewards.gold;
+      rewardItems.push(...(quest.rewards.items ?? []).map((item) => ({ ...item })));
+      world = markGeneratedQuestCompleted(world, quest.id);
+      const itemText = (quest.rewards.items ?? []).map((item) => `${getItemById(item.itemId)?.name ?? item.itemId} ×${item.quantity}`).join('、');
+      recordTransaction('quest_reward', `完成任務「${quest.title}」，領取 ${quest.rewards.gold} 金幣${itemText ? `、${itemText}` : ''}（委託人預先保留的報酬）`, quest.rewards.gold);
+    } else {
+      const limits = quest.rewardLimits;
+      const bounded = (amount: number, range?: { min: number; max: number }) =>
+        range ? Math.max(range.min, Math.min(range.max, amount)) : amount;
+      questExp += bounded(quest.rewards.exp, limits?.exp);
+      const requestedGold = bounded(quest.rewards.gold, limits?.gold);
+      const paidGold = Math.min(requestedGold, giverState?.gold ?? 0);
+      questGold += paidGold;
+      if (giverState) giverState.gold -= paidGold;
+      const shortfalls: string[] = [];
+      if (paidGold < requestedGold) shortfalls.push(`金幣短缺 ${requestedGold - paidGold}`);
+      for (const reward of quest.rewards.items ?? []) {
+        const desired = Math.min(reward.quantity, limits?.maxItemQuantity ?? reward.quantity);
+        const stock = giverState?.inventory.find((entry) => entry.itemId === reward.itemId);
+        const granted = Math.min(desired, stock?.quantity ?? 0);
+        if (granted > 0) {
+          rewardItems.push({ itemId: reward.itemId, quantity: granted });
+          stock!.quantity -= granted;
+          if (stock!.quantity === 0) giverState!.inventory.splice(giverState!.inventory.indexOf(stock!), 1);
+        }
+        if (granted < desired) shortfalls.push(`${getItemById(reward.itemId)?.name ?? reward.itemId} 短缺 ${desired - granted}`);
       }
-      if (granted < desired) shortfalls.push(`${getItemById(reward.itemId)?.name ?? reward.itemId} 短缺 ${desired - granted}`);
+      recordTransaction('quest_reward', `完成任務「${quest.title}」，領取 ${paidGold} 金幣${shortfalls.length ? `；獎勵短缺：${shortfalls.join('、')}` : ''}`, paidGold);
     }
-    recordTransaction('quest_reward', `完成任務「${quest.title}」，領取 ${paidGold} 金幣${shortfalls.length ? `；獎勵短缺：${shortfalls.join('、')}` : ''}`, paidGold);
     for (const requirement of quest.requirements.collectItems ?? []) {
       const collected = inventory.find((item) => item.itemId === requirement.itemId);
       if (!collected) continue;
@@ -132,7 +144,7 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
         const received = giverState.inventory.find((entry) => entry.itemId === requirement.itemId);
         if (received) received.quantity += requirement.quantity;
         else giverState.inventory.push({ itemId: requirement.itemId, quantity: requirement.quantity });
-        recordTransaction('npc_transfer', `交付 ${getItemById(requirement.itemId)?.name ?? requirement.itemId} ×${requirement.quantity} 給 ${quest.questGiver}`);
+        recordTransaction('npc_transfer', `交付 ${getItemById(requirement.itemId)?.name ?? requirement.itemId} ×${requirement.quantity} 給 ${getUnitDisplayName(giverId)}`);
       }
     }
   }
@@ -174,6 +186,7 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
     storyFlags: player.storyFlags,
     defeatedMonsters,
     activeQuests,
-    currentMapId: player.currentMapId
+    currentMapId: player.currentMapId,
+    world
   };
 }

@@ -3,11 +3,12 @@ import type { ActionCheckResult, CharacterHistoryEntry, SaveSlotId, SkillStatic,
 import { AUTO_SLOT_ID, clearLegacySaves, continueWorldWithCharacter, createHistoryEntry, createWorld, deleteSlot, deleteWorld, exportWorld, getLastWriteFailed, importWorld, loadSaveIndex, readSlot, setActiveWorld, subscribeSaveStatus, writeSlot, type LoadedSlot } from './utils/saveStorage';
 import { SaveManager } from './components/SaveManager';
 import { applyStateChanges } from './utils/applyStateChanges';
-import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getQuestById, getShopById, getUnlockedSkills, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, scenario } from './data/staticData';
+import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getShopById, getUnlockedSkills, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, scenario } from './data/staticData';
 import { getPlayerStatBreakdown, resolveActionCheck } from './utils/gameChecks';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from './utils/travelIntent';
 import { sendPlayerAction } from './services/aiService';
-import { acceptQuest, canTurnInQuest, getQuestGiverName } from './utils/questRules';
+import { acceptQuest, canTurnInQuest, findQuest, getQuestGiverName } from './utils/questRules';
+import { postQuestProposals } from './utils/generatedQuests';
 import { canPlayerAct, isPlayerUnconscious } from './utils/playerStatus';
 import type { AIProvider } from './services/aiModels';
 import { loadAIModelSettings, saveAIModelSettings, type AIModelSettings } from './services/aiModels';
@@ -101,7 +102,7 @@ function createRestoreNotice(player: PlayerState, savedAt: number, messageCount:
   const map = getMapById(player.currentMapId);
   const combatUnit = player.combat ? getWorldUnitById(player.combat.targetUnitId, player) : undefined;
   const activeQuests = player.activeQuests.filter((quest) => quest.status === 'in_progress')
-    .map((quest) => getQuestById(quest.questId)?.title ?? quest.questId);
+    .map((quest) => findQuest(player, quest.questId)?.title ?? quest.questId);
   const inventory = player.inventory.map((entry) => `${getItemById(entry.itemId)?.name ?? entry.itemId} ×${entry.quantity}`);
   const lines = [
     `📦 遊戲快照已恢復（${new Date(savedAt).toLocaleString()}）`,
@@ -312,7 +313,7 @@ export default function App() {
   };
 
   const handleAcceptQuest = (questId: string) => {
-    const quest = getQuestById(questId);
+    const quest = findQuest(player, questId);
     if (!quest) return;
     const accepted = acceptQuest(player, quest);
     if (!accepted) return;
@@ -326,7 +327,7 @@ export default function App() {
   };
 
   const handleTurnInQuest = (questId: string) => {
-    const quest = getQuestById(questId);
+    const quest = findQuest(player, questId);
     if (!quest || !canTurnInQuest(player, quest)) return;
     const nextPlayer = applyStateChanges(advanceGameTime(player, 'dialogue'), {
       storyText: '', suggestedActions: [], stateChanges: { questUpdates: [{ questId, status: 'completed' }] }
@@ -479,7 +480,7 @@ export default function App() {
       const completedQuests = nextPlayer.activeQuests.filter((quest) => quest.status === 'completed' &&
         sourcePlayer.activeQuests.some((previous) => previous.questId === quest.questId && previous.status === 'in_progress'));
       const dropText = dropItems.length ? `取得掉落物：${dropItems.map((item) => `${getItemById(item.itemId)?.name ?? item.itemId} ×${item.quantity}`).join('、')}。` : '沒有掉落物。';
-      const questText = completedQuests.map((quest) => `任務「${getQuestById(quest.questId)?.title ?? quest.questId}」完成，需求道具已交付並領取獎勵。`).join('\n');
+      const questText = completedQuests.map((quest) => `任務「${findQuest(sourcePlayer, quest.questId)?.title ?? quest.questId}」完成，需求道具已交付並領取獎勵。`).join('\n');
       // 頭目是唯一個體，擊敗即永久死亡（寫入死亡事件）；一般魔物樣板代表一群個體，不會因單次擊敗而消失。
       const victoryState = monster.isBoss
         ? { ...nextPlayer, unitInstances: { ...nextPlayer.unitInstances, [monster.id]: { ...nextPlayer.unitInstances[monster.id], currentHp: 0, isDead: true } } }
@@ -777,6 +778,16 @@ export default function App() {
       }
       // AI 提議的世界事件：只在沒有檢定或檢定成功時考慮，條件由遊戲再驗證；劇情旗標只能經由事件設定。
       if (!checkResult || checkResult.success) nextPlayer = applyEventProposals(nextPlayer, aiResponse.eventProposals).state;
+      // AI 依任務範本提議的支線委託：同樣只在沒有檢定或檢定成功時考慮，由遊戲驗證後發布並預扣報酬。
+      const questPosting = !checkResult || checkResult.success ? postQuestProposals(nextPlayer, aiResponse.questProposals) : undefined;
+      if (questPosting) nextPlayer = questPosting.state;
+      const postedQuestNotice = questPosting?.posted.length
+        ? `
+
+📌 新委託「${questPosting.posted.map((quest) => `${quest.title}」（${quest.questGiver}）：${quest.objective}。報酬 ${quest.rewards.exp} EXP、${quest.rewards.gold} 金幣${(quest.rewards.items ?? []).map((item) => `、${getItemById(item.itemId)?.name ?? item.itemId} ×${item.quantity}`).join('')}，期限至${formatGameTime(quest.expiresAtMinutes)}`).join('')}。可在右側任務欄或對話中表示接受。`
+        : questPosting?.rejected.length ? `
+
+⚠️ 委託未成立：${questPosting.rejected.join('；')}。` : '';
       if (nextPlayer.isDead) nextPlayer = { ...nextPlayer, encounteredUnitId: undefined };
       const requestedEncounter = aiResponse.encounterRequest?.monsterId;
       const requestedUnit = requestedEncounter ? getWorldUnitById(requestedEncounter) : undefined;
@@ -795,7 +806,7 @@ export default function App() {
       const acceptedQuests = nextPlayer.activeQuests.filter((entry) => entry.status === 'in_progress' &&
         !player.activeQuests.some((previous) => previous.questId === entry.questId));
       const questNotice = acceptedQuests.length
-        ? `\n\n📜 已接取任務「${acceptedQuests.map((entry) => getQuestById(entry.questId)?.title ?? entry.questId).join('、')}」。`
+        ? `\n\n📜 已接取任務「${acceptedQuests.map((entry) => findQuest(nextPlayer, entry.questId)?.title ?? entry.questId).join('、')}」。`
         : '';
       const completedQuests = nextPlayer.activeQuests.filter((entry) => entry.status === 'completed' &&
         player.activeQuests.some((previous) => previous.questId === entry.questId && previous.status === 'in_progress'));
@@ -803,7 +814,7 @@ export default function App() {
         record.type === 'quest_reward' && !player.transactionHistory.some((previous) => previous.id === record.id));
       const questCompletionNotice = completedQuests.length
         ? `\n\n✅ ${completedQuests.map((entry) => {
-          const title = getQuestById(entry.questId)?.title ?? entry.questId;
+          const title = findQuest(nextPlayer, entry.questId)?.title ?? entry.questId;
           const reward = rewardRecords.find((record) => record.description.includes(title));
           return reward?.description ?? `任務「${title}」已完成。`;
         }).join('\n')}`
@@ -870,7 +881,7 @@ export default function App() {
         {
           id: (Date.now() + 1).toString(),
           sender: 'ai',
-          text: `${storyText}${questNotice}${questCompletionNotice}${npcTransferNotice}${unitDispositionNotice}${encounterNotice}${serviceNotice}${locationNotice}${deathNotice}`,
+          text: `${storyText}${postedQuestNotice}${questNotice}${questCompletionNotice}${npcTransferNotice}${unitDispositionNotice}${encounterNotice}${serviceNotice}${locationNotice}${deathNotice}`,
           options: aiResponse.suggestedActions,
           travelOptions: textTravelIntent.kind === 'ambiguous'
             ? textTravelIntent.candidates.map((candidate) => ({ mapId: candidate.id, name: candidate.name }))

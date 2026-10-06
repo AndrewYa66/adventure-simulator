@@ -1,0 +1,31 @@
+{
+  "limits": {
+    "maxOpenQuests": 3,
+    "maxOpenPerGiver": 1,
+    "giverCooldownDays": 1
+  },
+  "templates": [
+    {
+      "id": "QTPL-001",
+      "type": "defeat",
+      "name": "討伐委託",
+      "titlePattern": "討伐{target}",
+      "objectivePattern": "擊敗 {quantity} 隻{target}",
+      "aiHint": "玩家向在場人物詢問有沒有工作、委託或需要幫忙的事，或對方正為附近出沒的魔物所苦時。",
+      "quantity": { "min": 1, "max": 5 },
+      "durationDays": 3,
+      "reward": { "expRatio": 0.5, "maxExp": 150, "valuePerLevel": 10, "maxValue": 60, "maxItemQuantity": 3 }
+    },
+    {
+      "id": "QTPL-002",
+      "type": "collect",
+      "name": "收集委託",
+      "titlePattern": "收集{target}",
+      "objectivePattern": "收集 {quantity} 個{target}並交給委託人",
+      "aiHint": "玩家向在場人物詢問有沒有工作或委託，且對方需要附近魔物身上的物品（例如作為證物或材料）時。",
+      "quantity": { "min": 1, "max": 5 },
+      "durationDays": 3,
+      "reward": { "expRatio": 0.5, "maxExp": 150, "valuePerLevel": 10, "maxValue": 60, "maxItemQuantity": 3 }
+    }
+  ]
+}

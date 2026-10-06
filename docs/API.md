@@ -69,7 +69,8 @@ sendPlayerAction(
   },
   "stateChanges": { "hpChange": 0, "expChange": 5, "questAcceptances": [], "unitDispositionChanges": [] },
   "failureStateChanges": { "hpChange": -3 },
-  "eventProposals": []
+  "eventProposals": [],
+  "questProposals": []
 }
 ```
 
@@ -127,6 +128,47 @@ sendPlayerAction(
 - **防止以等待刷資源**：補貨每日最多一次，重生依天數；非安全地區每等待滿一小時有 15% 機率被對玩家敵對、符合條件的魔物打斷（`src/utils/waitRules.ts`），只經過到打斷為止的時間並遭遇該魔物；安全地區不會被打斷。
 - `npm run validate:data` 驗證事件 ID 格式與唯一性、觸發方式與傳播範圍、引用的單位/地圖/種族/勢力、聲望等級與勢力關係條件、世界修正格式，以及自動事件至少有一個旗標或單位條件。
 
+## 支線委託：任務範本與生成委託（O30）
+
+主持人 AI 可依任務範本為在場 NPC 發布支線委託（`src/utils/generatedQuests.ts`）；範本與上限由劇本資料定義，程式不寫死任何內容。
+
+- **範本資料** `src/data/quest_templates.json`：`{ limits: { maxOpenQuests, maxOpenPerGiver, giverCooldownDays }, templates }`。
+  - `maxOpenQuests`：全世界同時開放的委託上限（已接取未完成的也算在內）；`maxOpenPerGiver`：每位發布者的上限；`giverCooldownDays`：同一發布者兩次發布至少相隔的遊戲日。
+  - 範本欄位：`{ id: "QTPL-xxx", type: "defeat" | "collect", name, titlePattern, objectivePattern, aiHint, giver?: { factionIds?, classIds? }, quantity: { min, max }, durationDays, reward: { expRatio, maxExp, valuePerLevel, maxValue, maxItemQuantity }, requires?: { flags?, reputation?, factionRelations? }, excludes?: { flags? } }`。
+  - `titlePattern` 與 `objectivePattern` 可用 `{target}`、`{quantity}`；`requires` 的勢力條件與事件共用 `matchesFactionConditions`。
+  - 目前範本：討伐（擊敗附近魔物）、收集（收集附近魔物的掉落物），暫定上限見 `docs/PROJECT_GOALS.md` O30。
+- **AI 提議** `questProposals`（必填陣列，最多一件，沒有時為空陣列）：`{ templateId, giverId, targetUnitId, itemId, quantity }`；收集範本以 `itemId` 為準，討伐範本的 `itemId` 為 `null`。
+  - 只有玩家明確向在場人物詢問工作或委託時才提議。只在沒有檢定或檢定成功時考慮。
+  - AI 回應中的報酬欄位一律忽略。
+  - AI 上下文提供「可發布的支線委託」：各範本可發布的委託人、目標、每單位經驗與報酬價值。Gemini JSON Schema 以 enum 限制範本、委託人、目標與物品；沒有候選時只允許空陣列。
+- **驗證** `validateQuestProposal(state, proposal)`：
+  - 範本存在且條件成立；
+  - 全世界與該委託人的開放委託未達上限，且委託人不在發布冷卻中；
+  - 委託人是目前地區存活、非敵對、有所屬勢力的 NPC，且符合範本限制；委託人有可接取的劇本任務時不發布；
+  - 數量在範圍內；
+  - 目標是委託人所在地區或相鄰地區、存活的魔物，不含頭目、需前置任務者、同勢力或友好／同盟勢力；收集範本以掉落該物品、等級最低的魔物為目標；
+  - 報酬不可為空、不可為要收集的物品，且價值不超過上限。
+- **公式**：
+  - 經驗 = `min(maxExp, round(目標擊倒經驗 × 數量 × expRatio))`；
+  - 報酬價值上限 = `min(maxValue, 目標等級 × valuePerLevel × 數量)`，物品價值取 `max(buyPrice, sellPrice)`；
+  - 未指定報酬時由規則組成：先付金幣（不超過上限與委託人存量），剩餘額度以委託人持有物中價值最高且放得下的物品補足（不超過 `maxItemQuantity` 件）；
+  - 明確指定 `rewardGold`／`rewardItems` 的提議（供日後重要角色決策使用）須為委託人持有物的子集且在上限內，否則拒絕。
+- **預扣與發放**：
+  - 發布時報酬自委託人持有物扣除，保存在委託的 `rewards`。
+  - 交付時全額發放，且只發放一次；需求物品轉入委託人持有物。
+  - 逾期或失敗時退回目前負責的委託人（已死亡者留在其持有物中）。
+- **存檔**：世界存檔的 `world.generatedQuests` 與 `world.nextGeneratedQuestSeq`。
+  - 委託格式：`{ id: "QST-GEN-0001", generated: true, templateId, targetUnitId, title, questGiverId, questGiver, mapId, objective, requirements, rewards, status: "open" | "completed" | "failed" | "expired", postedAtMinutes, expiresAtMinutes }`。
+  - 是否已接取取決於目前角色的 `activeQuests`，因此新角色接續時，前任未完成的委託會重新開放。
+  - 已結束且與目前角色無關的委託最多保留 30 筆。
+  - 引用的範本、單位或物品已從靜態資料移除時，讀檔略過該委託；格式錯誤時整份存檔無效。
+- **世界規則**（`finalizeWorld`）：
+  - 委託人死亡時沿用委託接手規則；尚未被接取的委託改由接手者負責，沒有人選即失敗並退回報酬。
+  - 逾期的委託失效並退回報酬，已接取者改為失敗。
+  - 發布與逾期屬例行變化，不寫入事件紀錄。
+- **任務查詢**：`questRules.findQuest(state, id)` 依序查靜態任務與生成委託；HUD、AI 上下文、交付、委託接手與聲望結算都使用此查詢。
+- `npm run validate:data` 驗證範本 ID 格式與唯一性、類型、數量範圍、期限、報酬參數、發布者勢力／職階參照與條件。
+
 ## 勢力聲望與勢力間關係
 
 勢力資料由劇本提供（`src/data/factions.json`，內容取自 `content/lore/FAC-xxx`），程式不寫死任何勢力（`src/utils/factions.ts`）。
@@ -160,13 +202,13 @@ sendPlayerAction(
 
 ## 存檔架構（世界與角色兩層）
 
-- **兩層存檔**：每個存檔欄位分為 `world`（世界存檔：`gameTimeMinutes`、`unitInstances`、`storyFlags`、世界狀態 `world`（事件紀錄、編年史、世界修正、已觸發事件、地區結算、勢力間關係）與歷代角色紀錄 `characterHistory`）與 `character`（角色存檔：其餘玩家欄位，包含能力、背包、金幣、任務、戰鬥、單位對此角色的關係覆寫、各勢力聲望等）。哪些欄位屬於世界層由 `types/game.ts` 的 `WORLD_STATE_KEYS` 定義。執行期仍合併為 `PlayerState`，只在存讀檔時拆分與合併（`utils/saveStorage.ts`）。
+- **兩層存檔**：每個存檔欄位分為 `world`（世界存檔：`gameTimeMinutes`、`unitInstances`、`storyFlags`、世界狀態 `world`（事件紀錄、編年史、世界修正、已觸發事件、地區結算、勢力間關係、生成委託）與歷代角色紀錄 `characterHistory`）與 `character`（角色存檔：其餘玩家欄位，包含能力、背包、金幣、任務、戰鬥、單位對此角色的關係覆寫、各勢力聲望等）。哪些欄位屬於世界層由 `types/game.ts` 的 `WORLD_STATE_KEYS` 定義。執行期仍合併為 `PlayerState`，只在存讀檔時拆分與合併（`utils/saveStorage.ts`）。
 - **存檔欄位**：每個世界一個自動存檔（狀態變更且非 AI 回合進行中時覆寫）與 3 個手動存檔。每個世界只有一條時間線：讀取手動存檔即取代目前進度，之後的自動存檔從該時間點繼續。可有多個世界，存檔索引記錄目前世界；切換世界即讀取該世界的自動存檔。
 - **新角色接續**：角色死亡後可在同一世界建立新角色。世界層欄位保留，前一位角色以 `characterHistory`（名稱、種族、職階、等級、結束時間與地區、死亡事件 ID 與公開描述、攜帶物快照）記錄並提供給 AI 作為傳聞素材（最多 5 位）；新角色不繼承等級、背包、任務與單位關係；勢力聲望重置為初始值，或依劇本設定部分繼承（見「勢力聲望與勢力間關係」）。死亡遺物（O26）尚未實作，攜帶物快照留待之後使用。
 - **匯出／匯入**：存檔管理可將一個世界的所有欄位匯出為 JSON（`format: "adventure-simulator-world"`）。匯入時驗證格式、版本、劇本與每個欄位內容，任何欄位無效即整份拒絕；一律以新世界 ID 匯入，不覆蓋任何現有存檔，寫入中途失敗會移除已寫入的欄位。
 - **容量管理**：存檔管理顯示本遊戲在 localStorage 的估計用量（以約 5 MB 上限計），達 80% 時警示；寫入失敗（例如容量不足）時 HUD 提示匯出備份，其他欄位不受影響。事件紀錄超過 200 件即壓縮成編年史，且存檔只保存有差異的單位實例；目前容量足夠，暫不改用 IndexedDB。
 
-存檔帶有 `schemaVersion`（`saveStorage.ts` 的 `SAVE_SCHEMA_VERSION`，目前為 5）。開發階段每次變更存檔格式就將版本加一；版本不符、缺少欄位或格式無效的存檔直接捨棄，不提供舊格式遷移；舊版單一快照（`TRPG_GAME_SESSION`、`TRPG_PLAYER_STATE`）在啟動時移除。正式上線後才開始為舊版本撰寫遷移。
+存檔帶有 `schemaVersion`（`saveStorage.ts` 的 `SAVE_SCHEMA_VERSION`，目前為 6）。開發階段每次變更存檔格式就將版本加一；版本不符、缺少欄位或格式無效的存檔直接捨棄，不提供舊格式遷移；舊版單一快照（`TRPG_GAME_SESSION`、`TRPG_PLAYER_STATE`）在啟動時移除。正式上線後才開始為舊版本撰寫遷移。
 
 ## 金鑰安全限制
 

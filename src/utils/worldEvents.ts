@@ -7,7 +7,6 @@ import {
   getFactionById,
   getFactionRelation,
   getMapById,
-  getQuestById,
   getShopForNpc,
   getSpeciesById,
   getUnitDisplayName,
@@ -19,7 +18,8 @@ import {
 } from '../data/staticData';
 import { formatGameTime, getGameDay } from './gameTime';
 import { isModifierActive } from './worldModifiers';
-import { getActiveQuestGiverId } from './questRules';
+import { findQuest, getActiveQuestGiverId, isGeneratedQuest } from './questRules';
+import { closeGeneratedQuest, expireGeneratedQuests, pruneGeneratedQuests } from './generatedQuests';
 import {
   applyFactionRelationChanges,
   applyReputationChanges,
@@ -43,7 +43,7 @@ export const MAX_CHRONICLE_LINES = 100;
 const MINUTES_PER_DAY = 24 * 60;
 
 export function createWorldState(): WorldRuntimeState {
-  return { events: [], chronicle: [], nextEventSeq: 1, modifiers: [], firedEventIds: [], regions: {}, factionRelations: {} };
+  return { events: [], chronicle: [], nextEventSeq: 1, modifiers: [], firedEventIds: [], regions: {}, factionRelations: {}, generatedQuests: [], nextGeneratedQuestSeq: 1 };
 }
 
 export interface DeathHint {
@@ -136,11 +136,23 @@ export function findQuestSuccessor(state: PlayerState, giverUnitId: string): str
   return (candidates.find((template) => 'mapId' in template && template.mapId === giver.source.mapId) ?? candidates[0])?.id;
 }
 
-/** 委託人死亡時，由同勢力、同職階的存活 NPC 接手；沒有人選時委託失敗。兩者都寫入事件。 */
+/**
+ * 委託人死亡時，由同勢力、同職階的存活 NPC 接手；沒有人選時委託失敗。玩家進行中的委託兩者都寫入事件。
+ * 尚未被接取的生成委託同樣改由接手者負責（不寫事件）；失敗的生成委託退回預扣報酬。
+ */
 function resolveOrphanedQuests(state: PlayerState): PlayerState {
   let next = state;
+  for (const quest of state.world.generatedQuests) {
+    if (quest.status !== 'open' || state.activeQuests.some((entry) => entry.questId === quest.id) || !isUnitDead(next.unitInstances[quest.questGiverId])) continue;
+    const successor = findQuestSuccessor(next, quest.questGiverId);
+    const successorUnit = successor ? getWorldUnitById(successor) : undefined;
+    next = successorUnit?.kind === 'npc'
+      ? { ...next, world: { ...next.world, generatedQuests: next.world.generatedQuests.map((entry) => entry.id === quest.id
+        ? { ...entry, questGiverId: successorUnit.id, questGiver: getUnitDisplayName(successorUnit.id), mapId: successorUnit.source.mapId } : entry) } }
+      : closeGeneratedQuest(next, quest.id, 'failed', quest.questGiverId);
+  }
   for (const active of state.activeQuests) {
-    const quest = getQuestById(active.questId);
+    const quest = findQuest(next, active.questId);
     if (active.status !== 'in_progress' || !quest) continue;
     const giverId = getActiveQuestGiverId(active, quest.questGiverId);
     if (!isUnitDead(next.unitInstances[giverId])) continue;
@@ -151,6 +163,7 @@ function resolveOrphanedQuests(state: PlayerState): PlayerState {
       activeQuests: next.activeQuests.map((entry) => entry.questId !== quest.id || entry.status !== 'in_progress' ? entry
         : successorId ? { ...entry, giverUnitId: successorId } : { ...entry, status: 'failed' as const })
     };
+    if (!successorId && isGeneratedQuest(quest)) next = closeGeneratedQuest(next, quest.id, 'failed', giverId);
     next = successor?.kind === 'npc' && successor.factionId
       ? appendEvent(next, {
         type: 'quest_transferred', gameTimeMinutes: next.gameTimeMinutes, mapId: successor.source.mapId,
@@ -342,6 +355,7 @@ export function finalizeWorld(previous: PlayerState, next: PlayerState, hints: R
   state = resolveOrphanedQuests(state);
   state = settleRegion(state, state.currentMapId);
   state = runAutoEvents(state);
+  state = pruneGeneratedQuests(expireGeneratedQuests(state));
   const modifiers = state.world.modifiers.filter((modifier) => isModifierActive(modifier, state.gameTimeMinutes));
   const world = compressEvents(modifiers.length === state.world.modifiers.length ? state.world : { ...state.world, modifiers });
   return world === state.world ? state : { ...state, world };
@@ -406,7 +420,7 @@ function applyActionReputation(previous: PlayerState, current: PlayerState, newD
 
   for (const active of state.activeQuests) {
     const before = previous.activeQuests.find((entry) => entry.questId === active.questId);
-    const quest = getQuestById(active.questId);
+    const quest = findQuest(state, active.questId);
     if (active.status !== 'completed' || before?.status !== 'in_progress' || !quest) continue;
     const giverId = getActiveQuestGiverId(active, quest.questGiverId);
     const factionId = getUnitFactionId(giverId);

@@ -1,8 +1,8 @@
 import React from 'react';
 import type { PlayerState } from '../types/game';
-import { canPlayerEnterMap, factionData, factionsDatabase, getCharacterClassById, getFactionById, getFactionRelation, getFactionReputation, getItemById, getMapById, describeUnitBuild, getLevelBenchmark, getReputationTier, getSpeciesById, getPlayerResourceCaps, getQuestById, getShopForNpc, getUnlockedSkills, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, questsDatabase } from '../data/staticData';
+import { canPlayerEnterMap, factionData, factionsDatabase, getCharacterClassById, getFactionById, getFactionRelation, getFactionReputation, getItemById, getMapById, describeUnitBuild, getLevelBenchmark, getReputationTier, getSpeciesById, getPlayerResourceCaps, getQuestById, getShopForNpc, getUnlockedSkills, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap } from '../data/staticData';
 import { getPlayerStatBreakdown, STAT_LABELS } from '../utils/gameChecks';
-import { canAcceptQuest, canTurnInQuest, getQuestGiverName } from '../utils/questRules';
+import { canAcceptQuest, canTurnInQuest, getQuestGiverName, isGeneratedQuest, listVisibleQuests } from '../utils/questRules';
 import { canPlayerAct, isPlayerUnconscious } from '../utils/playerStatus';
 import { getCombatTarget } from '../utils/combatState';
 import { formatGameTime } from '../utils/gameTime';
@@ -229,13 +229,18 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
 
       <div>
         <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #444' }}>📜 任務</h4>
-        {questsDatabase.map((quest) => {
+        {listVisibleQuests(player).map((quest) => {
           const active = player.activeQuests.find((entry) => entry.questId === quest.id);
           const status = active?.status;
+          const generated = isGeneratedQuest(quest) ? quest : undefined;
+          const failedLabel = generated?.status === 'expired' ? '已失敗（委託已逾期）' : '已失敗（委託人已死亡）';
           const inventoryCount = (itemId: string) => player.inventory.find((item) => item.itemId === itemId)?.quantity ?? 0;
           return <div key={quest.id} style={{ marginBottom: '8px', fontSize: '12px' }}>
-            <strong>{quest.title}</strong>
-            <div style={status === 'failed' ? { color: '#ef9a9a' } : undefined}>{status === 'completed' ? '已完成' : status === 'in_progress' ? '進行中' : status === 'failed' ? '已失敗（委託人已死亡）' : quest.objective}</div>
+            <strong>{quest.title}</strong>{generated && <span style={{ color: '#9fa8da', marginLeft: '6px' }}>［支線委託・{generated.questGiver}］</span>}
+            <div style={status === 'failed' ? { color: '#ef9a9a' } : undefined}>{status === 'completed' ? '已完成' : status === 'in_progress' ? '進行中' : status === 'failed' ? failedLabel : quest.objective}</div>
+            {generated && status !== 'completed' && status !== 'failed' && <div style={{ color: '#aaa' }}>
+              報酬：{generated.rewards.exp} EXP · {generated.rewards.gold} 金幣{(generated.rewards.items ?? []).map((item) => ` · ${getItemById(item.itemId)?.name ?? item.itemId} ×${item.quantity}`).join('')}（委託人已預先保留）· 期限 {formatGameTime(generated.expiresAtMinutes)}
+            </div>}
             {status === 'in_progress' && active?.giverUnitId && <div style={{ color: '#ffcc80' }}>原委託人已身亡，改由 {getQuestGiverName(player, quest)} 接手</div>}
             {status && <div style={{ marginTop: '4px', color: '#bbb' }}>
               {(quest.requirements.defeatMonsters ?? []).map((requirement) => {

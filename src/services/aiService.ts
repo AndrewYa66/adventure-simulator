@@ -1,7 +1,8 @@
 import type { PlayerState, AIResponsePayload, CharacterHistoryEntry } from '../types/game';
 import type { AIModelSettings } from './aiModels';
-import { canPlayerEnterMap, describeUnitBuild, getFactionById, getItemById, getMapById, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, questsDatabase, scenario } from '../data/staticData';
-import { canAcceptQuest, canTurnInQuest, getQuestGiverName } from '../utils/questRules';
+import { canPlayerEnterMap, describeUnitBuild, getFactionById, getItemById, getMapById, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, scenario } from '../data/staticData';
+import { canAcceptQuest, canTurnInQuest, getQuestGiverName, isGeneratedQuest, listVisibleQuests } from '../utils/questRules';
+import { getQuestPostingOptions } from '../utils/generatedQuests';
 import { getFactionContextForAI } from '../utils/factions';
 import { getAvailableServices } from '../utils/tradeRules';
 import { getPlayerWorldUnit } from '../utils/worldUnits';
@@ -119,6 +120,11 @@ function parseAIResponse(value: unknown): AIResponsePayload | null {
   if (isRecord(value.failureStateChanges) &&
       ['expChange', 'addItems', 'npcItemTransfers', 'defeatedMonsters', 'unitDispositionChanges', 'questUpdates', 'questAcceptances'].some((field) => field in (value.failureStateChanges as Record<string, unknown>))) return null;
 
+  if (value.questProposals !== undefined && value.questProposals !== null && (!Array.isArray(value.questProposals) || !value.questProposals.every((proposal) =>
+    isRecord(proposal) && typeof proposal.templateId === 'string' && typeof proposal.giverId === 'string' && typeof proposal.targetUnitId === 'string' &&
+    (proposal.itemId === undefined || proposal.itemId === null || typeof proposal.itemId === 'string') && Number.isInteger(proposal.quantity) &&
+    (proposal.rewardGold === undefined || Number.isInteger(proposal.rewardGold)) && (proposal.rewardItems === undefined || isItemChangeList(proposal.rewardItems))
+  ))) return null;
   if (value.eventProposals !== undefined && value.eventProposals !== null &&
       (!Array.isArray(value.eventProposals) || !value.eventProposals.every((eventId) => typeof eventId === 'string'))) return null;
 
@@ -129,7 +135,14 @@ function parseAIResponse(value: unknown): AIResponsePayload | null {
   if (isRecord(stateChanges)) delete stateChanges.setFlags;
   const travelRequest = value.travelRequest ?? null;
   const eventProposals = (value.eventProposals as string[] | null | undefined) ?? [];
-  return { ...value, storyText, stateChanges, travelRequest, eventProposals } as unknown as AIResponsePayload;
+  // 主持人 AI 不指定報酬（由規則自委託人持有物組成），回應中的報酬欄位一律忽略。
+  const questProposals = ((value.questProposals as Record<string, unknown>[] | null | undefined) ?? []).map((proposal) => {
+    const rest = { ...proposal };
+    delete rest.rewardGold;
+    delete rest.rewardItems;
+    return rest;
+  });
+  return { ...value, storyText, stateChanges, travelRequest, eventProposals, questProposals } as unknown as AIResponsePayload;
 }
 
 /**
@@ -243,9 +256,11 @@ export async function sendPlayerAction(
     holdings: playerState.unitInstances[unit.id] ?? { gold: unit.source.startingGold ?? 0, inventory: unit.source.startingInventory ?? [] },
     description: unit.source.description
   }] : []);
-  const availableQuests = questsDatabase.filter((quest) => canAcceptQuest(playerState, quest))
-    .map((quest) => ({ id: quest.id, title: quest.title, giver: quest.questGiver, objective: quest.objective }));
-  const turnInQuests = questsDatabase.filter((quest) => canTurnInQuest(playerState, quest))
+  const visibleQuests = listVisibleQuests(playerState);
+  const availableQuests = visibleQuests.filter((quest) => canAcceptQuest(playerState, quest))
+    .map((quest) => ({ id: quest.id, title: quest.title, giver: getQuestGiverName(playerState, quest), objective: quest.objective,
+      ...(isGeneratedQuest(quest) ? { reward: { exp: quest.rewards.exp, gold: quest.rewards.gold, items: quest.rewards.items }, deadline: formatGameTime(quest.expiresAtMinutes) } : {}) }));
+  const turnInQuests = visibleQuests.filter((quest) => canTurnInQuest(playerState, quest))
     .map((quest) => ({ id: quest.id, title: quest.title, giver: getQuestGiverName(playerState, quest) }));
   const factionContext = getFactionContextForAI(playerState);
   const encounterCandidates = currentUnits.flatMap((unit) => unit.kind === 'monster' &&
@@ -256,6 +271,10 @@ export async function sendPlayerAction(
   const encounteredUnit = playerState.encounteredUnitId ? getWorldUnitById(playerState.encounteredUnitId, playerState) : undefined;
   const playerUnit = getPlayerWorldUnit(playerState);
   const worldContext = getWorldContextForAI(playerState);
+  const questPostingOptions = getQuestPostingOptions(playerState);
+  const openGeneratedQuests = playerState.world.generatedQuests.filter((quest) => quest.status === 'open')
+    .map((quest) => ({ id: quest.id, title: quest.title, giver: quest.questGiver, objective: quest.objective, deadline: formatGameTime(quest.expiresAtMinutes),
+      takenByPlayer: playerState.activeQuests.some((entry) => entry.questId === quest.id) }));
   const proposableEvents = getProposableEvents(playerState).map((event) => ({ id: event.id, title: event.title, summary: event.summary, when: event.aiHint }));
 
   if (!cleanApiKey) {
@@ -299,6 +318,8 @@ ${scenario.gmRole}
 - 生效中的世界修正（已計入上方各單位數值）: ${JSON.stringify(worldContext.modifiers)}
 - 可提議的世界事件（eventProposals 只可選這些 ID）: ${JSON.stringify(proposableEvents)}
 - 進行中任務: ${JSON.stringify(playerState.activeQuests)}
+- 世界上開放中的支線委託（依任務範本生成，報酬已由委託人預先保留）: ${JSON.stringify(openGeneratedQuests)}
+- 可發布的支線委託（questProposals 只可依此提議；沒有列出代表目前不能發布）: ${JSON.stringify(questPostingOptions)}
 - 已擊敗怪物數量: ${JSON.stringify(playerState.defeatedMonsters)}
 
 請根據玩家行動進行劇情描述，並按下列規則判斷地區移動意圖：
@@ -320,6 +341,7 @@ ${scenario.gmRole}
 - 遊戲時間由遊戲依行動類型推進；玩家要求原地等待時由遊戲處理，AI 不可在敘事中自行跳過時間。玩家要求等待、睡覺或停留數天等長時間時，本回合只經過一般回合時間：storyText 不得描述數小時以上的時間流逝，應說明單次等待上限為 8 小時，請玩家分次等待或使用旅店休息。
 - 世界事件與死因只能依「世界事件紀錄」敘述，不可捏造未記錄的死亡、兇手或世界變化。NPC 只有出現在該事件 witnesses 中才知道 detail（誰下手、如何發生）；其他人只知道 summary 的公開結果，可以轉述傳聞或猜測，但不可斷定兇手或經過。目前玩家角色若不是當時在場的人，也只能從在場目擊者口中得知細節。
 - 每次回應都必須包含 eventProposals（陣列）；只有玩家行動確實促成「可提議的世界事件」所描述的情況（符合 when 說明）時，才填入該事件 ID，否則為空陣列。事件效果由遊戲驗證後套用，storyText 可描述促成事件的經過，但不可自行宣告超出事件描述的世界改變。
+- 每次回應都必須包含 questProposals（陣列，最多一件）。只有玩家在本回合明確向在場人物詢問工作、委託或需要幫忙的事時，才從「可發布的支線委託」提議：templateId、giverId（玩家詢問的對象；若玩家未指定對象則選清單中的人）、targetUnitId（收集範本另填 itemId，討伐範本 itemId 為 null）、quantity（在範圍內）。閒聊、交易、詢問劇本任務或 NPC 自己想找人幫忙都不算，questProposals 必須為空陣列；不可讓 NPC 主動提出委託。報酬、標題、目標與經驗值由遊戲依範本與委託人持有物決定（約為 rewardValuePerQuantity × quantity 的價值），storyText 不可說出具體報酬數字，也不可宣稱玩家已接下委託；發布後玩家需另外表示接受。
 - 只有玩家行動或明確世界事件確實改變了當前地區單位對玩家的關係時，才在 stateChanges.unitDispositionChanges 回報單位 ID 與 friendly/neutral/hostile；純對話、陣營傾向或臆測不能改變關係。單位關係變更須與 storyText 敘事一致。
 - 每次回應都必須包含 encounterRequest；若玩家尚未實際看見或接觸敵人，設為 null。只有探索、搜索或情境中確實遇見敵人時，才指定本地區可遭遇清單中的 monsterId，並在敘事中描述遭遇。不可只因怪物存在於地圖資料，就宣稱玩家已遭遇；不可遭遇未列出的敵人。
 - 玩家在對話中明確要求攻擊目前地區的敵人時，不可假裝攻擊已命中、敵人已受傷或已被擊敗；戰鬥與獎勵由遊戲端確定性規則處理，若無法由遊戲端執行，只能說明尚未發起戰鬥。
@@ -355,7 +377,8 @@ ${scenario.gmRole}
     "unitDispositionChanges": []
   },
   "failureStateChanges": null,
-  "eventProposals": []
+  "eventProposals": [],
+  "questProposals": []
 }
 \`\`\`
 只可回報玩家已接取且客觀目標已完成的任務；不可自行接取任務或宣告未完成目標完成。
@@ -370,6 +393,9 @@ ${scenario.gmRole}
   const dispositionUnitIds = currentUnits.filter((unit) => unit.kind !== 'npc' ||
     (!playerState.unitInstances[unit.id]?.isDead && playerState.unitInstances[unit.id]?.currentHp !== 0)).map((unit) => unit.id);
   const knownItemIds = itemsDatabase.map((item) => item.id);
+  const postingGivers = questPostingOptions.flatMap((option) => option.givers);
+  const postingTargets = postingGivers.flatMap((giver) => giver.targets);
+  const postingItemIds = [...new Set(postingTargets.flatMap((target) => target.itemId ? [target.itemId] : []))];
   const jsonResponseSchema = {
     type: 'object',
     properties: {
@@ -445,10 +471,29 @@ ${scenario.gmRole}
       // 沒有可提議事件時只允許空陣列。
       eventProposals: proposableEvents.length
         ? { type: 'array', items: { type: 'string', enum: proposableEvents.map((event) => event.id) } }
-        : { type: 'array', items: { type: 'string' }, maxItems: 0 }
+        : { type: 'array', items: { type: 'string' }, maxItems: 0 },
+      // 沒有可發布的委託時只允許空陣列。
+      questProposals: questPostingOptions.length
+        ? {
+          type: 'array',
+          maxItems: 1,
+          items: {
+            type: 'object',
+            properties: {
+              templateId: { type: 'string', enum: questPostingOptions.map((option) => option.templateId) },
+              giverId: { type: 'string', enum: [...new Set(postingGivers.map((giver) => giver.giverId))] },
+              targetUnitId: { type: 'string', enum: [...new Set(postingTargets.map((target) => target.targetUnitId))] },
+              itemId: postingItemIds.length ? { type: ['string', 'null'], enum: [...postingItemIds, null] } : { type: 'null' },
+              quantity: { type: 'integer', minimum: 1, maximum: Math.max(...questPostingOptions.flatMap((option) => option.givers.flatMap((giver) => giver.targets.map((target) => target.quantity.max)))) }
+            },
+            required: ['templateId', 'giverId', 'targetUnitId', 'itemId', 'quantity'],
+            additionalProperties: false
+          }
+        }
+        : { type: 'array', items: { type: 'object' }, maxItems: 0 }
     },
     required: [
-      'storyText', 'suggestedActions', 'encounterRequest', 'travelRequest', 'serviceRequest', 'checkRequest', 'checkOutcomes', 'stateChanges', 'failureStateChanges', 'eventProposals'
+      'storyText', 'suggestedActions', 'encounterRequest', 'travelRequest', 'serviceRequest', 'checkRequest', 'checkOutcomes', 'stateChanges', 'failureStateChanges', 'eventProposals', 'questProposals'
     ],
     additionalProperties: false
   };

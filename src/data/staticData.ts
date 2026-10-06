@@ -13,6 +13,8 @@ import type {
   UnitInstance,
   PlayerState,
   QuestStatic,
+  QuestTemplateDataStatic,
+  QuestTemplateStatic,
   ReputationTierStatic,
   ScenarioStatic,
   ShopStatic,
@@ -41,6 +43,7 @@ import rawSpecies from './species.json';
 import rawScenario from './scenario.json';
 import rawEvents from './events.json';
 import rawFactions from './factions.json';
+import rawQuestTemplates from './quest_templates.json';
 
 // 進行靜態型別轉型，確保導出的資料陣列完全符合 DTO 規範
 export const itemsDatabase: ItemStatic[] = rawItems as ItemStatic[];
@@ -57,6 +60,11 @@ export const scenario: ScenarioStatic = rawScenario as ScenarioStatic;
 export const eventsDatabase: EventStatic[] = rawEvents as EventStatic[];
 export const factionData: FactionDataStatic = rawFactions as FactionDataStatic;
 export const factionsDatabase: FactionStatic[] = factionData.factions;
+export const questTemplateData: QuestTemplateDataStatic = rawQuestTemplates as QuestTemplateDataStatic;
+export const questTemplatesDatabase: QuestTemplateStatic[] = questTemplateData.templates;
+
+export const getQuestTemplateById = (id: string): QuestTemplateStatic | undefined =>
+  questTemplatesDatabase.find((template) => template.id === id);
 
 /** 玩家的穩定單位 ID；NPC/魔物資料不得使用此 ID。 */
 export const PLAYER_UNIT_ID = 'PLAYER-001';
@@ -655,5 +663,44 @@ export function validateFactionData(): string[] {
   return issues;
 }
 
+/** 驗證任務範本：ID 唯一、類型、數量與報酬上限、發布者限制與條件的參照。 */
+export function validateQuestTemplateData(): string[] {
+  const issues: string[] = [];
+  const { limits } = questTemplateData;
+  for (const key of ['maxOpenQuests', 'maxOpenPerGiver', 'giverCooldownDays'] as const) {
+    if (!Number.isInteger(limits?.[key]) || limits[key] < (key === 'giverCooldownDays' ? 0 : 1)) issues.push(`任務範本上限 ${key} 無效`);
+  }
+  const isPositiveInteger = (value: unknown) => Number.isInteger(value) && (value as number) > 0;
+  const seen = new Set<string>();
+  for (const template of questTemplatesDatabase) {
+    const label = `任務範本 ${template.id}`;
+    if (!/^QTPL-\d{3,}$/.test(template.id)) issues.push(`${label}: ID 格式應為 QTPL-xxx`);
+    if (seen.has(template.id)) issues.push(`任務範本 ID 重複：${template.id}`);
+    seen.add(template.id);
+    if (!['defeat', 'collect'].includes(template.type)) issues.push(`${label}: 無效類型 ${template.type}`);
+    if (!template.name?.trim() || !template.titlePattern?.trim() || !template.objectivePattern?.trim()) issues.push(`${label}: 缺少名稱、標題或目標格式`);
+    if (!template.objectivePattern?.includes('{quantity}') || !template.objectivePattern.includes('{target}')) issues.push(`${label}: 目標格式須包含 {quantity} 與 {target}`);
+    if (!template.aiHint?.trim()) issues.push(`${label}: 需說明使用時機（aiHint）`);
+    if (!isPositiveInteger(template.quantity?.min) || !isPositiveInteger(template.quantity?.max) || template.quantity.min > template.quantity.max) issues.push(`${label}: 數量範圍無效`);
+    if (!isPositiveInteger(template.durationDays)) issues.push(`${label}: 期限天數須為正整數`);
+    const reward = template.reward;
+    if (!(Number.isFinite(reward?.expRatio) && reward.expRatio >= 0 && reward.expRatio <= 2)) issues.push(`${label}: expRatio 須介於 0 與 2 之間`);
+    for (const key of ['maxExp', 'valuePerLevel', 'maxValue', 'maxItemQuantity'] as const) {
+      if (!Number.isInteger(reward?.[key]) || reward[key] < 0) issues.push(`${label}: reward.${key} 須為非負整數`);
+    }
+    for (const factionId of template.giver?.factionIds ?? []) {
+      if (!getFactionById(factionId)) issues.push(`${label}: 找不到發布者勢力 ${factionId}`);
+    }
+    for (const classId of template.giver?.classIds ?? []) {
+      if (!getCharacterClassById(classId)) issues.push(`${label}: 找不到發布者職階 ${classId}`);
+    }
+    validateFactionConditions(label, template.requires ?? {}, issues);
+    for (const flag of [...(template.requires?.flags ?? []), ...(template.excludes?.flags ?? [])]) {
+      if (typeof flag !== 'string' || !flag.trim()) issues.push(`${label}: 旗標名稱無效`);
+    }
+  }
+  return issues;
+}
+
 /** 全部靜態資料驗證；建置前由 scripts/validate-data.mjs 執行，有錯誤即中止建置。 */
-export const validateGameData = (): string[] => [...validateGrowthData(), ...validateWorldUnitData(), ...validateEventData(), ...validateFactionData()];
+export const validateGameData = (): string[] => [...validateGrowthData(), ...validateWorldUnitData(), ...validateEventData(), ...validateFactionData(), ...validateQuestTemplateData()];

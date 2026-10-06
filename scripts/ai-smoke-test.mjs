@@ -1,5 +1,5 @@
 // AI 實際呼叫的意圖測試：以真實模型驗證結構化欄位（服務、任務、移動、關係、遭遇、世界事件）是否只在玩家明確要求時出現，
-// 並計算每個情境實際送出的 API 請求數（含移動修正請求），可同時比較多個模型。
+// 支線委託提議，並計算每個情境實際送出的 API 請求數（含移動修正請求），可同時比較多個模型。
 // 金鑰讀自專案根目錄的 ai-test.local.json（已列入 .gitignore，不會被提交，也不會打包進網站）：
 //   { "provider": "gemini", "model": "gemini-3.8-flash", "apiKey": "..." }
 // 執行：npm run test:ai                                       （使用設定檔中的模型）
@@ -43,6 +43,7 @@ const { module: data } = await runnerImport('/src/data/staticData.ts');
 const { module: quests } = await runnerImport('/src/utils/questRules.ts');
 const { module: world } = await runnerImport('/src/utils/worldEvents.ts');
 const { module: saves } = await runnerImport('/src/utils/saveStorage.ts');
+const { module: generated } = await runnerImport('/src/utils/generatedQuests.ts');
 
 const base = init.createInitialPlayer('測試員', data.scenario.defaultPlayer.classId, data.scenario.defaultPlayer.alignment, true);
 const startMap = data.getMapById(base.currentMapId);
@@ -109,6 +110,11 @@ const scenarios = [
   { group: '世界事件', name: '向未在場者詢問死因', player: successorElsewhere, history: afterDeathHistory,
     action: `${otherNpc?.name ?? '旅人'}，你知道是誰殺了${victimNpc.name}嗎？`,
     check: (r) => !r.storyText.includes(formerName), expect: '未在場者不斷定兇手' },
+  { group: '委託', name: '向在場人物詢問工作', player: base, action: `${merchant.name}，你這邊有沒有什麼工作可以讓我幫忙？`,
+    check: (r, p) => (r.questProposals ?? []).length === 1 && generated.validateQuestProposal(p, r.questProposals[0]).ok,
+    expect: '提議一件合法委託' },
+  { group: '委託', name: '閒聊不發布委託', player: base, action: `我跟${merchant.name}聊聊他最近打造的武器`,
+    check: (r) => none(r.questProposals), expect: '無 questProposals' },
   ...(proposableEvent ? [
     { group: '世界事件', name: '促成可提議事件', player: base,
       action: `我嚴肅地向${victimNpc.name}警告：古道上的哥布林越來越多，最近有人遇襲，請村民務必結伴出入、夜裡緊閉門戶。`,
@@ -147,12 +153,15 @@ for (const model of models) {
       travelRequest: response.travelRequest ?? null,
       unitDispositionChanges: response.stateChanges?.unitDispositionChanges ?? [],
       encounterRequest: response.encounterRequest ?? null,
-      eventProposals: response.eventProposals ?? []
+      eventProposals: response.eventProposals ?? [],
+      questProposals: response.questProposals ?? []
     };
     const shown = Object.fromEntries(Object.entries(fields).filter(([, value]) => !none(value)));
     console.log(`${ok ? '✅' : '❌'} [${scenario.group}] ${scenario.name}（預期：${scenario.expect}；請求 ${requestCount} 次）`);
     console.log(`   行動：${scenario.action}`);
     if (Object.keys(shown).length) console.log(`   欄位：${JSON.stringify(shown)}`);
+    const invalidQuest = (response.questProposals ?? []).map((proposal) => generated.validateQuestProposal(scenario.player, proposal)).find((result) => !result.ok);
+    if (invalidQuest) console.log(`   委託驗證：${invalidQuest.reason}`);
     if (!ok) console.log(`   敘事：${response.storyText.slice(0, 100)}${response.storyText.length > 100 ? '…' : ''}`);
   }
   summaries.push({ model, passed, errors, totalCalls });

@@ -1,5 +1,18 @@
-import type { PlayerState, QuestStatic } from '../types/game';
-import { getMapById, getUnitDisplayName, getWorldUnitById, getWorldUnitDisposition } from '../data/staticData';
+import type { GeneratedQuest, PlayerState, QuestStatic } from '../types/game';
+import { getMapById, getQuestById, getUnitDisplayName, getWorldUnitById, getWorldUnitDisposition, questsDatabase } from '../data/staticData';
+
+/** 依任務範本生成的委託（O30）。 */
+export const isGeneratedQuest = (quest: QuestStatic | undefined): quest is GeneratedQuest => (quest as GeneratedQuest | undefined)?.generated === true;
+
+/** 任務查詢：靜態任務資料優先，其次是世界中依範本生成的委託。 */
+export const findQuest = (state: Pick<PlayerState, 'world'>, questId: string): QuestStatic | GeneratedQuest | undefined =>
+  getQuestById(questId) ?? state.world.generatedQuests.find((quest) => quest.id === questId);
+
+/** 玩家可看見的全部任務：靜態任務，加上仍開放或與目前角色有關的生成委託。 */
+export const listVisibleQuests = (player: Pick<PlayerState, 'world' | 'activeQuests'>): (QuestStatic | GeneratedQuest)[] => [
+  ...questsDatabase,
+  ...player.world.generatedQuests.filter((quest) => quest.status === 'open' || player.activeQuests.some((entry) => entry.questId === quest.id))
+];
 
 type QuestGiverSource = Pick<PlayerState, 'currentMapId' | 'unitInstances' | 'unitDispositionOverrides' | 'factionReputation'>;
 
@@ -31,6 +44,7 @@ export function canReachQuestGiver(player: QuestGiverSource, quest: QuestStatic,
 
 export function canAcceptQuest(player: PlayerState, quest: QuestStatic): boolean {
   if (player.activeQuests.some((entry) => entry.questId === quest.id)) return false;
+  if (isGeneratedQuest(quest) && (quest.status !== 'open' || player.gameTimeMinutes >= quest.expiresAtMinutes)) return false;
   if (player.currentMapId !== quest.mapId) return false;
   if (!(quest.prerequisiteQuestIds ?? []).every((requiredId) =>
     player.activeQuests.some((entry) => entry.questId === requiredId && entry.status === 'completed')

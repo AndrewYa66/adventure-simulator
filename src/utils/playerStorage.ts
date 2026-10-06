@@ -1,9 +1,10 @@
-import type { PlayerState, StoryMessage, WorldEvent, WorldModifier, WorldRuntimeState } from '../types/game';
-import { clampReputation, createDefaultUnitInstance, createInitialReputation, FACTION_RELATION_STATUSES, factionData, getBaseExpForLevel, getEventById, getCharacterClassById, getFactionById, getItemById, getMapById, getPlayerResourceCaps, getQuestById, getSpeciesById, getUnitAbilities, getUnitLevelCap, getWorldUnitById, MAX_UNIT_LEVEL, PLAYER_UNIT_ID, scenario, unitTemplatesDatabase } from '../data/staticData';
+import type { GeneratedQuest, PlayerState, StoryMessage, WorldEvent, WorldModifier, WorldRuntimeState } from '../types/game';
+import { clampReputation, createDefaultUnitInstance, createInitialReputation, FACTION_RELATION_STATUSES, factionData, getBaseExpForLevel, getEventById, getCharacterClassById, getFactionById, getItemById, getMapById, getPlayerResourceCaps, getQuestTemplateById, getSpeciesById, getUnitAbilities, getUnitLevelCap, getWorldUnitById, MAX_UNIT_LEVEL, PLAYER_UNIT_ID, scenario, unitTemplatesDatabase } from '../data/staticData';
 import { isValidGameTime } from './gameTime';
 import { isValidSpeciesClassCombo, UNIT_STAT_KEYS } from './unitGrowth';
 import { createCombat } from './combatState';
 import { parseModifierScope } from './worldModifiers';
+import { findQuest } from './questRules';
 
 /** 存檔內容驗證：拒絕無效 ID、數值範圍與不在場的戰鬥目標；存檔的讀寫見 saveStorage.ts。 */
 
@@ -38,12 +39,41 @@ function isWorldModifier(value: unknown): value is WorldModifier {
     typeof value.sourceEventId === 'string' && (value.expiresAtMinutes === undefined || isValidGameTime(value.expiresAtMinutes));
 }
 
+const isItemStackList = (value: unknown): value is { itemId: string; quantity: number }[] => Array.isArray(value) && value.every((entry) =>
+  isRecord(entry) && typeof entry.itemId === 'string' && !!getItemById(entry.itemId) && Number.isInteger(entry.quantity) && (entry.quantity as number) > 0);
+
+/** 生成委託：格式錯誤即整份拒絕；引用的範本、委託人或目標已從靜態資料移除時回傳 undefined（略過該委託）。 */
+function normalizeGeneratedQuest(value: unknown): GeneratedQuest | null | undefined {
+  if (!isRecord(value) || typeof value.id !== 'string' || !/^QST-GEN-\d{4,}$/.test(value.id) || value.generated !== true ||
+      typeof value.templateId !== 'string' || typeof value.targetUnitId !== 'string' || typeof value.title !== 'string' ||
+      typeof value.questGiverId !== 'string' || typeof value.questGiver !== 'string' || typeof value.mapId !== 'string' || typeof value.objective !== 'string' ||
+      !['open', 'completed', 'failed', 'expired'].includes(String(value.status)) || !isValidGameTime(value.postedAtMinutes) || !isValidGameTime(value.expiresAtMinutes) ||
+      !isRecord(value.requirements) || !isRecord(value.rewards) || !Number.isSafeInteger(value.rewards.exp) || (value.rewards.exp as number) < 0 ||
+      !Number.isSafeInteger(value.rewards.gold) || (value.rewards.gold as number) < 0 || !(value.rewards.items === undefined || Array.isArray(value.rewards.items))) return null;
+  const requirements = value.requirements;
+  const defeats = requirements.defeatMonsters;
+  const collects = requirements.collectItems;
+  if ((defeats !== undefined && !(Array.isArray(defeats) && defeats.every((entry) => isRecord(entry) && typeof entry.monsterId === 'string' && Number.isInteger(entry.quantity) && (entry.quantity as number) > 0))) ||
+      (collects !== undefined && !Array.isArray(collects))) return null;
+  if (!getQuestTemplateById(value.templateId) || getWorldUnitById(value.questGiverId)?.kind !== 'npc' || getWorldUnitById(value.targetUnitId)?.kind !== 'monster' ||
+      !getMapById(value.mapId) || (defeats ?? []).some((entry) => getWorldUnitById(String((entry as Record<string, unknown>).monsterId))?.kind !== 'monster') ||
+      (collects !== undefined && !isItemStackList(collects)) || (value.rewards.items !== undefined && !isItemStackList(value.rewards.items))) return undefined;
+  return value as unknown as GeneratedQuest;
+}
+
 /** 驗證世界狀態；任何部分無效即整份拒絕（與其他存檔欄位一致，不部分載入）。 */
 function normalizeWorldState(value: unknown): WorldRuntimeState | null {
   if (!isRecord(value) || !Array.isArray(value.events) || !value.events.every(isWorldEvent) || !isStringArray(value.chronicle) ||
       !Number.isSafeInteger(value.nextEventSeq) || (value.nextEventSeq as number) < 1 ||
       !Array.isArray(value.modifiers) || !value.modifiers.every(isWorldModifier) || !isStringArray(value.firedEventIds) || !isRecord(value.regions) ||
-      !isRecord(value.factionRelations)) return null;
+      !isRecord(value.factionRelations) || !Array.isArray(value.generatedQuests) ||
+      !Number.isSafeInteger(value.nextGeneratedQuestSeq) || (value.nextGeneratedQuestSeq as number) < 1) return null;
+  const generatedQuests: GeneratedQuest[] = [];
+  for (const entry of value.generatedQuests) {
+    const quest = normalizeGeneratedQuest(entry);
+    if (quest === null) return null;
+    if (quest) generatedQuests.push(quest);
+  }
   const regions: WorldRuntimeState['regions'] = {};
   for (const [mapId, region] of Object.entries(value.regions)) {
     if (!getMapById(mapId) || !isRecord(region) || !Number.isSafeInteger(region.lastRestockDay)) return null;
@@ -68,7 +98,9 @@ function normalizeWorldState(value: unknown): WorldRuntimeState | null {
     // 靜態資料移除的事件不再視為已觸發。
     firedEventIds: value.firedEventIds.filter((eventId) => !!getEventById(eventId)),
     regions,
-    factionRelations
+    factionRelations,
+    generatedQuests,
+    nextGeneratedQuestSeq: value.nextGeneratedQuestSeq as number
   };
 }
 
@@ -111,7 +143,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     return [{ itemId: entry.itemId, quantity: entry.quantity as number }];
   });
   const activeQuests = value.activeQuests.flatMap((entry) => {
-    if (!isRecord(entry) || typeof entry.questId !== 'string' || !getQuestById(entry.questId) ||
+    if (!isRecord(entry) || typeof entry.questId !== 'string' || !findQuest({ world }, entry.questId) ||
         !['in_progress', 'completed', 'failed'].includes(String(entry.status))) return [];
     const defeated: Record<string, number> = {};
     const savedDefeats = isRecord(entry.progress) && isRecord(entry.progress.defeatedMonsters) ? entry.progress.defeatedMonsters : {};

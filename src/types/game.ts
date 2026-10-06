@@ -387,6 +387,76 @@ export interface QuestStatic {
   rewardLimits?: { exp: { min: number; max: number }; gold: { min: number; max: number }; maxItemQuantity: number };
 }
 
+/** 任務範本類型：討伐（擊敗附近魔物）、收集（收集附近魔物的掉落物）。 */
+export type QuestTemplateType = 'defeat' | 'collect';
+
+/** 任務範本 (來自 quest_templates.json)：AI 只能依範本提議支線委託，數值由公式與上限決定。 */
+export interface QuestTemplateStatic {
+  id: string;
+  type: QuestTemplateType;
+  name: string;
+  /** 可用 {target}（目標魔物或物品名稱）、{quantity}。 */
+  titlePattern: string;
+  objectivePattern: string;
+  /** AI 提議此範本的使用時機。 */
+  aiHint: string;
+  /** 發布者限制；未設定代表任何有所屬勢力的 NPC 都可發布。 */
+  giver?: { factionIds?: string[]; classIds?: string[] };
+  quantity: { min: number; max: number };
+  /** 委託期限（遊戲日）；逾期後失效並退還報酬。 */
+  durationDays: number;
+  reward: {
+    /** 經驗值 = 目標擊倒經驗 × 數量 × expRatio，不超過 maxExp。 */
+    expRatio: number;
+    maxExp: number;
+    /** 報酬價值上限 = 目標等級 × valuePerLevel × 數量，不超過 maxValue。 */
+    valuePerLevel: number;
+    maxValue: number;
+    maxItemQuantity: number;
+  };
+  requires?: { flags?: string[] } & FactionConditions;
+  excludes?: { flags?: string[] };
+}
+
+export interface QuestTemplateDataStatic {
+  limits: {
+    /** 全世界同時開放（含已接取未完成）的動態委託上限。 */
+    maxOpenQuests: number;
+    maxOpenPerGiver: number;
+    /** 同一發布者兩次發布之間至少相隔的遊戲日。 */
+    giverCooldownDays: number;
+  };
+  templates: QuestTemplateStatic[];
+}
+
+/**
+ * 依範本生成的支線委託（世界存檔）。rewards 為發布時自發布者持有物預扣保留的報酬；
+ * 是否已被接取取決於目前角色的 activeQuests，不另外記錄。
+ */
+export interface GeneratedQuest extends QuestStatic {
+  generated: true;
+  templateId: string;
+  targetUnitId: string;
+  status: 'open' | 'completed' | 'failed' | 'expired';
+  postedAtMinutes: number;
+  expiresAtMinutes: number;
+}
+
+/**
+ * 委託提議；前端以 validateQuestProposal 驗證後才發布。
+ * 主持人 AI 只選範本、發布者、目標與數量，報酬由規則自發布者持有物組成；明確指定報酬時（例如日後的重要角色決策）須在上限內，否則拒絕。
+ */
+export interface QuestProposal {
+  templateId: string;
+  giverId: string;
+  targetUnitId: string;
+  /** 收集範本的目標物品；討伐範本為 null。 */
+  itemId?: string | null;
+  quantity: number;
+  rewardGold?: number;
+  rewardItems?: { itemId: string; quantity: number }[];
+}
+
 
 // ==========================================
 // 2. 動態資料 DTO (Dynamic State - LocalStorage / API)
@@ -461,6 +531,9 @@ export interface WorldRuntimeState {
   regions: Record<string, { lastRestockDay: number }>;
   /** 勢力間關係：只保存與 factions.json 初始值不同的組合，鍵為排序後的「勢力A|勢力B」。 */
   factionRelations: Record<string, { status: FactionRelationStatus; tags: string[] }>;
+  /** 依任務範本生成的支線委託（O30）。 */
+  generatedQuests: GeneratedQuest[];
+  nextGeneratedQuestSeq: number;
 }
 
 /** 玩家動態存檔狀態 (寫入 LocalStorage) */
@@ -655,4 +728,6 @@ export interface AIResponsePayload {
   failureStateChanges?: AIResponsePayload['stateChanges'];
   /** 提議觸發的靜態事件 ID；只可選遊戲提供的候選，前端驗證條件後套用。劇情旗標只能經由事件設定。 */
   eventProposals?: string[];
+  /** 依任務範本提議的支線委託（最多一件）；只可選遊戲提供的候選，前端驗證後發布。 */
+  questProposals?: QuestProposal[];
 }
