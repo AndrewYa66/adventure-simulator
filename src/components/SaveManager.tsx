@@ -8,6 +8,8 @@ interface SaveManagerProps {
   activeWorldId?: string;
   /** AI 回合進行中時禁止存讀檔，避免回應套用到錯誤的狀態。 */
   busy: boolean;
+  /** 角色死亡時禁止手動存檔，避免把死亡狀態存進欄位。 */
+  canSave: boolean;
   onSaveManual: (slotId: SaveSlotId) => string;
   onLoad: (worldId: string, slotId: SaveSlotId) => string;
   onDeleteSlot: (worldId: string, slotId: SaveSlotId) => string;
@@ -26,7 +28,7 @@ const describeSlot = (summary: SlotSummary | null) => summary
 
 const buttonStyle = { padding: '4px 8px', marginLeft: '4px', background: '#333', color: '#eee', border: '1px solid #555', borderRadius: '4px', cursor: 'pointer' } as const;
 
-export function SaveManager({ activeWorldId, busy, onSaveManual, onLoad, onDeleteSlot, onDeleteWorld, onExport, onImport, onNewWorld, onClose }: SaveManagerProps) {
+export function SaveManager({ activeWorldId, busy, canSave, onSaveManual, onLoad, onDeleteSlot, onDeleteWorld, onExport, onImport, onNewWorld, onClose }: SaveManagerProps) {
   const [status, setStatus] = useState('');
   // 每次操作後遞增，觸發重新讀取索引、欄位摘要與用量。
   const [, setRevision] = useState(0);
@@ -53,6 +55,7 @@ export function SaveManager({ activeWorldId, busy, onSaveManual, onLoad, onDelet
     <div style={{ width: 'min(640px, 100%)', maxHeight: '90vh', overflowY: 'auto', padding: '20px', background: '#242424', border: '1px solid #555', borderRadius: '8px', color: '#eee', fontSize: '13px' }}>
       <h3 id="save-manager-title" style={{ marginTop: 0 }}>💾 存檔管理</h3>
       {busy && <p style={{ color: '#ffcc80' }}>AI 回合進行中，請稍候再存讀檔。</p>}
+      {!canSave && <p style={{ color: '#ff8a80' }}>角色已死亡，無法存檔；請讀取死亡前的自動存檔或手動存檔。</p>}
       <p style={{ color: usage.ratio >= STORAGE_WARNING_RATIO ? '#ff8a80' : '#aaa', margin: '0 0 12px' }}>
         瀏覽器儲存用量：約 {(usage.usedBytes / 1024).toFixed(0)} KB / {(usage.limitBytes / 1024 / 1024).toFixed(0)} MB（{(usage.ratio * 100).toFixed(1)}%）
         {usage.ratio >= STORAGE_WARNING_RATIO && '。空間即將用完，請先匯出備份並刪除不需要的世界或存檔。'}
@@ -60,11 +63,14 @@ export function SaveManager({ activeWorldId, busy, onSaveManual, onLoad, onDelet
 
       {activeWorld && activeSlots ? <section>
         <h4 style={{ margin: '0 0 6px' }}>目前世界：{activeWorld.name}</h4>
-        <div style={{ color: '#aaa', marginBottom: '8px' }}>{slotLabels[AUTO_SLOT_ID]}（每次狀態變更後覆寫）：{describeSlot(activeSlots[AUTO_SLOT_ID])}</div>
+        <div style={{ color: '#aaa', marginBottom: '8px' }}>{slotLabels[AUTO_SLOT_ID]}（每次狀態變更後覆寫，死亡時不覆寫）：{describeSlot(activeSlots[AUTO_SLOT_ID])}
+          {activeSlots[AUTO_SLOT_ID] && <button style={buttonStyle} disabled={busy} onClick={() => {
+            if (window.confirm('讀取自動存檔？目前進度會被取代。')) run(() => onLoad(activeWorld.id, AUTO_SLOT_ID));
+          }}>讀取</button>}</div>
         {MANUAL_SLOT_IDS.map((slotId) => <div key={slotId} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', padding: '6px 0', borderTop: '1px solid #333' }}>
           <span><strong>{slotLabels[slotId]}</strong>：{describeSlot(activeSlots[slotId])}</span>
           <span style={{ whiteSpace: 'nowrap' }}>
-            <button style={buttonStyle} disabled={busy} onClick={() => {
+            <button style={buttonStyle} disabled={busy || !canSave} onClick={() => {
               if (!activeSlots[slotId] || window.confirm(`覆寫「${slotLabels[slotId]}」？`)) run(() => onSaveManual(slotId));
             }}>存到此欄</button>
             <button style={buttonStyle} disabled={busy || !activeSlots[slotId]} onClick={() => {

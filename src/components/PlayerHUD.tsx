@@ -14,6 +14,7 @@ interface PlayerHUDProps {
   player: PlayerState;
   onOpenSaveManager: () => void;
   /** 角色死亡後在同一世界建立新角色；沒有進行中的世界時不提供。 */
+  /** 以新角色接續目前世界；死亡改為讀檔制後暫不提供入口，保留給 O42。 */
   onContinueWithNewCharacter?: () => void;
   storageWarning: boolean;
   onTravel: (mapId: string) => void;

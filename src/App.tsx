@@ -191,8 +191,9 @@ export default function App() {
   };
 
   // 自動存檔：每次狀態變更（且非 AI 回合進行中）覆寫目前世界的自動存檔欄位。
+  // 死亡狀態不寫入，讓自動存檔停在致命行動之前，死亡後可讀檔重試。
   useEffect(() => {
-    if (loading || !activeWorldId) return;
+    if (loading || !activeWorldId || player.isDead) return;
     const saved = writeSlot(activeWorldId, AUTO_SLOT_ID, player, messages, characterHistory);
     if (!saved) console.warn('自動存檔失敗，瀏覽器儲存空間可能不足。');
   }, [player, messages, characterHistory, loading, activeWorldId]);
@@ -219,6 +220,7 @@ export default function App() {
     setSetupMode('new-world');
   };
 
+  // 接續分支（setupMode 'continue'）目前沒有入口：死亡改為讀檔制，接續系統保留給 O42 非同步多人。
   const handleCreateCharacter = (name: string, classId: string, alignment: CharacterAlignment, relatedToPrevious = false) => {
     const created = createInitialPlayer(name, classId, alignment, true);
     // 新角色對各勢力的聲望預設重置；劇本允許且玩家選擇與前角色有關聯時，部分繼承前角色的聲望變化。
@@ -250,6 +252,7 @@ export default function App() {
   // ---------- 存檔管理 ----------
   const handleSaveManual = (slotId: SaveSlotId) => {
     if (!activeWorldId) return '目前沒有進行中的世界。';
+    if (player.isDead) return '角色已死亡，無法存檔；請讀取死亡前的存檔。';
     return writeSlot(activeWorldId, slotId, player, messages, characterHistory)
       ? '已存檔。' : '存檔失敗：瀏覽器儲存空間可能不足，請先匯出備份並刪除不需要的存檔。';
   };
@@ -265,6 +268,12 @@ export default function App() {
     setSetupMode(null);
     setIsSaveManagerOpen(false);
     return '已讀取存檔。';
+  };
+
+  const handleLoadAutoSave = () => {
+    if (!activeWorldId) return;
+    const result = handleLoadSlot(activeWorldId, AUTO_SLOT_ID);
+    if (result !== '已讀取存檔。') appendSystemMessage(`⚠️ ${result}可開啟存檔管理讀取手動存檔。`);
   };
 
   const handleDeleteSlot = (worldId: string, slotId: SaveSlotId) => {
@@ -638,7 +647,7 @@ export default function App() {
     }
 
     if (player.combat || !canPlayerAct(player)) {
-      appendSystemMessage(player.isDead ? '角色已死亡，無法繼續行動。可從右側選擇「以新角色接續這個世界」，或在存檔管理讀取存檔。' : '角色目前昏迷，無法採取行動。');
+      appendSystemMessage(player.isDead ? '角色已死亡，無法繼續行動。請讀取自動存檔（死亡前），或在存檔管理讀取手動存檔。' : '角色目前昏迷，無法採取行動。');
       return;
     }
     const explicitSelfDamage = parseExplicitSelfDamage(actionText);
@@ -788,7 +797,7 @@ export default function App() {
         : '';
       if (encounterAllowed && encounterUnit) nextPlayer = { ...nextPlayer, encounteredUnitId: encounterUnit.id };
       const deathNotice = !player.isDead && nextPlayer.isDead
-        ? '\n\n☠️ 你的生命值降至 0，角色死亡。這段冒險已結束，可從右側以新角色接續這個世界。'
+        ? '\n\n☠️ 你的生命值降至 0，角色死亡。可讀取死亡前的自動存檔重新嘗試。'
         : '';
       const acceptedQuests = nextPlayer.activeQuests.filter((entry) => entry.status === 'in_progress' &&
         !player.activeQuests.some((previous) => previous.questId === entry.questId));
@@ -907,8 +916,9 @@ export default function App() {
         combatActive={!!player.combat}
         inputDisabled={player.isDead || isPlayerUnconscious(player)}
         onTravel={handleTravel}
+        deathActions={player.isDead ? { onLoadAutoSave: handleLoadAutoSave, onOpenSaveManager: () => setIsSaveManagerOpen(true) } : undefined}
       />
-      {isSidebarOpen && <PlayerHUD player={player} onOpenSaveManager={() => setIsSaveManagerOpen(true)} onContinueWithNewCharacter={activeWorldId ? () => setSetupMode('continue') : undefined} storageWarning={storageWarning || autosaveFailed} onTravel={handleTravel} onAcceptQuest={handleAcceptQuest} onTurnInQuest={handleTurnInQuest} onStartCombat={handleStartCombat} onFleeCombat={handleFleeCombat} onAttack={handleAttack} onUseSkill={handleUseSkill} onUseItem={handleUseItem} onBuyItem={handleBuyItem} onSellItem={handleSellItem} onEquipItem={handleEquipItem} onUseService={handleUseService} />}
+      {isSidebarOpen && <PlayerHUD player={player} onOpenSaveManager={() => setIsSaveManagerOpen(true)} storageWarning={storageWarning || autosaveFailed} onTravel={handleTravel} onAcceptQuest={handleAcceptQuest} onTurnInQuest={handleTurnInQuest} onStartCombat={handleStartCombat} onFleeCombat={handleFleeCombat} onAttack={handleAttack} onUseSkill={handleUseSkill} onUseItem={handleUseItem} onBuyItem={handleBuyItem} onSellItem={handleSellItem} onEquipItem={handleEquipItem} onUseService={handleUseService} />}
       {isKeyModalOpen && <ApiKeyModal
         isOpen={true}
         currentSettings={modelSettings}
@@ -922,7 +932,7 @@ export default function App() {
         ? () => setSetupMode(null)
         // 建立新世界時若已有其他世界，可取消並回到存檔管理切換世界。
         : loadSaveIndex().worlds.length > 0 ? () => { setSetupMode(null); setIsSaveManagerOpen(true); } : undefined} />}
-      {isSaveManagerOpen && <SaveManager activeWorldId={activeWorldId} busy={loading} onSaveManual={handleSaveManual} onLoad={handleLoadSlot}
+      {isSaveManagerOpen && <SaveManager activeWorldId={activeWorldId} busy={loading} canSave={!player.isDead} onSaveManual={handleSaveManual} onLoad={handleLoadSlot}
         onDeleteSlot={handleDeleteSlot} onDeleteWorld={handleDeleteWorld} onExport={handleExportWorld} onImport={handleImportWorld}
         onNewWorld={handleNewWorld} onClose={() => {
           setIsSaveManagerOpen(false);
