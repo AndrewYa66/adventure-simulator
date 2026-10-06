@@ -1,11 +1,15 @@
-import type { PlayerState, StoryletGiverChannel, StoryletStatic, StoryState } from '../types/game';
+import type { EventStatic, PlayerState, StoryletGiverChannel, StoryletStatic, StoryState } from '../types/game';
 import {
+  eventsDatabase,
+  getMapById,
+  getQuestById,
   getStoryActById,
   getStoryletById,
   getUnitDisplayName,
   getUnitTemplateById,
   getWorldUnitById,
   getWorldUnitDisposition,
+  mapsDatabase,
   storyActs,
   storyData,
   storyletsDatabase,
@@ -29,8 +33,22 @@ export const createStoryState = (): StoryState => ({
 
 export const CHANNEL_LABELS: Record<StoryletGiverChannel, string> = { notice_board: '告示板', letter: '書信', relic: '遺物', none: '無' };
 
-/** 第一版可用的保底管道；遺物需 O26 死亡遺物。 */
+/** 卡死保底的事件原因（O32）。 */
+export const STUCK_RESCUE_CAUSE = '主線保底';
+
+/** 目前可用的保底管道；遺物需 O26 死亡遺物。 */
 const isUsableChannel = (channel: StoryletGiverChannel) => channel === 'notice_board' || channel === 'letter';
+
+/** 地點有告示板（地點設施，O32）。 */
+export const hasNoticeBoard = (mapId: string) => getMapById(mapId)?.facilities?.includes('notice_board') ?? false;
+
+/** 片段的發生地點；未設定時為全世界。 */
+const getStoryletMapIds = (storylet: StoryletStatic): string[] =>
+  storylet.requires?.mapIds?.length ? storylet.requires.mapIds : mapsDatabase.map((map) => map.id);
+
+/** 保底管道在此地點（未指定時為任一發生地點）可用：書信到處可用，告示板需要地點有告示板。 */
+const isChannelAvailable = (storylet: StoryletStatic, channel: StoryletGiverChannel, atMapId?: string) =>
+  channel === 'letter' || (channel === 'notice_board' && (atMapId ? hasNoticeBoard(atMapId) : getStoryletMapIds(storylet).some(hasNoticeBoard)));
 
 const hasDied = (state: Pick<PlayerState, 'unitInstances'>, unitId: string) => {
   const instance = state.unitInstances[unitId];
@@ -89,17 +107,20 @@ export type StoryletGiver = { kind: 'unit'; unitId: string; preferred: boolean }
  * 都沒有時使用保底管道。指定 atMapId 時，單位給予者必須在該地圖，否則回傳 undefined（玩家需前往給予者所在處）。
  */
 export function resolveStoryletGiver(state: PlayerState, storylet: StoryletStatic, atMapId?: string): StoryletGiver | undefined {
-  const isHere = (unitId: string) => !atMapId || (getWorldUnitById(unitId)?.mapIds.includes(atMapId) ?? false);
+  const options = getGiverOptions(state, storylet);
+  if (!options) return undefined;
+  if ('channel' in options) return isChannelAvailable(storylet, options.channel, atMapId) ? { kind: 'channel', channel: options.channel } : undefined;
+  const unitId = options.unitIds.find((id) => !atMapId || (getWorldUnitById(id)?.mapIds.includes(atMapId) ?? false));
+  return unitId ? { kind: 'unit', unitId, preferred: options.preferred } : undefined;
+}
+
+/** 給予者人選：可用的首選者；否則接手人選；都沒有時為可用的保底管道。 */
+function getGiverOptions(state: PlayerState, storylet: StoryletStatic): { unitIds: string[]; preferred: boolean } | { channel: StoryletGiverChannel } | undefined {
   const preferredId = storylet.giver.preferredUnitId;
-  if (preferredId && isUsableGiver(state, preferredId)) {
-    return isHere(preferredId) ? { kind: 'unit', unitId: preferredId, preferred: true } : undefined;
-  }
+  if (preferredId && isUsableGiver(state, preferredId)) return { unitIds: [preferredId], preferred: true };
   const successors = getSuccessorIds(state, storylet);
-  if (successors.length) {
-    const here = successors.find(isHere);
-    return here ? { kind: 'unit', unitId: here, preferred: false } : undefined;
-  }
-  return isUsableChannel(storylet.giver.fallback) ? { kind: 'channel', channel: storylet.giver.fallback } : undefined;
+  if (successors.length) return { unitIds: successors, preferred: false };
+  return isUsableChannel(storylet.giver.fallback) ? { channel: storylet.giver.fallback } : undefined;
 }
 
 export const describeStoryletGiver = (giver: StoryletGiver | undefined): string =>
@@ -114,13 +135,17 @@ function getPendingStorylets(state: PlayerState, includeLocation: boolean): Stor
 
 /**
  * 目前可開始的片段候選（依優先度排序）：玩家在發生地點，且給予者在場（或使用保底管道）。
- * 預設片段只在本幕沒有其他進行中、也沒有其他可開始（任何地點）的片段時才成為候選。
+ * 預設片段只在本幕沒有其他進行中、也沒有其他可開始（任何地點）的片段時才成為候選；
+ * 目標已無法達成的進行中片段、給予者或發生地點到不了的片段不算「其他路」（O32）。
  */
 export function getStoryletCandidates(state: PlayerState): { storylet: StoryletStatic; giver: StoryletGiver }[] {
   const story = state.world.story;
   if (story.activeStorylets.length >= storyData.rules.maxActiveStorylets) return [];
-  const otherPathOpen = story.activeStorylets.some((entry) => !getStoryletById(entry.id)?.isDefault) ||
-    getPendingStorylets(state, false).some((storylet) => !storylet.isDefault && !!resolveStoryletGiver(state, storylet));
+  const progress = createProgressContext(state);
+  const otherPathOpen = story.activeStorylets.some((entry) => {
+    const storylet = getStoryletById(entry.id);
+    return !!storylet && !storylet.isDefault && isGoalAchievable(progress, storylet);
+  }) || getPendingStorylets(state, false).some((storylet) => !storylet.isDefault && isPendingOpen(progress, storylet));
   return getPendingStorylets(state, true).flatMap((storylet) => {
     if (storylet.isDefault && otherPathOpen) return [];
     const giver = resolveStoryletGiver(state, storylet, state.currentMapId);
@@ -135,6 +160,122 @@ export function isStoryletGoalMet(state: PlayerState, storylet: StoryletStatic):
   if (goal.type === 'threatRemoved') return goal.unitIds.every((unitId) => hasDied(state, unitId));
   if (goal.type === 'locationReached') return state.currentMapId === goal.mapId;
   return state.storyFlags[goal.flag] === true;
+}
+
+// ---------- 可前進判定與卡死偵測（O32）----------
+// 判斷「日後仍可能達成」而不是「現在就能達成」。寧可高估（漏報卡死）也不誤判，避免提早觸發保底；
+// 無法由規則判定的條件（尚未成立但有來源的旗標、聲望與勢力關係）一律視為可能。
+
+interface ProgressContext {
+  state: PlayerState;
+  /** 玩家日後可抵達的地圖：從目前地點沿相連地圖走，前置任務已接取、已完成或仍可接取。 */
+  reachable: Set<string>;
+}
+
+/** 劇本任務已接取、已完成，或仍可接取（委託人可擔任給予者，前置任務也都可接取）。 */
+function isQuestObtainable(state: PlayerState, questId: string, visited = new Set<string>()): boolean {
+  const progress = state.activeQuests.find((entry) => entry.questId === questId);
+  if (progress) return progress.status !== 'failed';
+  const quest = getQuestById(questId);
+  if (!quest || visited.has(questId)) return false;
+  visited.add(questId);
+  return isUsableGiver(state, quest.questGiverId) && (quest.prerequisiteQuestIds ?? []).every((id) => isQuestObtainable(state, id, visited));
+}
+
+function createProgressContext(state: PlayerState): ProgressContext {
+  const reachable = new Set([state.currentMapId]);
+  const queue = [state.currentMapId];
+  while (queue.length) {
+    for (const nextId of getMapById(queue.shift()!)?.connectedMapIds ?? []) {
+      const next = getMapById(nextId);
+      if (!next || reachable.has(nextId) || (next.requiredQuestId && !isQuestObtainable(state, next.requiredQuestId))) continue;
+      reachable.add(nextId);
+      queue.push(nextId);
+    }
+  }
+  return { state, reachable };
+}
+
+/** 唯一單位已死亡，或日後仍可擊倒：未潛伏、所在地可抵達，需要的前置任務進行中或仍可接取。 */
+function canStillDefeat({ state, reachable }: ProgressContext, unitId: string): boolean {
+  if (hasDied(state, unitId)) return true;
+  const instance = state.unitInstances[unitId];
+  const template = getUnitTemplateById(unitId);
+  if (!instance || !template || instance.isDead || instance.isDormant) return false;
+  const questId = template.requiredQuestId;
+  const questProgress = questId ? state.activeQuests.find((entry) => entry.questId === questId) : undefined;
+  if (questId && (questProgress ? questProgress.status !== 'in_progress' : !isQuestObtainable(state, questId))) return false;
+  return getWorldUnitById(unitId, state)?.mapIds.some((mapId) => reachable.has(mapId)) ?? false;
+}
+
+/** 本幕尚未完成的片段（完成時可設定旗標、觸發完成事件）。 */
+const getOpenActStorylets = (state: PlayerState) =>
+  storyletsDatabase.filter((storylet) => storylet.actId === state.world.story.currentActId && !isCompleted(state.world.story, storylet.id));
+
+/** 事件日後仍可能觸發：尚未觸發、未被排除、需要存活的單位未死、需要死亡的單位可擊倒、發生地點可抵達；完成事件需本幕尚未完成的片段引用。 */
+function canEventStillFire(progress: ProgressContext, event: EventStatic): boolean {
+  const { state, reachable } = progress;
+  const requires = event.requires ?? {};
+  return !state.world.firedEventIds.includes(event.id) &&
+    !(event.excludes?.flags ?? []).some((flag) => state.storyFlags[flag] === true) &&
+    (requires.unitsAlive ?? []).every((unitId) => { const instance = state.unitInstances[unitId]; return !!instance && !instance.isDead && instance.currentHp !== 0; }) &&
+    (requires.unitsDead ?? []).every((unitId) => canStillDefeat(progress, unitId)) &&
+    (!requires.mapIds?.length || requires.mapIds.some((mapId) => reachable.has(mapId))) &&
+    (event.trigger !== 'storylet' || getOpenActStorylets(state).some((storylet) => storylet.onComplete.eventIds?.includes(event.id)));
+}
+
+/** 旗標已成立，或日後仍可能由事件（不含卡死保底事件）或本幕尚未完成的片段設定。 */
+function canStillSetFlag(progress: ProgressContext, flag: string): boolean {
+  const { state } = progress;
+  if (state.storyFlags[flag] === true) return true;
+  return eventsDatabase.some((event) => event.trigger !== 'stuck' && (event.effects.setFlags ?? []).includes(flag) && canEventStillFire(progress, event)) ||
+    getOpenActStorylets(state).some((storylet) => (storylet.onComplete.setFlags ?? []).includes(flag));
+}
+
+/** 目標已達成或日後仍可能達成（含「或旗標成立」）。 */
+function isGoalAchievable(progress: ProgressContext, storylet: StoryletStatic): boolean {
+  if (isStoryletGoalMet(progress.state, storylet)) return true;
+  const goal = storylet.goal;
+  if (goal.type !== 'flagSet' && goal.orFlag && canStillSetFlag(progress, goal.orFlag)) return true;
+  if (goal.type === 'threatRemoved') return goal.unitIds.every((unitId) => canStillDefeat(progress, unitId));
+  if (goal.type === 'locationReached') return progress.reachable.has(goal.mapId);
+  return canStillSetFlag(progress, goal.flag);
+}
+
+/** 尚未開始的片段仍有路可走：給予者在可抵達的發生地點（書信到處可用、告示板需該地有告示板），且目標可能達成。進入條件另行判斷。 */
+function isPendingOpen(progress: ProgressContext, storylet: StoryletStatic): boolean {
+  const locations = getStoryletMapIds(storylet).filter((mapId) => progress.reachable.has(mapId));
+  const options = getGiverOptions(progress.state, storylet);
+  if (!options || !locations.length) return false;
+  const giverReachable = 'channel' in options
+    ? options.channel === 'letter' || (options.channel === 'notice_board' && locations.some(hasNoticeBoard))
+    : options.unitIds.some((unitId) => getWorldUnitById(unitId, progress.state)?.mapIds.some((mapId) => locations.includes(mapId)));
+  return giverReachable && isGoalAchievable(progress, storylet);
+}
+
+/** 進入條件日後仍可能成立：需要的旗標有來源、排除旗標未成立、需要存活的單位未死、需要死亡的單位可擊倒（聲望與勢力關係視為可能）。 */
+function couldMeetConditions(progress: ProgressContext, storylet: StoryletStatic): boolean {
+  const { state } = progress;
+  const requires = storylet.requires ?? {};
+  return (requires.flags ?? []).every((flag) => canStillSetFlag(progress, flag)) &&
+    !(storylet.excludes?.flags ?? []).some((flag) => state.storyFlags[flag] === true) &&
+    (requires.unitsAlive ?? []).every((unitId) => isAlive(state, unitId)) &&
+    (requires.unitsDead ?? []).every((unitId) => canStillDefeat(progress, unitId));
+}
+
+/**
+ * 目前幕是否卡死：沒有目標仍可達成的進行中片段，且（進行中已滿，或）沒有進入條件可能成立、給予者與發生地點可抵達、目標可能達成的未開始片段。
+ * 最後一幕不判定（結局判定見 O33）。
+ */
+export function isActStuck(state: PlayerState): boolean {
+  const story = state.world.story;
+  if (storyActs[storyActs.length - 1]?.id === story.currentActId) return false;
+  const progress = createProgressContext(state);
+  const active = story.activeStorylets.flatMap((entry) => getStoryletById(entry.id) ?? []);
+  if (active.some((storylet) => isGoalAchievable(progress, storylet))) return false;
+  if (active.length >= storyData.rules.maxActiveStorylets) return true;
+  return !getOpenActStorylets(state).some((storylet) => !isStarted(story, storylet.id) &&
+    couldMeetConditions(progress, storylet) && isPendingOpen(progress, storylet));
 }
 
 /**
@@ -185,7 +326,7 @@ export function describeStoryProgress(before: PlayerState, after: PlayerState): 
   const known = new Set(before.world.story.completedStorylets.map((entry) => entry.id));
   const lines = after.world.story.completedStorylets.filter((entry) => !known.has(entry.id)).flatMap((entry) => {
     const storylet = getStoryletById(entry.id);
-    return storylet ? [`・「${storylet.title}」完成：${storylet.onComplete.summary}`] : [];
+    return storylet ? [`・${entry.forced ? `（${STUCK_RESCUE_CAUSE}）` : ''}「${storylet.title}」完成：${storylet.onComplete.summary}`] : [];
   });
   const act = after.world.story.currentActId !== before.world.story.currentActId ? getStoryActById(after.world.story.currentActId) : undefined;
   if (act) lines.push(`・進入新的一幕：「${act.title}」`);

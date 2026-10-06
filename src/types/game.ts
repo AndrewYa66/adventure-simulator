@@ -337,8 +337,11 @@ export type EventKnownBy = 'witnesses' | 'faction' | 'region' | 'world';
 export interface EventStatic {
   id: string;
   title: string;
-  /** auto：條件成立時由遊戲自動觸發；aiProposal：只能由 AI 提議，前端驗證條件後套用；storylet：劇情片段完成時觸發（O31）。 */
-  trigger: 'auto' | 'aiProposal' | 'storylet';
+  /**
+   * auto：條件成立時由遊戲自動觸發；aiProposal：只能由 AI 提議，前端驗證條件後套用；storylet：劇情片段完成時觸發（O31）；
+   * stuck：目前幕卡死超過寬限期時觸發的保底事件（幕的 stuckEventId，O32）。
+   */
+  trigger: 'auto' | 'aiProposal' | 'storylet' | 'stuck';
   requires?: { flags?: string[]; unitsAlive?: string[]; unitsDead?: string[]; mapIds?: string[] } & FactionConditions;
   excludes?: { flags?: string[] };
   effects: {
@@ -355,6 +358,9 @@ export interface EventStatic {
   aiHint?: string;
 }
 
+/** 地點設施（規則用）：notice_board 告示板，劇情片段的告示板保底管道只在有告示板的地點可用（O32）。 */
+export type MapFacility = 'notice_board';
+
 /** 地圖靜態資料 (來自 maps.json) */
 export interface MapStatic {
   id: string;             // 格式: "MAP-xxx"
@@ -367,7 +373,9 @@ export interface MapStatic {
   isSafeZone: boolean;
   description: string;
   connectedMapIds: string[];
+  /** 給 AI 的地點描述；規則判定用 facilities。 */
   pointsOfInterest: string[];
+  facilities?: MapFacility[];
   /** 出現在此地區的單位 ID（居民與需遭遇的單位）。 */
   unitsPresent: string[];
   requiredQuestId?: string;
@@ -446,8 +454,10 @@ export interface StoryActStatic {
   title: string;
   /** 幕的順序；推進下一幕時取 order 次大的幕。 */
   order: number;
-  /** 預設片段（保底）：本幕沒有其他片段可走時才成為候選。 */
+  /** 預設片段（保底）：本幕沒有其他片段可走時才成為候選；卡死且保底事件沒有解決時強制完成（O32）。 */
   defaultStoryletId: string;
+  /** 卡死保底事件（trigger 須為 stuck）：卡死超過寬限期時先觸發，可設旗標開出救援片段。最後一幕以外必填（O32）。 */
+  stuckEventId?: string;
   /** 幕目標（結果），提供給 AI 作為敘事方向。 */
   goal: string;
   theme?: string;
@@ -507,6 +517,8 @@ export interface StoryDataStatic {
     maxStartsPerTurn: number;
     /** 提供給 AI 的候選片段上限（依優先度）。 */
     maxCandidatesForAI: number;
+    /** 目前幕卡死（沒有可前進的片段）持續多久（遊戲分鐘）後觸發保底（O32）。 */
+    stuckGraceMinutes: number;
   };
   acts: StoryActStatic[];
   storylets: StoryletStatic[];
@@ -516,8 +528,10 @@ export interface StoryDataStatic {
 export interface StoryState {
   currentActId: string;
   activeStorylets: { id: string; startedAtMinutes: number; giverUnitId?: string; giverChannel?: StoryletGiverChannel }[];
-  /** wasActive：完成時是否已開始（false 代表目標先被他人或事件達成）。 */
-  completedStorylets: { id: string; completedAtMinutes: number; wasActive: boolean }[];
+  /** wasActive：完成時是否已開始（false 代表目標先被他人或事件達成）；forced：卡死保底強制完成（O32）。 */
+  completedStorylets: { id: string; completedAtMinutes: number; wasActive: boolean; forced?: boolean }[];
+  /** 目前幕開始卡死的時間；沒有卡死時不存在（O32）。 */
+  stuckSinceMinutes?: number;
   /** 過程中累積的結局特徵（項目 → 值），提供給 AI 作為敘事背景，結局判定見 O33。 */
   endingTraits: Record<string, string>;
 }

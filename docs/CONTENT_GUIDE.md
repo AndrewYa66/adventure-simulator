@@ -64,7 +64,7 @@ content/
 
 ### 幕
 
-`id`、標題→title、順序→order、預設片段→defaultStoryletId。內文：幕目標→goal、開場時的世界→openingState、主題與情緒→theme、可能的走向→branches、保底走向→fallback、結束條件→exitCondition。
+`id`、標題→title、順序→order、預設片段→defaultStoryletId、卡死保底事件→stuckEventId（O32；最後一幕以外必填，事件的觸發方式須為「卡死保底」）。內文：幕目標→goal、開場時的世界→openingState、主題與情緒→theme、可能的走向→branches、保底走向→fallback、結束條件→exitCondition。
 
 ### 劇情片段
 
@@ -92,11 +92,14 @@ content/
 遊戲資料格式見 `src/data/story.json` 與 `docs/API.md`「主線：幕與劇情片段」（O31 第一版，目前是手寫的範例資料，O36 建置腳本完成後由 `content/story/` 產生）。範本與寫手指南已於 2026-10-06 補上目標說明、完成描述、完成傳播範圍、接手範圍與給予者最低等級。
 
 - 「保底管道」第一版只支援告示板與書信；遺物需死亡遺物（O26）。預設片段不可指定首選給予者或給予者職階／勢力。
+- 告示板只在有告示板的地點可用（地圖的地點設施 `facilities: ["notice_board"]`；地圖目前由維護者在 `src/data/maps.json` 設定）；書信到處可用。
+- 卡死保底（O32）：本幕沒有任何片段能前進、持續一個遊戲日後，先觸發幕的「卡死保底事件」（可設旗標開出救援片段）；仍無法前進時，遊戲強制完成本幕的預設片段。因此最後一幕以外的預設片段必須「推進下一幕」，完成描述也要能在「沒有人真的完成目標」時讀得通。
+- 推進下一幕、或設定其他片段需要的旗標的片段（主線節點），保底管道不可為「無」；片段用到的旗標（需要旗標、目標旗標、或旗標成立）必須有事件或片段會設定。
 - 「物品送達」需要「交給非發布者」的交付規則，暫不支援；需要時改用旗標目標。
 
 ### 事件
 
-觸發方式→trigger（自動→auto、劇情片段完成→storylet、角色決策→agent、AI提議→aiProposal）；條件欄位同劇情片段；設定旗標／移除旗標→effects.setFlags／effects.clearFlags；影響單位／影響地區→effects.units／effects.mapIds；傳播範圍→knownBy（目擊者→witnesses、同勢力→faction、本地區→region、全世界→world）。內文「世界影響」由維護者轉為 `worldModifiers` 等結構化效果，「發生了什麼」轉為 `summary`，AI 提議事件的使用時機寫入 `aiHint`。遊戲資料格式見 `src/data/events.json` 與 `docs/API.md`「世界事件、世界修正與世界規則」；目前遊戲端支援自動、AI 提議與劇情片段完成三種觸發方式（角色決策待 O34）；四種傳播範圍都已支援，「同勢力」需另列得知事件的勢力（`knownByFactions`）。事件也可用聲望等級與勢力關係作為條件、以聲望與勢力關係變化作為效果（見 `docs/API.md`「勢力聲望與勢力間關係」）。
+觸發方式→trigger（自動→auto、劇情片段完成→storylet、卡死保底→stuck、角色決策→agent、AI提議→aiProposal）；卡死保底事件須被某一幕引用、不可限制發生地點；條件欄位同劇情片段；設定旗標／移除旗標→effects.setFlags／effects.clearFlags；影響單位／影響地區→effects.units／effects.mapIds；傳播範圍→knownBy（目擊者→witnesses、同勢力→faction、本地區→region、全世界→world）。內文「世界影響」由維護者轉為 `worldModifiers` 等結構化效果，「發生了什麼」轉為 `summary`，AI 提議事件的使用時機寫入 `aiHint`。遊戲資料格式見 `src/data/events.json` 與 `docs/API.md`「世界事件、世界修正與世界規則」；目前遊戲端支援自動、AI 提議、劇情片段完成與卡死保底四種觸發方式（角色決策待 O34）；四種傳播範圍都已支援，「同勢力」需另列得知事件的勢力（`knownByFactions`）。事件也可用聲望等級與勢力關係作為條件、以聲望與勢力關係變化作為效果（見 `docs/API.md`「勢力聲望與勢力間關係」）。
 
 ### 設定條目
 

@@ -51,6 +51,15 @@
     "aiHint": "玩家在哥布林巢穴與格羅姆・裂牙交涉，以說服或威嚇檢定成功，讓他同意率族人撤離時。"
   },
   {
+    "id": "EVT-006",
+    "title": "酋長失勢",
+    "trigger": "stuck",
+    "excludes": { "flags": ["酋長失勢"] },
+    "effects": { "setFlags": ["酋長失勢"] },
+    "knownBy": "region",
+    "summary": "傳言格羅姆・裂牙在部族內鬨中失勢，帶著殘部遁入深山，哥布林不再成群騷擾古道。"
+  },
+  {
     "id": "EVT-004",
     "title": "古道恢復通行",
     "trigger": "storylet",

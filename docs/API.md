@@ -158,7 +158,7 @@ sendPlayerAction(
 - **事件紀錄** `world.events`（只增不改）：`{ id, type, gameTimeMinutes, mapId, summary, detail?, knownBy, witnessUnitIds, awareFactionIds, cause, death?, eventId?, changes?, reputationChanges?, characterSeq?, sourceEventId? }`。`characterSeq` 是事件發生時在世的玩家角色代數（每個事件寫入時都會標記），用來把事件連結到歷代角色；`sourceEventId` 是衍生事件的來源，例如殺害造成的聲望事件引用該死亡事件。`type` 為 `unit_death`、`unit_respawn`、`unit_occupation`（他方佔領）、`quest_failed`、`quest_transferred`（委託接手）、`reputation_change`（玩家聲望變化）、`scenario_event`、`story_progress`（劇情片段完成，見「主線：幕與劇情片段」）。`summary` 是公開結果，`detail` 是經過與兇手等細節；`witnessUnitIds` 是事件發生時在場且存活的 NPC 與交戰中/已遭遇的魔物。`knownBy` 為 `witnesses`（目擊者）、`faction`（同勢力）、`region`（本地區）或 `world`（全世界）；`awareFactionIds` 在寫入時依傳播範圍決定：目擊者 → 目擊者所屬勢力；同勢力 → 指定勢力加目擊者勢力；本地區 → 另加在該地區有存活成員的勢力；全世界 → 所有勢力。超過 200 件時，最舊的事件壓縮成 `world.chronicle` 的一行摘要（最多 100 行）。
 - **死亡事件**：NPC、頭目與玩家角色死亡時寫入，`death` 記錄死者、死因（`combat` 戰鬥、`self_inflicted` 自我了斷、`misadventure` 意外或風險行動、`unknown`）與兇手。呼叫端提供死因提示；未提供時依事件前的戰鬥狀態推斷。玩家角色的歷代紀錄以 `deathEventId`/`deathSummary` 引用死亡事件。一般魔物樣板代表一群個體，擊敗不寫死亡事件；頭目（`isBoss`）是唯一個體，擊敗即永久死亡。
 - **知識範圍與認知層級（O39；重要角色決策的知識範圍見 O34）**：AI 收到目前地區、全世界周知、與在場 NPC 相關（目擊或死者原屬此地），或在場 NPC 所屬勢力得知的同勢力事件，取最近 12 件（`ai_context.json` 的 `worldEvents.maxEvents`），加上編年史摘要（最近 10 行，視為傳說）。每件事以 `presentKnowledge` 列出在場 NPC 的認知層級（`getEventKnowledgeLevel`）：**親眼目擊**（`witnessUnitIds` 中的單位，知道 `detail`，不會淡化）、**傳聞**（與目擊者同勢力但未在場，事件有 `detail` 時聽說了兇手或死因，不知道經過；附 `heardFrom` 目擊者名單）、**公開消息**（`awareFactionIds` 中勢力的成員、全世界周知事件，或住在事件地區的無勢力 NPC，只知道 `summary`）、**傳說**（傳聞或公開消息經過 `knowledge.legendAfterDays` 天，目前 30 天，只剩模糊往事），其餘為不知道。`detail` 只出現在親眼目擊者的 `knows` 中，沒有在場目擊者時不送給 AI。傳聞不會說錯兇手（會出錯的傳聞留待 O40）。
-- **靜態事件** `src/data/events.json`：`{ id, title, trigger: "auto" | "aiProposal" | "storylet", requires?: { flags, unitsAlive, unitsDead, mapIds, reputation, factionRelations }, excludes?: { flags }, effects: { setFlags?, clearFlags?, worldModifiers?, reputation?, factionRelations? }, knownBy, knownByFactions?, summary, aiHint? }`。勢力條件與效果見「勢力聲望與勢力間關係」；`knownBy: "faction"` 時必須列出 `knownByFactions`。每個事件只觸發一次（`world.firedEventIds`）。`auto` 事件在條件成立時自動觸發；`storylet` 事件只在引用它的劇情片段完成時觸發（見「主線：幕與劇情片段」）；`aiProposal` 事件只能由 AI 在回應的 `eventProposals`（事件 ID 陣列，必填，沒有時為空陣列）提議，遊戲驗證條件成立後才套用，有檢定時只在成功時考慮。Gemini JSON Schema 將 `eventProposals` 限制為目前可提議的事件 ID，沒有候選時只允許空陣列。
+- **靜態事件** `src/data/events.json`：`{ id, title, trigger: "auto" | "aiProposal" | "storylet" | "stuck", requires?: { flags, unitsAlive, unitsDead, mapIds, reputation, factionRelations }, excludes?: { flags }, effects: { setFlags?, clearFlags?, worldModifiers?, reputation?, factionRelations? }, knownBy, knownByFactions?, summary, aiHint? }`。勢力條件與效果見「勢力聲望與勢力間關係」；`knownBy: "faction"` 時必須列出 `knownByFactions`。每個事件只觸發一次（`world.firedEventIds`）。`auto` 事件在條件成立時自動觸發；`storylet` 事件只在引用它的劇情片段完成時觸發（見「主線：幕與劇情片段」）；`stuck` 事件只在幕卡死超過寬限期時觸發（O32）；`aiProposal` 事件只能由 AI 在回應的 `eventProposals`（事件 ID 陣列，必填，沒有時為空陣列）提議，遊戲驗證條件成立後才套用，有檢定時只在成功時考慮。Gemini JSON Schema 將 `eventProposals` 限制為目前可提議的事件 ID，沒有候選時只允許空陣列。
 - **世界修正** `world.modifiers`：`{ id, scope, stat, op, value, sourceEventId, expiresAtMinutes? }`，`scope` 為 `unit:<ID>`、`species:<ID>`、`map:<ID>`，`op` 為 `add`（整數加減）或 `multiply`（倍率）。一律為相對值：有效數值 = 公式數值先加總加減值、再乘以倍率後取整，因此調整靜態基礎數值後舊存檔的修正仍正確疊加。修正同樣作用於玩家（種族與所在地區）。事件的 `durationMinutes` 決定到期時間，到期後移除。
 - **世界規則**（寫死於前端）：單位死亡處理如上；委託人死亡時，由同勢力、同職階且存活的 NPC 接手（優先同一地區），進行中的委託記錄新委託人 `activeQuests[].giverUnitId`，交付改在接手者所在地進行並寫入 `quest_transferred` 事件；沒有人選時委託變為 `failed`。種族的 `respawnDays` 決定非唯一個體死亡後幾天由新個體補上（具名 NPC 與頭目不重生）。**他方佔領**：單位樣板可設 `occupation: { byUnitId, afterDays }`，此單位死亡滿 `afterDays` 天後不重生，改由 `byUnitId` 出現在原地並寫入 `unit_occupation` 事件；被佔領單位必須設 `dormantUntilOccupation: true`，在此之前為潛伏狀態（實例 `isDormant: true`、視為不在場，不會出現在 HUD、AI 上下文與遭遇候選，也不算「已死亡」）。目前只有會真正死亡的單位（NPC 與頭目）能觸發佔領。商店 NPC 存活時，其商品庫存每個遊戲日最多補回一次至起始數量。
 - **地區延後結算**：只結算玩家所在地區（`world.regions[mapId].lastRestockDay`），第一次進入只建立紀錄，之後依經過的遊戲日補貨與重生。
@@ -206,12 +206,12 @@ sendPlayerAction(
 - **任務查詢**：`questRules.findQuest(state, id)` 依序查靜態任務與生成委託；HUD、AI 上下文、交付、委託接手與聲望結算都使用此查詢。
 - `npm run validate:data` 驗證範本 ID 格式與唯一性、類型、數量範圍、期限、報酬參數、發布者勢力／職階參照與條件。
 
-## 主線：幕與劇情片段（O31）
+## 主線：幕與劇情片段（O31、O32）
 
 主線採「幕＋劇情片段」結構（`src/utils/storylets.ts`，完成結算在 `src/utils/worldEvents.ts`）；幕與片段由劇本資料定義，程式不寫死任何內容。
 
-- **資料** `src/data/story.json`：`{ rules: { maxActiveStorylets, maxStartsPerTurn, maxCandidatesForAI }, acts, storylets }`。
-  - 幕：`{ id: "ACT-n", title, order, defaultStoryletId, goal, theme? }`，依 `order` 排序，第一幕為開局的幕。
+- **資料** `src/data/story.json`：`{ rules: { maxActiveStorylets, maxStartsPerTurn, maxCandidatesForAI, stuckGraceMinutes }, acts, storylets }`。
+  - 幕：`{ id: "ACT-n", title, order, defaultStoryletId, stuckEventId?, goal, theme? }`，依 `order` 排序，第一幕為開局的幕。`stuckEventId` 是卡死保底事件（`trigger: "stuck"`），最後一幕以外必填。
   - 片段：`{ id: "STORY-幕-編號", actId, title, priority (0–100), isDefault?, requires?, excludes?, giver, goal, onComplete, scene }`。
     - `requires`：`{ flags, unitsAlive, unitsDead, mapIds, reputation, factionRelations }`，勢力條件與事件共用 `matchesFactionConditions`；`mapIds` 是發生地點。
     - `giver`：`{ preferredUnitId?, role?: { classIds?, factionIds?, minLevel? }, scope?: "map" | "world", fallback: "notice_board" | "letter" | "relic" | "none" }`；`relic` 需 O26，第一版驗證會拒絕。
@@ -223,11 +223,11 @@ sendPlayerAction(
   - 片段屬於目前幕、尚未開始也未完成、符合進入條件，玩家在發生地點；
   - 給予者在玩家所在地圖（或使用保底管道）；
   - 依 `priority` 由高到低排序；
-  - 預設片段只在本幕沒有其他進行中、也沒有其他在任何地點可開始的片段時才是候選。
+  - 預設片段只在本幕沒有其他進行中、也沒有其他在任何地點可開始的片段時才是候選；目標已無法達成的進行中片段、給予者或發生地點到不了的片段不算（判定見「卡死偵測」）。
 - **給予者** `resolveStoryletGiver(state, storylet, atMapId?)`：
   1. 首選者可用（存活、非潛伏的居民，對玩家非敵對）時只由首選者給予；不在 `atMapId` 時不是候選。
   2. 首選者不可用或未指定時，由符合 `role` 的可用居民接手。`scope: "map"` 限發生地點（未設定時為首選者居所）的居民，`"world"` 不限；與首選者同居所者優先。
-  3. 沒有人選時使用保底管道（告示板、書信）。
+  3. 沒有人選時使用保底管道：書信到處可用；告示板只在有告示板的地點可用（地圖 `facilities` 含 `notice_board`，未指定 `atMapId` 時為任一發生地點有告示板）。保底管道不受敵友關係限制。
 - **AI 選擇** `storyletProposals`（第 5 版必填陣列，最多 `maxStartsPerTurn` 個）：
   - AI 在敘事中由給予者帶出片段開場時，填入「可開始的劇情片段」的 ID。
   - 前端 `startStorylets(行動前狀態, 行動後狀態, ids)` 只接受行動前的候選，沒有檢定或檢定成功時才套用。
@@ -237,7 +237,12 @@ sendPlayerAction(
   - 進行中的片段（開始後不再檢查進入條件）與符合條件但尚未開始的片段，只要目標的結果成立就完成，尚未開始的完成時 `wasActive: false`。
   - 完成時設定 `setFlags`、合併 `endingTraits`，並寫入 `story_progress` 事件：`summary` 為 `onComplete.summary`，`knownBy` 預設 `region`，`changes.storyletIds`／`setFlags`／`actIds`。之後依序套用 `eventIds`，條件不成立的略過。
   - `advanceAct` 切換到下一幕：進行中的片段清空，上一幕剩下的片段不再完成；最後一幕不可推進（結局判定見 O33）。
-- **存檔** `world.story`（世界層）：`{ currentActId, activeStorylets: [{ id, startedAtMinutes, giverUnitId?, giverChannel? }], completedStorylets: [{ id, completedAtMinutes, wasActive }], endingTraits }`。
+- **卡死偵測與保底（O32）** `isActStuck(state)`：判斷「日後仍可能達成」而非「現在就能達成」，寧可漏報也不誤判；無法由規則判定的條件（有來源但尚未成立的旗標、聲望與勢力關係）視為可能。
+  - 可抵達的地圖：從目前地點沿 `connectedMapIds` 走，地圖的前置任務已接取、已完成或仍可接取（委託人可擔任給予者，前置任務也都可接取）。
+  - 目標仍可達成：已達成；或 `orFlag` 仍可設定；威脅消除的單位都已死亡或仍可擊倒（未潛伏、所在地可抵達、`requiredQuestId` 進行中或仍可接取）；抵達的地圖可抵達；旗標仍可設定（未觸發、未被排除、需要存活的單位未死、需要死亡的單位可擊倒、發生地點可抵達的事件，不含 `stuck` 事件；或本幕尚未完成的片段的 `setFlags`）。
+  - 卡死：不是最後一幕，沒有目標仍可達成的進行中片段，且進行中已滿或沒有「進入條件可能成立、給予者在可抵達的發生地點、目標可能達成」的未開始片段。
+  - `finalizeWorld` 在自動事件與片段完成之後檢查：卡死時記錄 `stuckSinceMinutes`，脫離卡死或完成任一片段時清除；持續 `stuckGraceMinutes`（範例 1440 分鐘）後先觸發該幕的 `stuckEventId` 事件（原因「主線保底」，每個事件只觸發一次，可設旗標開出救援片段）；觸發後仍卡死（或沒有事件、事件條件不成立）時強制完成該幕的預設片段，`completedStorylets` 記錄 `forced: true`、`story_progress` 事件原因以「主線保底」開頭，主線訊息標示「（主線保底）」。
+- **存檔** `world.story`（世界層）：`{ currentActId, activeStorylets: [{ id, startedAtMinutes, giverUnitId?, giverChannel? }], completedStorylets: [{ id, completedAtMinutes, wasActive, forced? }], endingTraits, stuckSinceMinutes? }`（存檔版本 11）。
   - 目前幕不存在或格式錯誤時整份存檔無效；
   - 靜態資料已移除的片段讀檔時略過。
 - **AI 上下文** `story` 區段（不截斷）：
@@ -250,6 +255,7 @@ sendPlayerAction(
   - 幕與片段的 ID 格式與唯一性、參照、條件、給予者、目標類型；族群樣板不可作為威脅消除目標。
   - 完成事件須為 `storylet` 觸發，`storylet` 事件須被片段引用。
   - 每幕有且只有一個預設片段；預設片段只由保底管道給予、不依賴單位存活；最後一幕不可推進。
+  - O32：`stuckGraceMinutes` 為 0 以上的整數；最後一幕以外，預設片段必須 `advanceAct`，且必須有 `stuckEventId`（`trigger: "stuck"`，不可限制發生地點，須被幕引用）；片段的進入條件旗標、目標旗標與 `orFlag` 必須有事件或片段會設定；主線節點（`advanceAct`，或設定其他片段的進入條件／目標所需的旗標）的保底管道不可為 `none`；保底管道為告示板時，發生地點（未設定時為全世界）至少一處有告示板。地圖 `facilities` 只能是 `notice_board`。
 
 ## 勢力聲望與勢力間關係
 

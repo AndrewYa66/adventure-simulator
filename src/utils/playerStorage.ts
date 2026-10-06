@@ -73,12 +73,14 @@ function normalizeStoryState(value: unknown): StoryState | null {
       (entry.giverUnitId === undefined || typeof entry.giverUnitId === 'string') &&
       (entry.giverChannel === undefined || STORYLET_CHANNELS.includes(String(entry.giverChannel))))) return null;
   if (!value.completedStorylets.every((entry) => isRecord(entry) && typeof entry.id === 'string' && isValidGameTime(entry.completedAtMinutes) &&
-      typeof entry.wasActive === 'boolean')) return null;
+      typeof entry.wasActive === 'boolean' && (entry.forced === undefined || entry.forced === true))) return null;
+  if (value.stuckSinceMinutes !== undefined && !isValidGameTime(value.stuckSinceMinutes)) return null;
   return {
     currentActId: value.currentActId,
     activeStorylets: (value.activeStorylets as StoryState['activeStorylets']).filter((entry) => !!getStoryletById(entry.id)),
     completedStorylets: (value.completedStorylets as StoryState['completedStorylets']).filter((entry) => !!getStoryletById(entry.id)),
-    endingTraits: value.endingTraits as Record<string, string>
+    endingTraits: value.endingTraits as Record<string, string>,
+    ...(value.stuckSinceMinutes !== undefined ? { stuckSinceMinutes: value.stuckSinceMinutes as number } : {})
   };
 }
 

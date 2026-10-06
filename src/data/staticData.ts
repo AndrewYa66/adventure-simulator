@@ -7,6 +7,7 @@ import type {
   FactionRelationStatus,
   FactionStatic,
   LevelBenchmarkStatic,
+  MapFacility,
   MapStatic,
   UnitInstance,
   PlayerState,
@@ -492,6 +493,9 @@ export function validateWorldUnitData(): string[] {
     for (const unitId of map.unitsPresent) {
       if (!getUnitTemplateById(unitId)) issues.push(`${map.id}: 單位參照 ${unitId} 無效`);
     }
+    for (const facility of map.facilities ?? []) {
+      if (!MAP_FACILITIES.includes(facility)) issues.push(`${map.id}: 無效的地點設施 ${facility}`);
+    }
   }
 
   return issues;
@@ -508,7 +512,12 @@ export function validateEventData(): string[] {
     if (seen.has(event.id)) issues.push(`事件 ID 重複：${event.id}`);
     seen.add(event.id);
     if (!event.title?.trim() || !event.summary?.trim()) issues.push(`${label}: 缺少標題或描述`);
-    if (!['auto', 'aiProposal', 'storylet'].includes(event.trigger)) issues.push(`${label}: 無效觸發方式 ${event.trigger}`);
+    if (!['auto', 'aiProposal', 'storylet', 'stuck'].includes(event.trigger)) issues.push(`${label}: 無效觸發方式 ${event.trigger}`);
+    if (event.trigger === 'stuck') {
+      if (!storyData.acts.some((act) => act.stuckEventId === event.id)) issues.push(`${label}: 卡死保底事件沒有任何幕引用`);
+      // 保底事件必須在玩家身處何處都能觸發。
+      if (event.requires?.mapIds?.length) issues.push(`${label}: 卡死保底事件不可限制發生地點`);
+    }
     if (event.trigger === 'storylet' && !storyletsDatabase.some((storylet) => storylet.onComplete?.eventIds?.includes(event.id))) {
       issues.push(`${label}: 劇情片段觸發的事件沒有任何片段引用`);
     }
@@ -713,10 +722,12 @@ export function validateQuestTemplateData(): string[] {
 }
 
 const STORYLET_CHANNELS = ['notice_board', 'letter', 'relic', 'none'];
+const MAP_FACILITIES: MapFacility[] = ['notice_board'];
 
 /**
- * 驗證主線資料（O31）：幕與片段的 ID、參照、條件、目標與完成效果；
- * 每一幕有且只有一個預設片段，且預設片段只靠保底管道給予、不依賴任何單位存活。
+ * 驗證主線資料（O31、O32）：幕與片段的 ID、參照、條件、目標與完成效果；
+ * 每一幕有且只有一個預設片段，且預設片段只靠保底管道給予、不依賴任何單位存活；
+ * 最後一幕以外，預設片段必須推進幕、且有卡死保底事件；片段用到的旗標都要有設定來源；主線節點要有保底管道。
  */
 export function validateStoryData(): string[] {
   const issues: string[] = [];
@@ -724,7 +735,9 @@ export function validateStoryData(): string[] {
   for (const key of ['maxActiveStorylets', 'maxStartsPerTurn', 'maxCandidatesForAI'] as const) {
     if (!Number.isInteger(rules?.[key]) || rules[key] < 1) issues.push(`主線規則 ${key} 須為正整數`);
   }
+  if (!Number.isInteger(rules?.stuckGraceMinutes) || rules.stuckGraceMinutes < 0) issues.push('主線規則 stuckGraceMinutes 須為 0 以上的整數');
   if (!acts.length) issues.push('主線至少需要一幕');
+  const lastActId = storyActs[storyActs.length - 1]?.id;
   const actIds = new Set<string>();
   for (const act of acts) {
     const label = `幕 ${act.id}`;
@@ -737,13 +750,25 @@ export function validateStoryData(): string[] {
     if (defaults.length !== 1) issues.push(`${label}: 必須有且只有一個預設片段（目前 ${defaults.length} 個）`);
     const declared = getStoryletById(act.defaultStoryletId);
     if (!declared || declared.actId !== act.id || !declared.isDefault) issues.push(`${label}: 預設片段 ${act.defaultStoryletId} 不存在、不屬於本幕或未標為預設`);
+    if (act.id !== lastActId) {
+      // 卡死保底最後會強制完成預設片段，預設片段因此必須能單獨完成本幕。
+      if (declared && !declared.onComplete?.advanceAct) issues.push(`${label}: 預設片段必須推進下一幕（卡死保底會強制完成它）`);
+      if (!act.stuckEventId) issues.push(`${label}: 缺少卡死保底事件（stuckEventId）`);
+    }
+    if (act.stuckEventId !== undefined && getEventById(act.stuckEventId)?.trigger !== 'stuck') issues.push(`${label}: 卡死保底事件 ${act.stuckEventId} 不存在或觸發方式不是 stuck`);
   }
   if (new Set(acts.map((act) => act.order)).size !== acts.length) issues.push('幕的順序不可重複');
-  const finalActId = storyActs[storyActs.length - 1]?.id;
 
   const unitExists = (id: string) => unitTemplatesDatabase().some((unit) => unit.id === id);
   const isResident = (id: string) => { const unit = getUnitTemplateById(id); return !!unit && !unit.requiresEncounter; };
   const isFlag = (flag: unknown) => typeof flag === 'string' && !!flag.trim();
+  // 旗標的設定來源：事件效果與片段完成效果。
+  const flagSources = new Set([...eventsDatabase.flatMap((event) => event.effects?.setFlags ?? []), ...storylets.flatMap((storylet) => storylet.onComplete?.setFlags ?? [])]);
+  // 其他片段的進入條件或目標用到的旗標：設定這些旗標的片段是主線節點。
+  const flagsUsedByStory = new Set(storylets.flatMap((storylet) => [
+    ...(storylet.requires?.flags ?? []),
+    ...(storylet.goal?.type === 'flagSet' ? [storylet.goal.flag] : storylet.goal?.orFlag ? [storylet.goal.orFlag] : [])
+  ]));
   const seen = new Set<string>();
   for (const storylet of storylets) {
     const label = `劇情片段 ${storylet.id}`;
@@ -780,6 +805,15 @@ export function validateStoryData(): string[] {
       if (giver.role?.minLevel !== undefined && !(Number.isInteger(giver.role.minLevel) && giver.role.minLevel >= 1)) issues.push(`${label}: 給予者最低等級須為正整數`);
       if (giver.scope !== undefined && !['map', 'world'].includes(giver.scope)) issues.push(`${label}: 接手範圍須為 map 或 world`);
       if (!giver.preferredUnitId && !giver.role && giver.fallback === 'none') issues.push(`${label}: 沒有首選給予者、角色條件或保底管道，永遠無法開始`);
+      const isMainNode = !!storylet.onComplete?.advanceAct || (storylet.onComplete?.setFlags ?? []).some((flag) => flagsUsedByStory.has(flag));
+      if (isMainNode && giver.fallback === 'none') issues.push(`${label}: 主線節點（推進幕或設定其他片段需要的旗標）必須有保底管道`);
+      if (giver.fallback === 'notice_board') {
+        const locations = requires.mapIds?.length ? requires.mapIds : mapsDatabase.map((map) => map.id);
+        if (!locations.some((mapId) => getMapById(mapId)?.facilities?.includes('notice_board'))) issues.push(`${label}: 保底管道是告示板，但發生地點沒有告示板`);
+      }
+    }
+    for (const flag of [...(requires.flags ?? []), ...(storylet.goal?.type === 'flagSet' ? [storylet.goal.flag] : storylet.goal?.orFlag ? [storylet.goal.orFlag] : [])]) {
+      if (isFlag(flag) && !flagSources.has(flag)) issues.push(`${label}: 旗標「${flag}」沒有任何事件或片段會設定`);
     }
 
     const goal = storylet.goal;
@@ -811,7 +845,7 @@ export function validateStoryData(): string[] {
     for (const [key, value] of Object.entries(onComplete?.endingTraits ?? {})) {
       if (!key.trim() || typeof value !== 'string' || !value.trim()) issues.push(`${label}: 結局特徵須為「項目: 值」的文字`);
     }
-    if (onComplete?.advanceAct && storylet.actId === finalActId) issues.push(`${label}: 最後一幕不可推進下一幕（結局判定見 O33）`);
+    if (onComplete?.advanceAct && storylet.actId === lastActId) issues.push(`${label}: 最後一幕不可推進下一幕（結局判定見 O33）`);
 
     const scene = storylet.scene;
     if (!scene?.purpose?.trim() || !Array.isArray(scene.mustConvey) || !Array.isArray(scene.forbidden)) issues.push(`${label}: 演出要求須有場面目的、必須傳達的資訊與禁止事項`);

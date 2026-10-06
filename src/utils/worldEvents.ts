@@ -13,15 +13,18 @@ import {
   getResidentUnitIds,
   getShopForUnit,
   getSpeciesById,
+  getStoryActById,
+  getStoryletById,
   getUnitDisplayName,
   getUnitFactionId,
   getWorldUnitById,
   getWorldUnitDisposition,
   PLAYER_UNIT_ID,
+  storyData,
   storyletsDatabase,
   unitTemplatesDatabase
 } from '../data/staticData';
-import { createStoryState, findCompletableStorylets } from './storylets';
+import { createStoryState, findCompletableStorylets, isActStuck, STUCK_RESCUE_CAUSE } from './storylets';
 import { formatGameTime, getGameDay } from './gameTime';
 import { isModifierActive } from './worldModifiers';
 import { findQuest, getActiveQuestGiverId, isGeneratedQuest } from './questRules';
@@ -343,9 +346,10 @@ export const STORYLET_COMPLETED_CAUSE = '劇情片段完成';
 
 /**
  * 完成劇情片段（O31）：設定完成旗標、累積結局特徵、寫入 story_progress 事件，再觸發完成事件；
- * 設定推進下一幕時切換到下一幕，上一幕進行中的片段隨之結束。
+ * 設定推進下一幕時切換到下一幕，上一幕進行中的片段隨之結束。forced 為卡死保底強制完成（O32）。
+ * 完成片段代表有進展，卡死計時隨之重設。
  */
-function completeStorylet(state: PlayerState, storylet: StoryletStatic, wasActive: boolean): PlayerState {
+function completeStorylet(state: PlayerState, storylet: StoryletStatic, wasActive: boolean, forced = false): PlayerState {
   const story = state.world.story;
   const onComplete = storylet.onComplete;
   const storyFlags = { ...state.storyFlags };
@@ -354,14 +358,15 @@ function completeStorylet(state: PlayerState, storylet: StoryletStatic, wasActiv
   const nextStory = {
     currentActId: nextAct?.id ?? story.currentActId,
     activeStorylets: nextAct ? [] : story.activeStorylets.filter((entry) => entry.id !== storylet.id),
-    completedStorylets: [...story.completedStorylets, { id: storylet.id, completedAtMinutes: state.gameTimeMinutes, wasActive }],
+    completedStorylets: [...story.completedStorylets, { id: storylet.id, completedAtMinutes: state.gameTimeMinutes, wasActive, ...(forced ? { forced } : {}) }],
     endingTraits: { ...story.endingTraits, ...(onComplete.endingTraits ?? {}) }
   };
   const map = getMapById(state.currentMapId);
   let next = appendEvent({ ...state, storyFlags, world: { ...state.world, story: nextStory } }, {
     type: 'story_progress', gameTimeMinutes: state.gameTimeMinutes, mapId: state.currentMapId, summary: onComplete.summary,
     knownBy: onComplete.knownBy ?? 'region', witnessUnitIds: map ? getResidentUnitIds(map).filter((unitId) => isUnitAlive(state, unitId)) : [],
-    cause: wasActive ? STORYLET_COMPLETED_CAUSE : `${STORYLET_COMPLETED_CAUSE}（目標在片段開始前已達成）`,
+    cause: forced ? `${STUCK_RESCUE_CAUSE}：主線無法以其他方式前進，強制完成預設片段`
+      : wasActive ? STORYLET_COMPLETED_CAUSE : `${STORYLET_COMPLETED_CAUSE}（目標在片段開始前已達成）`,
     changes: {
       storyletIds: [storylet.id],
       ...(onComplete.setFlags?.length ? { setFlags: onComplete.setFlags } : {}),
@@ -385,6 +390,32 @@ function settleStory(state: PlayerState): PlayerState {
     next = completeStorylet(next, storylet, wasActive);
   }
   return next;
+}
+
+/**
+ * 卡死保底（O32）：目前幕卡死時記錄開始時間；持續超過寬限期後先觸發該幕的保底事件（每個事件只觸發一次，可設旗標開出救援片段），
+ * 觸發後（或沒有保底事件、事件條件不成立）仍卡死時強制完成該幕的預設片段。不卡死時清除計時。沒有變化時回傳原狀態。
+ */
+function rescueStuckAct(state: PlayerState): PlayerState {
+  const story = state.world.story;
+  const withStory = (next: typeof story) => ({ ...state, world: { ...state.world, story: next } });
+  if (!isActStuck(state)) {
+    if (story.stuckSinceMinutes === undefined) return state;
+    const cleared = { ...story };
+    delete cleared.stuckSinceMinutes;
+    return withStory(cleared);
+  }
+  if (story.stuckSinceMinutes === undefined) return withStory({ ...story, stuckSinceMinutes: state.gameTimeMinutes });
+  if (state.gameTimeMinutes - story.stuckSinceMinutes < storyData.rules.stuckGraceMinutes) return state;
+  const act = getStoryActById(story.currentActId);
+  const event = act?.stuckEventId ? getEventById(act.stuckEventId) : undefined;
+  if (event?.trigger === 'stuck' && !state.world.firedEventIds.includes(event.id)) {
+    const next = applyScenarioEvent(state, event, STUCK_RESCUE_CAUSE);
+    if (next !== state) return next;
+  }
+  const fallback = act ? getStoryletById(act.defaultStoryletId) : undefined;
+  if (!fallback || story.completedStorylets.some((entry) => entry.id === fallback.id)) return state;
+  return completeStorylet(state, fallback, story.activeStorylets.some((entry) => entry.id === fallback.id), true);
 }
 
 function compressEvents(world: WorldRuntimeState): WorldRuntimeState {
@@ -413,10 +444,10 @@ export function finalizeWorld(previous: PlayerState, next: PlayerState, hints: R
   state = applyActionReputation(previous, state, newDeaths);
   state = resolveOrphanedQuests(state);
   state = settleRegion(state, state.currentMapId);
-  // 自動事件與劇情片段完成可能互相使對方的條件成立；交替結算到沒有變化為止（有上限，避免循環）。
-  for (let pass = 0; pass <= storyletsDatabase.length; pass += 1) {
+  // 自動事件、劇情片段完成與卡死保底可能互相使對方的條件成立；交替結算到沒有變化為止（有上限，避免循環）。
+  for (let pass = 0; pass <= storyletsDatabase.length + 2; pass += 1) {
     const before = state;
-    state = settleStory(runAutoEvents(state));
+    state = rescueStuckAct(settleStory(runAutoEvents(state)));
     if (state === before) break;
   }
   state = pruneGeneratedQuests(expireGeneratedQuests(state));

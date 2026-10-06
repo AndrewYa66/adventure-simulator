@@ -2,7 +2,8 @@
   "rules": {
     "maxActiveStorylets": 2,
     "maxStartsPerTurn": 1,
-    "maxCandidatesForAI": 3
+    "maxCandidatesForAI": 3,
+    "stuckGraceMinutes": 1440
   },
   "acts": [
     {
@@ -10,6 +11,7 @@
       "title": "古道的陰影",
       "order": 1,
       "defaultStoryletId": "STORY-1-00",
+      "stuckEventId": "EVT-006",
       "goal": "盤據哥布林巢穴的酋長格羅姆・裂牙已經倒下，綠林古道的威脅解除。",
       "theme": "平靜小村裡隱約的不安，逐步揭開哥布林的威脅。"
     },
@@ -109,7 +111,7 @@
       "priority": 10,
       "isDefault": true,
       "giver": { "fallback": "letter" },
-      "goal": { "type": "flagSet", "flag": "第二幕範例完結", "summary": "（範例幕，目標待寫手設計）" },
+      "goal": { "type": "locationReached", "mapId": "MAP-001", "summary": "（範例幕，目標待寫手設計）回到橡木村看看古道恢復通行後的變化" },
       "onComplete": {
         "summary": "（範例幕的完成描述）",
         "knownBy": "region"

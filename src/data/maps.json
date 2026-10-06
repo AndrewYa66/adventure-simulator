@@ -22,6 +22,9 @@
       "微風旅館",
       "冒險者公會告示板"
     ],
+    "facilities": [
+      "notice_board"
+    ],
     "unitsPresent": [
       "NPC-001",
       "NPC-002",
