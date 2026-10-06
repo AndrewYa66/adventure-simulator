@@ -38,5 +38,17 @@
     "knownBy": "region",
     "summary": "哥布林在古道出沒的消息在村中傳開，村民開始結伴出入、夜裡緊閉門戶。",
     "aiHint": "玩家在橡木村明確向村長或村民警告哥布林的威脅，且對方採信時。"
+  },
+  {
+    "id": "EVT-004",
+    "title": "古道恢復通行",
+    "trigger": "storylet",
+    "excludes": { "flags": ["古道恢復通行"] },
+    "effects": {
+      "setFlags": ["古道恢復通行"],
+      "reputation": [{ "factionId": "FAC-001", "change": 10 }]
+    },
+    "knownBy": "region",
+    "summary": "哥布林酋長倒下後，綠林古道恢復了通行，商隊重新上路。"
   }
 ]

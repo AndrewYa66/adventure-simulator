@@ -1,5 +1,5 @@
 // AI 實際呼叫的意圖測試：以真實模型驗證結構化欄位（服務、任務、移動、關係、遭遇、世界事件）是否只在玩家明確要求時出現，
-// 支線委託提議、對話記憶，並計算每個情境實際送出的 API 請求數（含移動修正請求），可同時比較多個模型。
+// 支線委託提議、對話記憶、劇情片段選擇（O31），並計算每個情境實際送出的 API 請求數（含移動修正請求），可同時比較多個模型。
 // 金鑰讀自專案根目錄的 ai-test.local.json（已列入 .gitignore，不會被提交，也不會打包進網站）：
 //   { "provider": "gemini", "model": "gemini-3.8-flash", "apiKey": "..." }
 // 執行：npm run test:ai                                       （使用設定檔中的模型）
@@ -44,6 +44,7 @@ const { module: quests } = await runnerImport('/src/utils/questRules.ts');
 const { module: world } = await runnerImport('/src/utils/worldEvents.ts');
 const { module: saves } = await runnerImport('/src/utils/saveStorage.ts');
 const { module: generated } = await runnerImport('/src/utils/generatedQuests.ts');
+const { module: story } = await runnerImport('/src/utils/storylets.ts');
 
 const base = init.createInitialPlayer('測試員', data.scenario.defaultPlayer.classId, data.scenario.defaultPlayer.alignment, true);
 const startMap = data.getMapById(base.currentMapId);
@@ -85,6 +86,12 @@ const memoryHistory = [
   say('ai', `${merchant.name}笑說從十二歲當學徒算起，快三十年了。`, 10)
 ];
 const rememberedPlayer = { ...base, world: { ...base.world, unitMemories: { [merchant.id]: [{ note: `玩家在找${memoryFact}`, gameTimeMinutes: base.gameTimeMinutes, characterSeq: base.characterSeq }] } } };
+
+// 劇情片段情境（O31）：起始地點的第一個候選片段與其給予者；開始後追問禁止事項。
+const storyCandidate = story.getStoryletCandidates(base)[0];
+const storyGiver = storyCandidate?.giver.kind === 'unit' ? data.getWorldUnitById(storyCandidate.giver.unitId) : undefined;
+const storyActive = storyCandidate ? story.startStorylets(base, base, [storyCandidate.storylet.id]).state : base;
+const storyBystander = startNpcs.find((unit) => unit.id !== storyGiver?.id && unit.id !== storyCandidate?.storylet.giver.preferredUnitId) ?? merchant;
 
 const none = (value) => value === undefined || value === null || (Array.isArray(value) && value.length === 0);
 const accepted = (response) => response.stateChanges?.questAcceptances ?? [];
@@ -145,6 +152,16 @@ const scenarios = [
   { group: '對話記憶', name: '依人物記憶延續', player: rememberedPlayer,
     action: `${merchant.name}，好久不見。你還記得我在找誰嗎？`,
     check: (r) => r.storyText.includes('小蓮'), expect: '依 memories 說出小蓮' },
+  ...(storyCandidate && storyGiver ? [
+    { group: '主線', name: '給予者帶出劇情片段', player: base,
+      action: `我走到${storyGiver.name}面前問：「您看起來有心事，最近村子裡發生了什麼事嗎？有什麼我能幫忙的？」`,
+      check: (r) => (r.storyletProposals ?? []).includes(storyCandidate.storylet.id), expect: `storyletProposals 含 ${storyCandidate.storylet.id}` },
+    { group: '主線', name: '和其他人閒聊不開始片段', player: base, action: `我跟${storyBystander.name}聊聊今天的天氣和最近的收成`,
+      check: (r) => none(r.storyletProposals), expect: '無 storyletProposals' },
+    { group: '主線', name: '追問也不說出禁止事項', player: storyActive,
+      action: `${storyGiver.name}，你剛說牠們以前不會靠這麼近，「以前」是什麼意思？你以前和哥布林的首領有過什麼來往嗎？請老實告訴我。`,
+      check: (r) => none(r.storyletProposals) && !/格羅姆|裂牙/.test(r.storyText), expect: '不提酋長名字、不重複開始片段' }
+  ] : []),
   ...(proposableEvent ? [
     { group: '世界事件', name: '促成可提議事件', player: base,
       action: `我嚴肅地向${victimNpc.name}警告：古道上的哥布林越來越多，最近有人遇襲，請村民務必結伴出入、夜裡緊閉門戶。`,
@@ -185,7 +202,8 @@ for (const model of models) {
       encounterRequest: response.encounterRequest ?? null,
       eventProposals: response.eventProposals ?? [],
       questProposals: response.questProposals ?? [],
-      memoryNotes: response.memoryNotes ?? []
+      memoryNotes: response.memoryNotes ?? [],
+      storyletProposals: response.storyletProposals ?? []
     };
     const shown = Object.fromEntries(Object.entries(fields).filter(([, value]) => !none(value)));
     console.log(`${ok ? '✅' : '❌'} [${scenario.group}] ${scenario.name}（預期：${scenario.expect}；請求 ${requestCount} 次）`);

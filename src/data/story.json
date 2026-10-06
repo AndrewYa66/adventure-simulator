@@ -1,0 +1,124 @@
+{
+  "rules": {
+    "maxActiveStorylets": 2,
+    "maxStartsPerTurn": 1,
+    "maxCandidatesForAI": 3
+  },
+  "acts": [
+    {
+      "id": "ACT-1",
+      "title": "古道的陰影",
+      "order": 1,
+      "defaultStoryletId": "STORY-1-00",
+      "goal": "盤據哥布林巢穴的酋長格羅姆・裂牙已經倒下，綠林古道的威脅解除。",
+      "theme": "平靜小村裡隱約的不安，逐步揭開哥布林的威脅。"
+    },
+    {
+      "id": "ACT-2",
+      "title": "戰後的橡木村",
+      "order": 2,
+      "defaultStoryletId": "STORY-2-00",
+      "goal": "哥布林退去後，橡木村迎來新的局面。（範例幕，內容待寫手設計）"
+    }
+  ],
+  "storylets": [
+    {
+      "id": "STORY-1-00",
+      "actId": "ACT-1",
+      "title": "告示板上的懸賞",
+      "priority": 10,
+      "isDefault": true,
+      "requires": { "mapIds": ["MAP-001"] },
+      "giver": { "fallback": "notice_board" },
+      "goal": { "type": "threatRemoved", "unitIds": ["MON-003"], "summary": "討伐哥布林酋長格羅姆・裂牙" },
+      "onComplete": {
+        "advanceAct": true,
+        "endingTraits": { "哥布林酋長": "已死" },
+        "summary": "哥布林酋長格羅姆・裂牙已死，冒險者公會撤下了懸賞告示。",
+        "knownBy": "region"
+      },
+      "scene": {
+        "purpose": "沒有人能親自委託時，讓玩家從告示板得知哥布林酋長的懸賞，主線仍能前進。",
+        "mustConvey": ["告示板上貼著討伐哥布林酋長格羅姆・裂牙的懸賞", "懸賞署名「橡木村巡守隊」"],
+        "tone": "冷清、略帶不安；告示被風吹得翻動。",
+        "forbidden": ["不得出現具名人物親自委託"]
+      }
+    },
+    {
+      "id": "STORY-1-01",
+      "actId": "ACT-1",
+      "title": "村長的隱憂",
+      "priority": 60,
+      "requires": { "mapIds": ["MAP-001"] },
+      "giver": {
+        "preferredUnitId": "NPC-001",
+        "role": { "classIds": ["elder", "guard"], "factionIds": ["FAC-001"] },
+        "scope": "map",
+        "fallback": "notice_board"
+      },
+      "goal": { "type": "locationReached", "mapId": "MAP-002", "summary": "前往綠林古道查看哥布林出沒的情況" },
+      "onComplete": {
+        "setFlags": ["古道異狀已查看"],
+        "endingTraits": { "與橡木村": "伸出援手" },
+        "summary": "有冒險者前往綠林古道，查看哥布林出沒的情況。",
+        "knownBy": "region"
+      },
+      "scene": {
+        "purpose": "讓玩家接觸主線的第一個委託，同時察覺村長對哥布林的事有所保留。",
+        "mustConvey": ["綠林古道最近常有哥布林出沒，商隊不敢通行", "村裡人手不足，需要外人幫忙去古道看看", "村長提到哥布林時神情不自然"],
+        "tone": "平靜的小村莊裡隱約的不安，不要寫成緊急動員。",
+        "keyLines": ["埃爾德：「牠們以前……不會靠得這麼近的。」（說完立刻改口談別的事）"],
+        "playerChoices": ["追問「以前」是什麼意思：村長含糊帶過，只說是很久以前的事", "拒絕：村長不勉強，但仍希望有人去古道看看"],
+        "forbidden": ["不得揭露村長與哥布林酋長的過去", "不得提到巢穴深處的東西"],
+        "giverAbsent": "由巡守隊長羅恩以巡守隊的名義請託，語氣直接，不會有「神情不自然」的伏筆；沒有人能請託時，告示板上貼著「徵求前往綠林古道查看的人手」。"
+      }
+    },
+    {
+      "id": "STORY-1-02",
+      "actId": "ACT-1",
+      "title": "巢穴的首領",
+      "priority": 50,
+      "requires": { "flags": ["古道異狀已查看"], "mapIds": ["MAP-001", "MAP-002"] },
+      "giver": {
+        "preferredUnitId": "NPC-005",
+        "role": { "classIds": ["guard", "hunter"], "factionIds": ["FAC-001"] },
+        "scope": "world",
+        "fallback": "letter"
+      },
+      "goal": { "type": "threatRemoved", "unitIds": ["MON-003"], "summary": "消除哥布林酋長格羅姆・裂牙的威脅" },
+      "onComplete": {
+        "eventIds": ["EVT-004"],
+        "advanceAct": true,
+        "endingTraits": { "哥布林酋長": "已死" },
+        "summary": "哥布林酋長格羅姆・裂牙倒下，盤據古道的威脅解除。",
+        "knownBy": "region"
+      },
+      "scene": {
+        "purpose": "讓玩家明白古道的哥布林背後有首領指揮，必須深入巢穴才能真正解決。",
+        "mustConvey": ["古道上的哥布林行動有組織，背後有首領格羅姆・裂牙", "巢穴在古道深處的山徑盡頭"],
+        "tone": "務實、緊繃；巡守隊人手吃緊。",
+        "playerChoices": ["答應深入巢穴：羅恩提醒玩家先接下村長的討伐委託再出發", "推託：羅恩不強求，只說巢穴不會自己消失"],
+        "forbidden": ["不得揭露村長與哥布林酋長的過去"],
+        "giverAbsent": "由林地獵人或其他巡守隊員轉告；沒有人能轉告時，玩家收到一封署名「橡木村巡守隊」的書信。"
+      }
+    },
+    {
+      "id": "STORY-2-00",
+      "actId": "ACT-2",
+      "title": "新的消息",
+      "priority": 10,
+      "isDefault": true,
+      "giver": { "fallback": "letter" },
+      "goal": { "type": "flagSet", "flag": "第二幕範例完結", "summary": "（範例幕，目標待寫手設計）" },
+      "onComplete": {
+        "summary": "（範例幕的完成描述）",
+        "knownBy": "region"
+      },
+      "scene": {
+        "purpose": "範例：第二幕的保底開場，以書信告知玩家世界的新局面。",
+        "mustConvey": ["哥布林退去後，古道重新有商隊往來"],
+        "forbidden": ["不得宣稱第二幕的劇情已經結束"]
+      }
+    }
+  ]
+}

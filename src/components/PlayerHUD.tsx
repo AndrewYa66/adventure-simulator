@@ -1,12 +1,13 @@
 import React from 'react';
 import { AIContextDebugPanel } from './AIContextDebugPanel';
 import type { PlayerState } from '../types/game';
-import { canPlayerEnterMap, factionData, factionsDatabase, getCharacterClassById, getFactionById, getFactionRelation, getFactionReputation, getItemById, getMapById, describeUnitBuild, getLevelBenchmark, getReputationTier, getSpeciesById, getPlayerResourceCaps, getQuestById, getShopForUnit, getUnlockedSkills, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap } from '../data/staticData';
+import { canPlayerEnterMap, factionData, factionsDatabase, getCharacterClassById, getFactionById, getFactionRelation, getFactionReputation, getItemById, getMapById, describeUnitBuild, getLevelBenchmark, getReputationTier, getSpeciesById, getPlayerResourceCaps, getQuestById, getShopForUnit, getStoryActById, getStoryletById, getUnlockedSkills, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap } from '../data/staticData';
 import { getPlayerStatBreakdown, STAT_LABELS } from '../utils/gameChecks';
 import { canAcceptQuest, canTurnInQuest, getQuestGiverName, isGeneratedQuest, listVisibleQuests } from '../utils/questRules';
 import { canPlayerAct, isPlayerUnconscious } from '../utils/playerStatus';
 import { getCombatTarget } from '../utils/combatState';
 import { formatGameTime } from '../utils/gameTime';
+import { describeStoryletGiver, resolveStoryletGiver } from '../utils/storylets';
 
 const RELATION_LABELS = { war: '交戰', hostile: '敵對', tense: '緊張', neutral: '中立', friendly: '友好', alliance: '同盟' } as const;
 
@@ -227,6 +228,23 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
             : <div style={{ color: '#aaa', fontSize: '12px' }}>{currentMap?.isSafeZone ? '安全地區沒有敵人。' : '尚未遭遇敵人；探索或搜索周遭以觸發遭遇。'}</div>;
         })()}
         {!player.combat && unlockedSkills.filter((skill) => skill.effect.kind === 'healing').map((skill) => <button key={skill.id} onClick={() => onUseSkill(skill.id)} disabled={!canPlayerAct(player) || player.mp < skill.costMp || player.hp >= maxHp} title={skill.description} style={{ display: 'block', marginTop: '5px', padding: '6px 10px' }}>{skill.name}（MP {skill.costMp}）</button>)}
+      </div>
+
+      <div>
+        <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #444' }}>📖 主線</h4>
+        <div style={{ fontSize: '12px', color: '#ccc', marginBottom: '6px' }}>{getStoryActById(player.world.story.currentActId)?.title ?? player.world.story.currentActId}</div>
+        {player.world.story.activeStorylets.length === 0 && <div style={{ fontSize: '12px', color: '#888' }}>目前沒有進行中的劇情</div>}
+        {player.world.story.activeStorylets.map((entry) => {
+          const storylet = getStoryletById(entry.id);
+          if (!storylet) return null;
+          const giver = resolveStoryletGiver(player, storylet);
+          const handedOver = entry.giverUnitId && giver?.kind === 'unit' && giver.unitId !== entry.giverUnitId;
+          return <div key={entry.id} style={{ marginBottom: '8px', fontSize: '12px' }}>
+            <strong>{storylet.title}</strong>
+            <div>{storylet.goal.summary}</div>
+            <div style={{ color: handedOver ? '#ffcc80' : '#aaa' }}>{handedOver ? `原給予者已不在，改由 ${describeStoryletGiver(giver)} 接手` : `給予者：${describeStoryletGiver(giver)}`}</div>
+          </div>;
+        })}
       </div>
 
       <div>

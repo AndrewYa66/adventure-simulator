@@ -19,6 +19,9 @@ import type {
   ShopStatic,
   SkillStatic,
   SpeciesStatic,
+  StoryActStatic,
+  StoryDataStatic,
+  StoryletStatic,
   UnitBuild,
   UnitDisposition,
   UnitStatBlock,
@@ -44,6 +47,7 @@ import rawEvents from './events.json';
 import rawFactions from './factions.json';
 import rawQuestTemplates from './quest_templates.json';
 import rawAIContext from './ai_context.json';
+import rawStory from './story.json';
 
 // 進行靜態型別轉型，確保導出的資料陣列完全符合 DTO 規範
 export const itemsDatabase: ItemStatic[] = rawItems as ItemStatic[];
@@ -62,6 +66,17 @@ export const factionsDatabase: FactionStatic[] = factionData.factions;
 export const questTemplateData: QuestTemplateDataStatic = rawQuestTemplates as QuestTemplateDataStatic;
 export const questTemplatesDatabase: QuestTemplateStatic[] = questTemplateData.templates;
 export const aiContextConfig: AIContextConfigStatic = rawAIContext as AIContextConfigStatic;
+export const storyData: StoryDataStatic = rawStory as StoryDataStatic;
+/** 依順序排列的幕。 */
+export const storyActs: StoryActStatic[] = [...storyData.acts].sort((a, b) => a.order - b.order);
+export const storyletsDatabase: StoryletStatic[] = storyData.storylets;
+export const getStoryActById = (id: string): StoryActStatic | undefined => storyActs.find((act) => act.id === id);
+export const getStoryletById = (id: string): StoryletStatic | undefined => storyletsDatabase.find((storylet) => storylet.id === id);
+/** 下一幕；已是最後一幕時為 undefined。 */
+export const getNextStoryAct = (actId: string): StoryActStatic | undefined => {
+  const index = storyActs.findIndex((act) => act.id === actId);
+  return index < 0 ? undefined : storyActs[index + 1];
+};
 
 export const getQuestTemplateById = (id: string): QuestTemplateStatic | undefined =>
   questTemplatesDatabase.find((template) => template.id === id);
@@ -493,7 +508,10 @@ export function validateEventData(): string[] {
     if (seen.has(event.id)) issues.push(`事件 ID 重複：${event.id}`);
     seen.add(event.id);
     if (!event.title?.trim() || !event.summary?.trim()) issues.push(`${label}: 缺少標題或描述`);
-    if (!['auto', 'aiProposal'].includes(event.trigger)) issues.push(`${label}: 無效觸發方式 ${event.trigger}`);
+    if (!['auto', 'aiProposal', 'storylet'].includes(event.trigger)) issues.push(`${label}: 無效觸發方式 ${event.trigger}`);
+    if (event.trigger === 'storylet' && !storyletsDatabase.some((storylet) => storylet.onComplete?.eventIds?.includes(event.id))) {
+      issues.push(`${label}: 劇情片段觸發的事件沒有任何片段引用`);
+    }
     if (!['witnesses', 'faction', 'region', 'world'].includes(event.knownBy)) issues.push(`${label}: 無效傳播範圍 ${event.knownBy}`);
     if (event.knownBy === 'faction' && !event.knownByFactions?.length) issues.push(`${label}: 傳播範圍為同勢力時須列出 knownByFactions`);
     for (const factionId of event.knownByFactions ?? []) {
@@ -694,5 +712,117 @@ export function validateQuestTemplateData(): string[] {
   return issues;
 }
 
+const STORYLET_CHANNELS = ['notice_board', 'letter', 'relic', 'none'];
+
+/**
+ * 驗證主線資料（O31）：幕與片段的 ID、參照、條件、目標與完成效果；
+ * 每一幕有且只有一個預設片段，且預設片段只靠保底管道給予、不依賴任何單位存活。
+ */
+export function validateStoryData(): string[] {
+  const issues: string[] = [];
+  const { rules, acts, storylets } = storyData;
+  for (const key of ['maxActiveStorylets', 'maxStartsPerTurn', 'maxCandidatesForAI'] as const) {
+    if (!Number.isInteger(rules?.[key]) || rules[key] < 1) issues.push(`主線規則 ${key} 須為正整數`);
+  }
+  if (!acts.length) issues.push('主線至少需要一幕');
+  const actIds = new Set<string>();
+  for (const act of acts) {
+    const label = `幕 ${act.id}`;
+    if (!/^ACT-\d+$/.test(act.id)) issues.push(`${label}: ID 格式應為 ACT-n`);
+    if (actIds.has(act.id)) issues.push(`幕 ID 重複：${act.id}`);
+    actIds.add(act.id);
+    if (!act.title?.trim() || !act.goal?.trim()) issues.push(`${label}: 缺少標題或幕目標`);
+    if (!Number.isInteger(act.order)) issues.push(`${label}: 順序須為整數`);
+    const defaults = storylets.filter((storylet) => storylet.actId === act.id && storylet.isDefault);
+    if (defaults.length !== 1) issues.push(`${label}: 必須有且只有一個預設片段（目前 ${defaults.length} 個）`);
+    const declared = getStoryletById(act.defaultStoryletId);
+    if (!declared || declared.actId !== act.id || !declared.isDefault) issues.push(`${label}: 預設片段 ${act.defaultStoryletId} 不存在、不屬於本幕或未標為預設`);
+  }
+  if (new Set(acts.map((act) => act.order)).size !== acts.length) issues.push('幕的順序不可重複');
+  const finalActId = storyActs[storyActs.length - 1]?.id;
+
+  const unitExists = (id: string) => unitTemplatesDatabase().some((unit) => unit.id === id);
+  const isResident = (id: string) => { const unit = getUnitTemplateById(id); return !!unit && !unit.requiresEncounter; };
+  const isFlag = (flag: unknown) => typeof flag === 'string' && !!flag.trim();
+  const seen = new Set<string>();
+  for (const storylet of storylets) {
+    const label = `劇情片段 ${storylet.id}`;
+    if (!/^STORY-\d+-\d{2,}$/.test(storylet.id)) issues.push(`${label}: ID 格式應為 STORY-幕-編號（例如 STORY-1-01）`);
+    if (seen.has(storylet.id)) issues.push(`劇情片段 ID 重複：${storylet.id}`);
+    seen.add(storylet.id);
+    if (!actIds.has(storylet.actId)) issues.push(`${label}: 找不到所屬幕 ${storylet.actId}`);
+    if (!storylet.title?.trim()) issues.push(`${label}: 缺少標題`);
+    if (!Number.isInteger(storylet.priority) || storylet.priority < 0 || storylet.priority > 100) issues.push(`${label}: 優先度須為 0–100 的整數`);
+
+    const requires = storylet.requires ?? {};
+    validateFactionConditions(label, requires, issues);
+    for (const unitId of [...(requires.unitsAlive ?? []), ...(requires.unitsDead ?? [])]) {
+      if (!unitExists(unitId)) issues.push(`${label}: 找不到單位 ${unitId}`);
+    }
+    for (const mapId of requires.mapIds ?? []) {
+      if (!getMapById(mapId)) issues.push(`${label}: 找不到地圖 ${mapId}`);
+    }
+    for (const flag of [...(requires.flags ?? []), ...(storylet.excludes?.flags ?? []), ...(storylet.onComplete?.setFlags ?? [])]) {
+      if (!isFlag(flag)) issues.push(`${label}: 旗標名稱無效`);
+    }
+
+    const giver = storylet.giver;
+    if (!giver || !STORYLET_CHANNELS.includes(giver.fallback)) issues.push(`${label}: 保底管道須為 notice_board、letter、relic 或 none`);
+    else {
+      if (giver.fallback === 'relic') issues.push(`${label}: 遺物管道需要死亡遺物（O26），目前尚未支援`);
+      if (giver.preferredUnitId !== undefined && !isResident(giver.preferredUnitId)) issues.push(`${label}: 首選給予者 ${giver.preferredUnitId} 必須是地區居民`);
+      for (const classId of giver.role?.classIds ?? []) {
+        if (!getCharacterClassById(classId)) issues.push(`${label}: 找不到給予者職階 ${classId}`);
+      }
+      for (const factionId of giver.role?.factionIds ?? []) {
+        if (!getFactionById(factionId)) issues.push(`${label}: 找不到給予者勢力 ${factionId}`);
+      }
+      if (giver.role?.minLevel !== undefined && !(Number.isInteger(giver.role.minLevel) && giver.role.minLevel >= 1)) issues.push(`${label}: 給予者最低等級須為正整數`);
+      if (giver.scope !== undefined && !['map', 'world'].includes(giver.scope)) issues.push(`${label}: 接手範圍須為 map 或 world`);
+      if (!giver.preferredUnitId && !giver.role && giver.fallback === 'none') issues.push(`${label}: 沒有首選給予者、角色條件或保底管道，永遠無法開始`);
+    }
+
+    const goal = storylet.goal;
+    if (!goal?.summary?.trim()) issues.push(`${label}: 目標缺少說明`);
+    if (goal?.type === 'threatRemoved') {
+      if (!goal.unitIds?.length) issues.push(`${label}: 威脅消除目標須列出單位`);
+      for (const unitId of goal.unitIds ?? []) {
+        const unit = getUnitTemplateById(unitId);
+        if (!unit) issues.push(`${label}: 找不到目標單位 ${unitId}`);
+        // 族群樣板會重生，無法以死亡判定威脅消除；需改用事件設定旗標（例如據點消滅）。
+        else if (unit.population) issues.push(`${label}: 目標單位 ${unitId} 是族群樣板，請改用旗標目標`);
+      }
+    } else if (goal?.type === 'locationReached') {
+      if (!getMapById(goal.mapId)) issues.push(`${label}: 找不到目標地圖 ${goal.mapId}`);
+    } else if (goal?.type === 'flagSet') {
+      if (!isFlag(goal.flag)) issues.push(`${label}: 目標旗標名稱無效`);
+    } else issues.push(`${label}: 無效的目標類型 ${(goal as { type?: string } | undefined)?.type}`);
+
+    const onComplete = storylet.onComplete;
+    if (!onComplete?.summary?.trim()) issues.push(`${label}: 缺少完成描述`);
+    if (onComplete?.knownBy !== undefined && !['witnesses', 'faction', 'region', 'world'].includes(onComplete.knownBy)) issues.push(`${label}: 無效的完成傳播範圍 ${onComplete.knownBy}`);
+    if (onComplete?.knownBy === 'faction') issues.push(`${label}: 完成描述的傳播範圍不支援同勢力`);
+    for (const eventId of onComplete?.eventIds ?? []) {
+      const event = getEventById(eventId);
+      if (!event) issues.push(`${label}: 找不到完成事件 ${eventId}`);
+      else if (event.trigger !== 'storylet') issues.push(`${label}: 完成事件 ${eventId} 的觸發方式須為 storylet`);
+    }
+    for (const [key, value] of Object.entries(onComplete?.endingTraits ?? {})) {
+      if (!key.trim() || typeof value !== 'string' || !value.trim()) issues.push(`${label}: 結局特徵須為「項目: 值」的文字`);
+    }
+    if (onComplete?.advanceAct && storylet.actId === finalActId) issues.push(`${label}: 最後一幕不可推進下一幕（結局判定見 O33）`);
+
+    const scene = storylet.scene;
+    if (!scene?.purpose?.trim() || !Array.isArray(scene.mustConvey) || !Array.isArray(scene.forbidden)) issues.push(`${label}: 演出要求須有場面目的、必須傳達的資訊與禁止事項`);
+
+    if (storylet.isDefault) {
+      if (giver?.preferredUnitId || giver?.role) issues.push(`${label}: 預設片段只能由保底管道給予，不可指定給予者`);
+      if (giver?.fallback === 'none') issues.push(`${label}: 預設片段的保底管道不可為「無」`);
+      if (requires.unitsAlive?.length) issues.push(`${label}: 預設片段不可依賴任何單位存活`);
+    }
+  }
+  return issues;
+}
+
 /** 全部靜態資料驗證；建置前由 scripts/validate-data.mjs 執行，有錯誤即中止建置。 */
-export const validateGameData = (): string[] => [...validateGrowthData(), ...validateWorldUnitData(), ...validateEventData(), ...validateFactionData(), ...validateQuestTemplateData()];
+export const validateGameData = (): string[] => [...validateGrowthData(), ...validateWorldUnitData(), ...validateEventData(), ...validateFactionData(), ...validateQuestTemplateData(), ...validateStoryData()];

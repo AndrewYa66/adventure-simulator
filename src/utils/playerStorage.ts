@@ -1,5 +1,5 @@
-import type { GeneratedQuest, PlayerState, StoryMessage, UnitMemoryNote, WorldEvent, WorldModifier, WorldRuntimeState } from '../types/game';
-import { clampReputation, createDefaultUnitInstance, createInitialReputation, FACTION_RELATION_STATUSES, factionData, getBaseExpForLevel, getEventById, getCharacterClassById, getFactionById, getItemById, getMapById, getPlayerResourceCaps, getQuestTemplateById, getSpeciesById, getUnitAbilities, getUnitLevelCap, getWorldUnitById, MAX_UNIT_LEVEL, PLAYER_UNIT_ID, scenario, unitTemplatesDatabase } from '../data/staticData';
+import type { GeneratedQuest, PlayerState, StoryMessage, StoryState, UnitMemoryNote, WorldEvent, WorldModifier, WorldRuntimeState } from '../types/game';
+import { clampReputation, createDefaultUnitInstance, createInitialReputation, FACTION_RELATION_STATUSES, factionData, getBaseExpForLevel, getEventById, getCharacterClassById, getFactionById, getItemById, getMapById, getPlayerResourceCaps, getQuestTemplateById, getSpeciesById, getStoryActById, getStoryletById, getUnitAbilities, getUnitLevelCap, getWorldUnitById, MAX_UNIT_LEVEL, PLAYER_UNIT_ID, scenario, unitTemplatesDatabase } from '../data/staticData';
 import { isValidGameTime } from './gameTime';
 import { isValidSpeciesClassCombo, UNIT_STAT_KEYS } from './unitGrowth';
 import { createCombat } from './combatState';
@@ -13,7 +13,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every((entry) => typeof entry === 'string');
-const EVENT_TYPES = ['unit_death', 'unit_respawn', 'unit_occupation', 'quest_failed', 'quest_transferred', 'reputation_change', 'scenario_event'];
+const EVENT_TYPES = ['unit_death', 'unit_respawn', 'unit_occupation', 'quest_failed', 'quest_transferred', 'reputation_change', 'scenario_event', 'story_progress'];
 const KNOWN_BY = ['witnesses', 'faction', 'region', 'world'];
 const DEATH_CAUSES = ['combat', 'self_inflicted', 'misadventure', 'unknown'];
 
@@ -62,6 +62,26 @@ function normalizeGeneratedQuest(value: unknown): GeneratedQuest | null | undefi
   return value as unknown as GeneratedQuest;
 }
 
+const STORYLET_CHANNELS = ['notice_board', 'letter', 'relic', 'none'];
+
+/** 主線進度：格式錯誤或目前幕已從靜態資料移除時整份拒絕；已移除的片段略過。 */
+function normalizeStoryState(value: unknown): StoryState | null {
+  if (!isRecord(value) || typeof value.currentActId !== 'string' || !getStoryActById(value.currentActId) ||
+      !Array.isArray(value.activeStorylets) || !Array.isArray(value.completedStorylets) || !isRecord(value.endingTraits) ||
+      !Object.values(value.endingTraits).every((trait) => typeof trait === 'string')) return null;
+  if (!value.activeStorylets.every((entry) => isRecord(entry) && typeof entry.id === 'string' && isValidGameTime(entry.startedAtMinutes) &&
+      (entry.giverUnitId === undefined || typeof entry.giverUnitId === 'string') &&
+      (entry.giverChannel === undefined || STORYLET_CHANNELS.includes(String(entry.giverChannel))))) return null;
+  if (!value.completedStorylets.every((entry) => isRecord(entry) && typeof entry.id === 'string' && isValidGameTime(entry.completedAtMinutes) &&
+      typeof entry.wasActive === 'boolean')) return null;
+  return {
+    currentActId: value.currentActId,
+    activeStorylets: (value.activeStorylets as StoryState['activeStorylets']).filter((entry) => !!getStoryletById(entry.id)),
+    completedStorylets: (value.completedStorylets as StoryState['completedStorylets']).filter((entry) => !!getStoryletById(entry.id)),
+    endingTraits: value.endingTraits as Record<string, string>
+  };
+}
+
 /** 驗證世界狀態；任何部分無效即整份拒絕（與其他存檔欄位一致，不部分載入）。 */
 function normalizeWorldState(value: unknown): WorldRuntimeState | null {
   if (!isRecord(value) || !Array.isArray(value.events) || !value.events.every(isWorldEvent) || !isStringArray(value.chronicle) ||
@@ -69,6 +89,8 @@ function normalizeWorldState(value: unknown): WorldRuntimeState | null {
       !Array.isArray(value.modifiers) || !value.modifiers.every(isWorldModifier) || !isStringArray(value.firedEventIds) || !isRecord(value.regions) ||
       !isRecord(value.factionRelations) || !Array.isArray(value.generatedQuests) ||
       !Number.isSafeInteger(value.nextGeneratedQuestSeq) || (value.nextGeneratedQuestSeq as number) < 1 || !isRecord(value.unitMemories)) return null;
+  const story = normalizeStoryState(value.story);
+  if (!story) return null;
   const generatedQuests: GeneratedQuest[] = [];
   for (const entry of value.generatedQuests) {
     const quest = normalizeGeneratedQuest(entry);
@@ -110,7 +132,8 @@ function normalizeWorldState(value: unknown): WorldRuntimeState | null {
     factionRelations,
     generatedQuests,
     nextGeneratedQuestSeq: value.nextGeneratedQuestSeq as number,
-    unitMemories
+    unitMemories,
+    story
   };
 }
 

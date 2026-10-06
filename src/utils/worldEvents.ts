@@ -1,4 +1,4 @@
-import type { CharacterHistoryEntry, DeathCause, EventStatic, PlayerState, UnitInstance, WorldEvent, WorldModifier, WorldRuntimeState } from '../types/game';
+import type { CharacterHistoryEntry, DeathCause, EventStatic, PlayerState, StoryletStatic, UnitInstance, WorldEvent, WorldModifier, WorldRuntimeState } from '../types/game';
 import {
   aiContextConfig,
   createDefaultUnitInstance,
@@ -9,6 +9,7 @@ import {
   getFactionById,
   getFactionRelation,
   getMapById,
+  getNextStoryAct,
   getResidentUnitIds,
   getShopForUnit,
   getSpeciesById,
@@ -17,8 +18,10 @@ import {
   getWorldUnitById,
   getWorldUnitDisposition,
   PLAYER_UNIT_ID,
+  storyletsDatabase,
   unitTemplatesDatabase
 } from '../data/staticData';
+import { createStoryState, findCompletableStorylets } from './storylets';
 import { formatGameTime, getGameDay } from './gameTime';
 import { isModifierActive } from './worldModifiers';
 import { findQuest, getActiveQuestGiverId, isGeneratedQuest } from './questRules';
@@ -46,7 +49,7 @@ export const MAX_CHRONICLE_LINES = 100;
 const MINUTES_PER_DAY = 24 * 60;
 
 export function createWorldState(): WorldRuntimeState {
-  return { events: [], chronicle: [], nextEventSeq: 1, modifiers: [], firedEventIds: [], regions: {}, factionRelations: {}, generatedQuests: [], nextGeneratedQuestSeq: 1, unitMemories: {} };
+  return { events: [], chronicle: [], nextEventSeq: 1, modifiers: [], firedEventIds: [], regions: {}, factionRelations: {}, generatedQuests: [], nextGeneratedQuestSeq: 1, unitMemories: {}, story: createStoryState() };
 }
 
 export interface DeathHint {
@@ -335,6 +338,55 @@ function runAutoEvents(state: PlayerState): PlayerState {
   return next;
 }
 
+/** 劇情片段完成的事件原因。 */
+export const STORYLET_COMPLETED_CAUSE = '劇情片段完成';
+
+/**
+ * 完成劇情片段（O31）：設定完成旗標、累積結局特徵、寫入 story_progress 事件，再觸發完成事件；
+ * 設定推進下一幕時切換到下一幕，上一幕進行中的片段隨之結束。
+ */
+function completeStorylet(state: PlayerState, storylet: StoryletStatic, wasActive: boolean): PlayerState {
+  const story = state.world.story;
+  const onComplete = storylet.onComplete;
+  const storyFlags = { ...state.storyFlags };
+  for (const flag of onComplete.setFlags ?? []) storyFlags[flag] = true;
+  const nextAct = onComplete.advanceAct ? getNextStoryAct(story.currentActId) : undefined;
+  const nextStory = {
+    currentActId: nextAct?.id ?? story.currentActId,
+    activeStorylets: nextAct ? [] : story.activeStorylets.filter((entry) => entry.id !== storylet.id),
+    completedStorylets: [...story.completedStorylets, { id: storylet.id, completedAtMinutes: state.gameTimeMinutes, wasActive }],
+    endingTraits: { ...story.endingTraits, ...(onComplete.endingTraits ?? {}) }
+  };
+  const map = getMapById(state.currentMapId);
+  let next = appendEvent({ ...state, storyFlags, world: { ...state.world, story: nextStory } }, {
+    type: 'story_progress', gameTimeMinutes: state.gameTimeMinutes, mapId: state.currentMapId, summary: onComplete.summary,
+    knownBy: onComplete.knownBy ?? 'region', witnessUnitIds: map ? getResidentUnitIds(map).filter((unitId) => isUnitAlive(state, unitId)) : [],
+    cause: wasActive ? STORYLET_COMPLETED_CAUSE : `${STORYLET_COMPLETED_CAUSE}（目標在片段開始前已達成）`,
+    changes: {
+      storyletIds: [storylet.id],
+      ...(onComplete.setFlags?.length ? { setFlags: onComplete.setFlags } : {}),
+      ...(nextAct ? { actIds: [nextAct.id] } : {})
+    }
+  }).state;
+  for (const eventId of onComplete.eventIds ?? []) {
+    const event = getEventById(eventId);
+    if (event?.trigger === 'storylet') next = applyScenarioEvent(next, event, STORYLET_COMPLETED_CAUSE);
+  }
+  return next;
+}
+
+/** 結算目標已達成的劇情片段；推進幕之後，上一幕剩下的片段不再完成。沒有變化時回傳原狀態。 */
+function settleStory(state: PlayerState): PlayerState {
+  let next = state;
+  for (const { storylet, wasActive } of findCompletableStorylets(state)) {
+    const story = next.world.story;
+    if (storylet.actId !== story.currentActId || story.completedStorylets.some((entry) => entry.id === storylet.id)) continue;
+    if (wasActive && !story.activeStorylets.some((entry) => entry.id === storylet.id)) continue;
+    next = completeStorylet(next, storylet, wasActive);
+  }
+  return next;
+}
+
 function compressEvents(world: WorldRuntimeState): WorldRuntimeState {
   if (world.events.length <= MAX_WORLD_EVENTS) return world;
   const overflow = world.events.slice(0, world.events.length - MAX_WORLD_EVENTS);
@@ -361,7 +413,12 @@ export function finalizeWorld(previous: PlayerState, next: PlayerState, hints: R
   state = applyActionReputation(previous, state, newDeaths);
   state = resolveOrphanedQuests(state);
   state = settleRegion(state, state.currentMapId);
-  state = runAutoEvents(state);
+  // 自動事件與劇情片段完成可能互相使對方的條件成立；交替結算到沒有變化為止（有上限，避免循環）。
+  for (let pass = 0; pass <= storyletsDatabase.length; pass += 1) {
+    const before = state;
+    state = settleStory(runAutoEvents(state));
+    if (state === before) break;
+  }
   state = pruneGeneratedQuests(expireGeneratedQuests(state));
   const modifiers = state.world.modifiers.filter((modifier) => isModifierActive(modifier, state.gameTimeMinutes));
   const world = compressEvents(modifiers.length === state.world.modifiers.length ? state.world : { ...state.world, modifiers });

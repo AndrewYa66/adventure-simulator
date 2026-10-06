@@ -10,6 +10,7 @@ import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from './utils/tra
 import { sendPlayerAction } from './services/aiService';
 import { acceptQuest, canTurnInQuest, findQuest, getQuestGiverName } from './utils/questRules';
 import { postQuestProposals } from './utils/generatedQuests';
+import { describeStoryProgress, startStorylets } from './utils/storylets';
 import { canPlayerAct, isPlayerUnconscious } from './utils/playerStatus';
 import type { AIProvider } from './services/aiModels';
 import { loadAIModelSettings, saveAIModelSettings, type AIModelSettings } from './services/aiModels';
@@ -183,11 +184,15 @@ export default function App() {
     setPlayer(finalized);
     const knownIds = new Set(player.world.events.map((event) => event.id));
     const newEvents = finalized.world.events.filter((event) => !knownIds.has(event.id));
-    if (newEvents.length) {
+    // 劇情片段完成與推進幕另以主線訊息呈現，不重複列在世界變化中。
+    const storyNotice = describeStoryProgress(player, finalized);
+    if (storyNotice) setTimeout(() => appendSystemMessage(storyNotice), 0);
+    const worldChanges = newEvents.filter((event) => event.type !== 'story_progress');
+    if (worldChanges.length) {
       // 劇情事件附帶的聲望變化另外列出（玩家行動造成的聲望事件已寫在描述中）。
       const describe = (event: typeof newEvents[number]) => event.type === 'scenario_event' && event.reputationChanges?.length
         ? `${event.summary}（聲望變化：${describeReputationChanges(player, event.reputationChanges)}）` : event.summary;
-      setTimeout(() => appendSystemMessage(`🌍 世界變化：\n${newEvents.map((event) => `・${describe(event)}`).join('\n')}`), 0);
+      setTimeout(() => appendSystemMessage(`🌍 世界變化：\n${worldChanges.map((event) => `・${describe(event)}`).join('\n')}`), 0);
     }
   };
 
@@ -781,6 +786,13 @@ export default function App() {
       if (questPosting) nextPlayer = questPosting.state;
       // 人物記憶：對話已發生，不論檢定結果都記下；以行動前的在場人物驗證。
       nextPlayer = applyMemoryNotes(nextPlayer, aiResponse.memoryNotes, getMemoryEligibleUnitIds(player)).state;
+      // 劇情片段：只在沒有檢定或檢定成功時考慮，以行動前（AI 看到的狀態）的候選驗證。
+      const storyStart = !checkResult || checkResult.success ? startStorylets(player, nextPlayer, aiResponse.storyletProposals) : undefined;
+      if (storyStart) nextPlayer = storyStart.state;
+      if (storyStart?.rejected.length) console.info('劇情片段提議未採用：', storyStart.rejected.join('；'));
+      const storyletNotice = storyStart?.started.length
+        ? `\n\n📖 主線開始：${storyStart.started.map((storylet) => `「${storylet.title}」——${storylet.goal.summary}`).join('；')}。`
+        : '';
       const postedQuestNotice = questPosting?.posted.length
         ? `
 
@@ -881,7 +893,7 @@ export default function App() {
         {
           id: (Date.now() + 1).toString(),
           sender: 'ai',
-          text: `${storyText}${postedQuestNotice}${questNotice}${questCompletionNotice}${unitTransferNotice}${unitDispositionNotice}${encounterNotice}${serviceNotice}${locationNotice}${deathNotice}`,
+          text: `${storyText}${storyletNotice}${postedQuestNotice}${questNotice}${questCompletionNotice}${unitTransferNotice}${unitDispositionNotice}${encounterNotice}${serviceNotice}${locationNotice}${deathNotice}`,
           options: aiResponse.suggestedActions,
           travelOptions: textTravelIntent.kind === 'ambiguous'
             ? textTravelIntent.candidates.map((candidate) => ({ mapId: candidate.id, name: candidate.name }))

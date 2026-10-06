@@ -1,5 +1,5 @@
 import type { AIContextTrimmableSectionId, CharacterHistoryEntry, PlayerState, StoryMessage } from '../types/game';
-import { aiContextConfig, canPlayerEnterMap, describeUnitBuild, getFactionById, getMapById, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, scenario } from '../data/staticData';
+import { aiContextConfig, canPlayerEnterMap, describeUnitBuild, getFactionById, getMapById, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, scenario, storyData } from '../data/staticData';
 import { canAcceptQuest, canTurnInQuest, getQuestGiverName, isGeneratedQuest, listVisibleQuests } from '../utils/questRules';
 import { getQuestPostingOptions } from '../utils/generatedQuests';
 import { getFactionContextForAI } from '../utils/factions';
@@ -8,25 +8,27 @@ import { getPlayerWorldUnit } from '../utils/worldUnits';
 import { formatGameTime } from '../utils/gameTime';
 import { getCharacterLegacyForAI, getProposableEvents, getWorldContextForAI } from '../utils/worldEvents';
 import { getMemoryEligibleUnitIds, getUnitMemoriesForAI } from '../utils/unitMemory';
+import { getStoryContextForAI } from '../utils/storylets';
 
 /**
  * AI 上下文組裝器（O39）：集中負責主持人 AI 每次呼叫的上下文。
  * 上下文分成具名區段；候選清單與規則區段不截斷（避免 AI 看不到合法選項），
  * 歷史類區段（歷代角色、事件、編年史、世界修正）依資料設定的上限與優先順序截斷。
- * 設定條目、角色卡與劇情片段區段待 O36／O31 補上。
+ * 主線區段（O31）提供目前幕、進行中劇情片段的演出要求與可開始的候選；設定條目與角色卡區段待 O36 補上。
  */
 
 /** 目前的回應格式版本；Gemini JSON Schema 要求填入此值。 */
-export const AI_RESPONSE_FORMAT_VERSION = 4;
+export const AI_RESPONSE_FORMAT_VERSION = 5;
 /**
  * 可解析的版本；沒有版本號的回應視為第 1 版。
  * 第 1、2 版的單位欄位使用舊名稱（monsterId、npcItemTransfers.npcId、defeatedMonsters），解析時轉為第 3 版名稱。
  * 第 4 版加入 memoryNotes（人物記憶）；較舊版本沒有此欄位，視為空陣列。
+ * 第 5 版加入 storyletProposals（劇情片段選擇）；較舊版本沒有此欄位，視為空陣列。
  */
-export const SUPPORTED_AI_RESPONSE_FORMAT_VERSIONS = [1, 2, 3, 4];
+export const SUPPORTED_AI_RESPONSE_FORMAT_VERSIONS = [1, 2, 3, 4, 5];
 
 export type AIContextSectionId =
-  | 'player' | 'legacy' | 'location' | 'residents' | 'factions' | 'quests' | 'encounters' | 'items' | 'flags'
+  | 'player' | 'legacy' | 'location' | 'residents' | 'factions' | 'story' | 'quests' | 'encounters' | 'items' | 'flags'
   | 'worldEvents' | 'chronicle' | 'modifiers' | 'proposableEvents' | 'rules' | 'dialogue';
 
 export interface AIContextSectionReport {
@@ -177,6 +179,8 @@ function buildRules(): string {
 - 每次回應都必須包含 eventProposals（陣列）；只有玩家行動確實促成「可提議的世界事件」所描述的情況（符合 when 說明）時，才填入該事件 ID，否則為空陣列。事件效果由遊戲驗證後套用，storyText 可描述促成事件的經過，但不可自行宣告超出事件描述的世界改變。
 - 每次回應都必須包含 questProposals（陣列，最多一件）。只有玩家在本回合明確向在場人物詢問工作、委託或需要幫忙的事時，才從「可發布的支線委託」提議：templateId、giverId（玩家詢問的對象；若玩家未指定對象則選清單中的人）、targetUnitId（收集範本另填 itemId，討伐範本 itemId 為 null）、quantity（在範圍內）。閒聊、交易、詢問劇本任務或人物自己想找人幫忙都不算，questProposals 必須為空陣列；不可讓人物主動提出委託。報酬、標題、目標與經驗值由遊戲依範本與委託人持有物決定（約為 rewardValuePerQuantity × quantity 的價值），storyText 不可說出具體報酬數字，也不可宣稱玩家已接下委託；發布後玩家需另外表示接受。
 - 每次回應都必須包含 memoryNotes（陣列，最多 ${aiContextConfig.memory.maxNotesPerResponse} 則）。只有本回合玩家與在場人物的互動中出現該人物日後應該記得的新資訊（玩家告知的名字、身分或來歷、做出的承諾或請託、透露的祕密、明顯改變印象的言行）時，才填入 unitId 與一句話（${aiContextConfig.memory.maxNoteChars} 字以內，從該人物的角度簡述，例如「玩家自稱來自北方的鐵匠學徒」）。寒暄、單純詢問，或該人物 memories 已記得的內容都不要填。在場人物的 memories 是他記得的與玩家往來，交談時要自然延續，不可與之矛盾；【近期劇情回顧】中的對話同樣是已發生的事實。
+- 主線：每次回應都必須包含 storyletProposals（陣列，最多 ${storyData.rules.maxStartsPerTurn} 個）。只有本回合的敘事確實由候選片段列出的 giver（人物，或告示板、書信等保底管道）向玩家帶出該片段的開場時，才填入「可開始的劇情片段」中的 ID；有多個合適的片段時選 priority 較高者。開場要依該片段的 purpose、tone 演出，開始傳達 mustConvey，並遵守 forbidden。giver 不在場、玩家在做無關的事、或只是閒聊時為空陣列；不可讓不是 giver 的人物帶出片段。
+- 進行中的劇情片段：在相關場景中依其 purpose、tone 演出，逐步傳達 mustConvey；forbidden 列出的事在任何情況下都不可說出或暗示，即使玩家追問也只能迴避。有 giverAbsent 時代表首選給予者已不在，依 giverAbsent 的方式呈現。片段完成與推進幕由遊戲依目標的結果判定，storyText 不可宣稱片段、目標或幕已完成，也不可替玩家完成目標。主線的幕目標與 endingTraits 只作為敘事方向，不可直接告訴玩家。
 - 只有玩家行動或明確世界事件確實改變了當前地區單位對玩家的關係時，才在 stateChanges.unitDispositionChanges 回報單位 ID 與 friendly/neutral/hostile；純對話、陣營傾向或臆測不能改變關係。單位關係變更須與 storyText 敘事一致。
 - 每次回應都必須包含 encounterRequest；若玩家尚未實際看見或接觸敵人，設為 null。只有探索、搜索或情境中確實遇見敵人時，才指定本地區可遭遇清單中的 unitId，並在敘事中描述遭遇。不可只因單位存在於地圖資料，就宣稱玩家已遭遇；不可遭遇未列出的敵人。
 - 玩家在對話中明確要求攻擊目前地區的敵人時，不可假裝攻擊已命中、敵人已受傷或已被擊敗；戰鬥與獎勵由遊戲端確定性規則處理，若無法由遊戲端執行，只能說明尚未發起戰鬥。
@@ -215,7 +219,8 @@ function buildRules(): string {
   "failureStateChanges": null,
   "eventProposals": [],
   "questProposals": [],
-  "memoryNotes": []
+  "memoryNotes": [],
+  "storyletProposals": []
 }
 \`\`\`
 只可回報玩家已接取且客觀目標已完成的任務；不可自行接取任務或宣告未完成目標完成。`;
@@ -277,6 +282,7 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
   const openGeneratedQuests = playerState.world.generatedQuests.filter((quest) => quest.status === 'open')
     .map((quest) => ({ id: quest.id, title: quest.title, giver: quest.questGiver, objective: quest.objective, deadline: formatGameTime(quest.expiresAtMinutes),
       takenByPlayer: playerState.activeQuests.some((entry) => entry.questId === quest.id) }));
+  const storyContext = getStoryContextForAI(playerState);
   const proposableEvents = getProposableEvents(playerState).map((event) => ({ id: event.id, title: event.title, summary: event.summary, when: event.aiHint }));
 
   const lines = (...entries: string[]) => entries.join('\n');
@@ -309,6 +315,12 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
       `- 各勢力對玩家的聲望（遊戲依勢力得知的事件結算，AI 不可自行改變；可依此調整人物語氣、價格談判與傳聞內容）: ${JSON.stringify(factionContext.reputation)}`,
       `- 勢力間關係（未列出者為中立）: ${JSON.stringify(factionContext.relations)}`,
       `- 本地區單位所屬勢力的公開簡介: ${JSON.stringify(factionContext.presentFactions)}`
+    ) },
+    { id: 'story', dropped: 0, droppedEntries: 0, text: lines(
+      `- 主線目前的幕（只作為敘事方向，不可直接告訴玩家）: ${JSON.stringify(storyContext.act ?? null)}`,
+      `- 結局特徵（玩家至今的走向，只作為敘事背景）: ${JSON.stringify(storyContext.endingTraits)}`,
+      `- 進行中的劇情片段（依演出要求呈現；giver 為目前的給予者）: ${JSON.stringify(storyContext.active)}`,
+      `- 可開始的劇情片段（storyletProposals 只可選這些 ID；giver 須在場或為保底管道）: ${JSON.stringify(storyContext.candidates)}`
     ) },
     { id: 'quests', dropped: 0, droppedEntries: 0, text: lines(
       `- 當前可接取任務（僅可接取這些 ID）: ${JSON.stringify(availableQuests)}`,
@@ -488,10 +500,14 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
             additionalProperties: false
           }
         }
-        : { type: 'array', items: { type: 'object' }, maxItems: 0 }
+        : { type: 'array', items: { type: 'object' }, maxItems: 0 },
+      // 沒有可開始的劇情片段時只允許空陣列。
+      storyletProposals: storyContext.candidates.length
+        ? { type: 'array', maxItems: storyData.rules.maxStartsPerTurn, items: { type: 'string', enum: storyContext.candidates.map((candidate) => candidate.id) } }
+        : { type: 'array', items: { type: 'string' }, maxItems: 0 }
     },
     required: [
-      'formatVersion', 'storyText', 'suggestedActions', 'encounterRequest', 'travelRequest', 'serviceRequest', 'checkRequest', 'checkOutcomes', 'stateChanges', 'failureStateChanges', 'eventProposals', 'questProposals', 'memoryNotes'
+      'formatVersion', 'storyText', 'suggestedActions', 'encounterRequest', 'travelRequest', 'serviceRequest', 'checkRequest', 'checkOutcomes', 'stateChanges', 'failureStateChanges', 'eventProposals', 'questProposals', 'memoryNotes', 'storyletProposals'
     ],
     additionalProperties: false
   };

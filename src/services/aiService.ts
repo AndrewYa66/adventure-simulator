@@ -165,6 +165,8 @@ function parseAIResponse(raw: unknown): AIResponsePayload | null {
       (!Array.isArray(value.eventProposals) || !value.eventProposals.every((eventId) => typeof eventId === 'string'))) return null;
   if (value.memoryNotes !== undefined && value.memoryNotes !== null && (!Array.isArray(value.memoryNotes) || !value.memoryNotes.every((entry) =>
     isRecord(entry) && typeof entry.unitId === 'string' && typeof entry.note === 'string'))) return null;
+  if (value.storyletProposals !== undefined && value.storyletProposals !== null &&
+      (!Array.isArray(value.storyletProposals) || !value.storyletProposals.every((storyletId) => typeof storyletId === 'string'))) return null;
 
   const storyText = getReadableNarrative(value.storyText);
   if (storyText === FORMAT_FALLBACK) return null;
@@ -182,7 +184,9 @@ function parseAIResponse(raw: unknown): AIResponsePayload | null {
   });
   // 人物記憶的在場與存活條件、字數與則數上限由 applyMemoryNotes 驗證。
   const memoryNotes = ((value.memoryNotes as { unitId: string; note: string }[] | null | undefined) ?? []).map(({ unitId, note }) => ({ unitId, note }));
-  return { ...value, formatVersion: version, storyText, stateChanges, travelRequest, eventProposals, questProposals, memoryNotes } as unknown as AIResponsePayload;
+  // 劇情片段是否為候選、每回合上限與進行中上限由 startStorylets 驗證。
+  const storyletProposals = (value.storyletProposals as string[] | null | undefined) ?? [];
+  return { ...value, formatVersion: version, storyText, stateChanges, travelRequest, eventProposals, questProposals, memoryNotes, storyletProposals } as unknown as AIResponsePayload;
 }
 
 /**

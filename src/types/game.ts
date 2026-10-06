@@ -337,8 +337,8 @@ export type EventKnownBy = 'witnesses' | 'faction' | 'region' | 'world';
 export interface EventStatic {
   id: string;
   title: string;
-  /** auto：條件成立時由遊戲自動觸發；aiProposal：只能由 AI 提議，前端驗證條件後套用。 */
-  trigger: 'auto' | 'aiProposal';
+  /** auto：條件成立時由遊戲自動觸發；aiProposal：只能由 AI 提議，前端驗證條件後套用；storylet：劇情片段完成時觸發（O31）。 */
+  trigger: 'auto' | 'aiProposal' | 'storylet';
   requires?: { flags?: string[]; unitsAlive?: string[]; unitsDead?: string[]; mapIds?: string[] } & FactionConditions;
   excludes?: { flags?: string[] };
   effects: {
@@ -423,6 +423,102 @@ export interface QuestTemplateStatic {
   };
   requires?: { flags?: string[] } & FactionConditions;
   excludes?: { flags?: string[] };
+}
+
+// ---------- 主線：幕與劇情片段（O31，story.json）----------
+
+/** 保底管道（非單位的給予者）：告示板、書信、遺物（遺物需 O26，尚未支援）、無。 */
+export type StoryletGiverChannel = 'notice_board' | 'letter' | 'relic' | 'none';
+
+/**
+ * 劇情片段目標：以結果定義，由他人或事件達成時同樣推進。
+ * threatRemoved：列出的唯一單位都已死亡；locationReached：玩家抵達地圖；flagSet：旗標成立（說服、得知真相等由事件設定旗標）。
+ */
+export type StoryletGoal =
+  | { type: 'threatRemoved'; unitIds: string[]; summary: string }
+  | { type: 'locationReached'; mapId: string; summary: string }
+  | { type: 'flagSet'; flag: string; summary: string };
+
+/** 幕：主線的大階段與收斂點。 */
+export interface StoryActStatic {
+  id: string;
+  title: string;
+  /** 幕的順序；推進下一幕時取 order 次大的幕。 */
+  order: number;
+  /** 預設片段（保底）：本幕沒有其他片段可走時才成為候選。 */
+  defaultStoryletId: string;
+  /** 幕目標（結果），提供給 AI 作為敘事方向。 */
+  goal: string;
+  theme?: string;
+}
+
+/** 劇情片段的演出要求（給 AI）。 */
+export interface StoryletScene {
+  purpose: string;
+  mustConvey: string[];
+  tone?: string;
+  keyLines?: string[];
+  playerChoices?: string[];
+  forbidden: string[];
+  /** 首選給予者不在時（由接手者或保底管道帶出）的演出方式。 */
+  giverAbsent?: string;
+}
+
+/** 劇情片段（Storylet）：進入條件、給予者條件、以結果定義的目標、完成效果與演出要求。 */
+export interface StoryletStatic {
+  id: string;
+  actId: string;
+  title: string;
+  /** 0–100；候選依此排序，越大越優先。 */
+  priority: number;
+  /** 本幕的預設片段（保底）。 */
+  isDefault?: boolean;
+  /** 進入條件；mapIds 是片段發生地點（玩家須在其中）。開始後不再檢查。 */
+  requires?: { flags?: string[]; unitsAlive?: string[]; unitsDead?: string[]; mapIds?: string[] } & FactionConditions;
+  excludes?: { flags?: string[] };
+  /** 給予者綁定角色條件：首選者不可用（死亡、潛伏、敵對）時，由符合 role 的存活、非敵對居民接手；都沒有時使用保底管道。 */
+  giver: {
+    preferredUnitId?: string;
+    role?: { classIds?: string[]; factionIds?: string[]; minLevel?: number };
+    /** 接手人選範圍：map 為片段發生地點（未設定時為首選者居所）的居民；world 為全世界。預設 map。 */
+    scope?: 'map' | 'world';
+    fallback: StoryletGiverChannel;
+  };
+  goal: StoryletGoal;
+  onComplete: {
+    /** 完成時觸發的事件（trigger 須為 storylet），條件不成立的事件略過。 */
+    eventIds?: string[];
+    setFlags?: string[];
+    advanceAct?: boolean;
+    endingTraits?: Record<string, string>;
+    /** 完成時寫入事件紀錄的公開結果。 */
+    summary: string;
+    knownBy?: EventKnownBy;
+  };
+  scene: StoryletScene;
+}
+
+export interface StoryDataStatic {
+  rules: {
+    /** 同時進行中的片段上限。 */
+    maxActiveStorylets: number;
+    /** 每回合最多開始幾個片段。 */
+    maxStartsPerTurn: number;
+    /** 提供給 AI 的候選片段上限（依優先度）。 */
+    maxCandidatesForAI: number;
+  };
+  acts: StoryActStatic[];
+  storylets: StoryletStatic[];
+}
+
+/** 主線進度（世界存檔）。 */
+export interface StoryState {
+  currentActId: string;
+  activeStorylets: { id: string; startedAtMinutes: number; giverUnitId?: string; giverChannel?: StoryletGiverChannel }[];
+  /** wasActive：完成時是否已開始（false 代表目標先被他人或事件達成）。 */
+  completedStorylets: { id: string; completedAtMinutes: number; wasActive: boolean }[];
+  /** 過程中累積的結局特徵（項目 → 值），提供給 AI 作為敘事背景，結局判定見 O33。 */
+  endingTraits: Record<string, string>;
 }
 
 /** 可截斷的 AI 上下文區段；其餘區段（規則、候選清單）不截斷，避免 AI 看不到合法選項。 */
@@ -514,7 +610,7 @@ export type DeathCause = 'combat' | 'self_inflicted' | 'misadventure' | 'unknown
  */
 export interface WorldEvent {
   id: string;
-  type: 'unit_death' | 'unit_respawn' | 'unit_occupation' | 'quest_failed' | 'quest_transferred' | 'reputation_change' | 'scenario_event';
+  type: 'unit_death' | 'unit_respawn' | 'unit_occupation' | 'quest_failed' | 'quest_transferred' | 'reputation_change' | 'scenario_event' | 'story_progress';
   gameTimeMinutes: number;
   mapId: string;
   summary: string;
@@ -530,7 +626,7 @@ export interface WorldEvent {
   /** 靜態事件 ID（scenario_event）。 */
   eventId?: string;
   /** 造成的改變。 */
-  changes?: { setFlags?: string[]; clearFlags?: string[]; modifierIds?: string[]; questIds?: string[]; unitIds?: string[]; factionIds?: string[] };
+  changes?: { setFlags?: string[]; clearFlags?: string[]; modifierIds?: string[]; questIds?: string[]; unitIds?: string[]; factionIds?: string[]; storyletIds?: string[]; actIds?: string[] };
   /** 玩家聲望變化（勢力 ID 與變化量）。 */
   reputationChanges?: { factionId: string; change: number }[];
   /** 事件發生時在世的玩家角色代數（PlayerState.characterSeq）。 */
@@ -569,6 +665,8 @@ export interface WorldRuntimeState {
   nextGeneratedQuestSeq: number;
   /** 人物記憶（O39 第二版）：單位 ID → 該人物記得的與玩家往來，舊→新。 */
   unitMemories: Record<string, UnitMemoryNote[]>;
+  /** 主線進度（O31）。 */
+  story: StoryState;
 }
 
 /** 人物記得的一件事（由 AI 的 memoryNotes 經前端驗證後寫入）。 */
@@ -781,4 +879,6 @@ export interface AIResponsePayload {
   questProposals?: QuestProposal[];
   /** 在場人物值得記住的一句話（第 4 版）；前端驗證人物在場且存活後存入人物記憶。 */
   memoryNotes?: { unitId: string; note: string }[];
+  /** 本回合開始的劇情片段 ID（第 5 版）；只可選遊戲提供的候選，前端驗證後開始。 */
+  storyletProposals?: string[];
 }

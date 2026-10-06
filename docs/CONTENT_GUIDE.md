@@ -64,7 +64,7 @@ content/
 
 ### 幕
 
-`id`、標題→title、順序→order、預設片段→defaultStorylet。內文：幕目標→goal、開場時的世界→openingState、主題與情緒→theme、可能的走向→branches、保底走向→fallback、結束條件→exitCondition。
+`id`、標題→title、順序→order、預設片段→defaultStoryletId。內文：幕目標→goal、開場時的世界→openingState、主題與情緒→theme、可能的走向→branches、保底走向→fallback、結束條件→exitCondition。
 
 ### 劇情片段
 
@@ -75,19 +75,30 @@ content/
 | 需要存活／需要死亡 | requires.unitsAlive／requires.unitsDead |
 | 發生地點 | requires.mapIds |
 | 首選給予者 | giver.preferred |
-| 給予者職階／給予者勢力 | giver.role.class／giver.role.faction |
+| 給予者職階／給予者勢力 | giver.role.classIds／giver.role.factionIds |
 | 保底管道 | giver.fallback：告示板→notice_board、書信→letter、遺物→relic、無→none |
-| 目標類型 | goal.type：威脅消除→threatRemoved、物品送達→itemDelivered、抵達地點→locationReached、說服角色→unitPersuaded、保護角色→unitProtected、得知真相→truthRevealed、其他→custom |
-| 目標對象 | goal.target：`MON-003`、`哥布林@MAP-003`→`species:goblin@MAP-003`、`ITEM-002→NPC-001`、`MAP-003`、旗標名稱 |
-| 完成事件／完成旗標 | onComplete.events／onComplete.flags |
+| 目標類型 | goal.type：威脅消除→threatRemoved、抵達地點→locationReached；說服角色、保護角色、得知真相、其他→flagSet（目標對象填旗標，由 AI 提議事件設定）；物品送達尚未支援（見下方說明） |
+| 目標對象 | 威脅消除→goal.unitIds（唯一單位 ID，可多個；族群魔物如 `哥布林@MAP-003` 尚未支援）、抵達地點→goal.mapId、旗標→goal.flag |
+| 完成事件／完成旗標 | onComplete.eventIds（事件的觸發方式須為「劇情片段完成」）／onComplete.setFlags |
 | 推進下一幕 | onComplete.advanceAct |
 | 結局特徵 | onComplete.endingTraits（`項目:值` 拆為鍵值） |
 
-內文：場面目的→purpose、必須傳達的資訊→mustConvey、情緒基調→tone、關鍵台詞→keyLines、可能的玩家選擇與後果→playerChoices、禁止事項→forbidden、給予者不在時→giverAbsent。
+內文：場面目的→purpose、必須傳達的資訊→mustConvey、情緒基調→tone、關鍵台詞→keyLines、可能的玩家選擇與後果→playerChoices、禁止事項→forbidden、給予者不在時→giverAbsent（以上合為 `scene`）。
+
+遊戲資料格式見 `src/data/story.json` 與 `docs/API.md`「主線：幕與劇情片段」（O31 第一版，目前是手寫的範例資料，O36 建置腳本完成後由 `content/story/` 產生）。與範本的差異，待範本更新（`content/` 由寫手維護，需先確認）：
+
+- 遊戲端需要而範本還沒有的欄位：
+  - 目標說明 `goal.summary`：給玩家看的一句話，例如「前往綠林古道查看情況」；
+  - 完成描述 `onComplete.summary`：完成時寫入事件紀錄的公開結果；
+  - 完成描述的傳播範圍 `onComplete.knownBy`：預設本地區；
+  - 接手範圍 `giver.scope`：本地（發生地點或首選者居所）或全世界，預設本地；
+  - 給予者最低等級 `giver.role.minLevel`。
+- 「保底管道」第一版只支援告示板與書信；遺物需死亡遺物（O26）。預設片段不可指定首選給予者或給予者職階／勢力。
+- 「物品送達」需要「交給非發布者」的交付規則，暫不支援；需要時改用旗標目標。
 
 ### 事件
 
-觸發方式→trigger（自動→auto、劇情片段完成→storylet、角色決策→agent、AI提議→aiProposal）；條件欄位同劇情片段；設定旗標／移除旗標→effects.setFlags／effects.clearFlags；影響單位／影響地區→effects.units／effects.mapIds；傳播範圍→knownBy（目擊者→witnesses、同勢力→faction、本地區→region、全世界→world）。內文「世界影響」由維護者轉為 `worldModifiers` 等結構化效果，「發生了什麼」轉為 `summary`，AI 提議事件的使用時機寫入 `aiHint`。遊戲資料格式見 `src/data/events.json` 與 `docs/API.md`「世界事件、世界修正與世界規則」；目前遊戲端只支援自動與 AI 提議兩種觸發方式；四種傳播範圍都已支援，「同勢力」需另列得知事件的勢力（`knownByFactions`）。事件也可用聲望等級與勢力關係作為條件、以聲望與勢力關係變化作為效果（見 `docs/API.md`「勢力聲望與勢力間關係」）。
+觸發方式→trigger（自動→auto、劇情片段完成→storylet、角色決策→agent、AI提議→aiProposal）；條件欄位同劇情片段；設定旗標／移除旗標→effects.setFlags／effects.clearFlags；影響單位／影響地區→effects.units／effects.mapIds；傳播範圍→knownBy（目擊者→witnesses、同勢力→faction、本地區→region、全世界→world）。內文「世界影響」由維護者轉為 `worldModifiers` 等結構化效果，「發生了什麼」轉為 `summary`，AI 提議事件的使用時機寫入 `aiHint`。遊戲資料格式見 `src/data/events.json` 與 `docs/API.md`「世界事件、世界修正與世界規則」；目前遊戲端支援自動、AI 提議與劇情片段完成三種觸發方式（角色決策待 O34）；四種傳播範圍都已支援，「同勢力」需另列得知事件的勢力（`knownByFactions`）。事件也可用聲望等級與勢力關係作為條件、以聲望與勢力關係變化作為效果（見 `docs/API.md`「勢力聲望與勢力間關係」）。
 
 ### 設定條目
 
