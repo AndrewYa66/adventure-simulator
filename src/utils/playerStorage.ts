@@ -1,4 +1,4 @@
-import type { GeneratedQuest, PlayerState, StoryMessage, WorldEvent, WorldModifier, WorldRuntimeState } from '../types/game';
+import type { GeneratedQuest, PlayerState, StoryMessage, UnitMemoryNote, WorldEvent, WorldModifier, WorldRuntimeState } from '../types/game';
 import { clampReputation, createDefaultUnitInstance, createInitialReputation, FACTION_RELATION_STATUSES, factionData, getBaseExpForLevel, getEventById, getCharacterClassById, getFactionById, getItemById, getMapById, getPlayerResourceCaps, getQuestTemplateById, getSpeciesById, getUnitAbilities, getUnitLevelCap, getWorldUnitById, MAX_UNIT_LEVEL, PLAYER_UNIT_ID, scenario, unitTemplatesDatabase } from '../data/staticData';
 import { isValidGameTime } from './gameTime';
 import { isValidSpeciesClassCombo, UNIT_STAT_KEYS } from './unitGrowth';
@@ -68,7 +68,7 @@ function normalizeWorldState(value: unknown): WorldRuntimeState | null {
       !Number.isSafeInteger(value.nextEventSeq) || (value.nextEventSeq as number) < 1 ||
       !Array.isArray(value.modifiers) || !value.modifiers.every(isWorldModifier) || !isStringArray(value.firedEventIds) || !isRecord(value.regions) ||
       !isRecord(value.factionRelations) || !Array.isArray(value.generatedQuests) ||
-      !Number.isSafeInteger(value.nextGeneratedQuestSeq) || (value.nextGeneratedQuestSeq as number) < 1) return null;
+      !Number.isSafeInteger(value.nextGeneratedQuestSeq) || (value.nextGeneratedQuestSeq as number) < 1 || !isRecord(value.unitMemories)) return null;
   const generatedQuests: GeneratedQuest[] = [];
   for (const entry of value.generatedQuests) {
     const quest = normalizeGeneratedQuest(entry);
@@ -91,6 +91,14 @@ function normalizeWorldState(value: unknown): WorldRuntimeState | null {
       tags: relation.tags.filter((tag) => factionData.relationTags.some((entry) => entry.id === tag))
     };
   }
+  // 人物記憶：靜態資料移除的單位略過，其餘格式錯誤即整份拒絕。
+  const unitMemories: WorldRuntimeState['unitMemories'] = {};
+  for (const [unitId, notes] of Object.entries(value.unitMemories)) {
+    if (!Array.isArray(notes) || !notes.every((entry) => isRecord(entry) && typeof entry.note === 'string' &&
+      Number.isSafeInteger(entry.gameTimeMinutes) && Number.isSafeInteger(entry.characterSeq))) return null;
+    if (!isKnownUnitId(unitId)) continue;
+    unitMemories[unitId] = notes as UnitMemoryNote[];
+  }
   return {
     events: value.events as WorldEvent[],
     chronicle: value.chronicle,
@@ -101,7 +109,8 @@ function normalizeWorldState(value: unknown): WorldRuntimeState | null {
     regions,
     factionRelations,
     generatedQuests,
-    nextGeneratedQuestSeq: value.nextGeneratedQuestSeq as number
+    nextGeneratedQuestSeq: value.nextGeneratedQuestSeq as number,
+    unitMemories
   };
 }
 

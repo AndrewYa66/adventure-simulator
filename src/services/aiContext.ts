@@ -1,4 +1,4 @@
-import type { AIContextTrimmableSectionId, CharacterHistoryEntry, PlayerState } from '../types/game';
+import type { AIContextTrimmableSectionId, CharacterHistoryEntry, PlayerState, StoryMessage } from '../types/game';
 import { aiContextConfig, canPlayerEnterMap, describeUnitBuild, getFactionById, getMapById, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, scenario } from '../data/staticData';
 import { canAcceptQuest, canTurnInQuest, getQuestGiverName, isGeneratedQuest, listVisibleQuests } from '../utils/questRules';
 import { getQuestPostingOptions } from '../utils/generatedQuests';
@@ -7,6 +7,7 @@ import { getAvailableServices } from '../utils/tradeRules';
 import { getPlayerWorldUnit } from '../utils/worldUnits';
 import { formatGameTime } from '../utils/gameTime';
 import { getCharacterLegacyForAI, getProposableEvents, getWorldContextForAI } from '../utils/worldEvents';
+import { getMemoryEligibleUnitIds, getUnitMemoriesForAI } from '../utils/unitMemory';
 
 /**
  * AI 上下文組裝器（O39）：集中負責主持人 AI 每次呼叫的上下文。
@@ -16,16 +17,17 @@ import { getCharacterLegacyForAI, getProposableEvents, getWorldContextForAI } fr
  */
 
 /** 目前的回應格式版本；Gemini JSON Schema 要求填入此值。 */
-export const AI_RESPONSE_FORMAT_VERSION = 3;
+export const AI_RESPONSE_FORMAT_VERSION = 4;
 /**
  * 可解析的版本；沒有版本號的回應視為第 1 版。
  * 第 1、2 版的單位欄位使用舊名稱（monsterId、npcItemTransfers.npcId、defeatedMonsters），解析時轉為第 3 版名稱。
+ * 第 4 版加入 memoryNotes（人物記憶）；較舊版本沒有此欄位，視為空陣列。
  */
-export const SUPPORTED_AI_RESPONSE_FORMAT_VERSIONS = [1, 2, 3];
+export const SUPPORTED_AI_RESPONSE_FORMAT_VERSIONS = [1, 2, 3, 4];
 
 export type AIContextSectionId =
   | 'player' | 'legacy' | 'location' | 'residents' | 'factions' | 'quests' | 'encounters' | 'items' | 'flags'
-  | 'worldEvents' | 'chronicle' | 'modifiers' | 'proposableEvents' | 'rules';
+  | 'worldEvents' | 'chronicle' | 'modifiers' | 'proposableEvents' | 'rules' | 'dialogue';
 
 export interface AIContextSectionReport {
   id: AIContextSectionId;
@@ -110,6 +112,43 @@ function shrinkLegacy(entries: LegacyEntry[]): boolean {
   return true;
 }
 
+/** 近期對話（放在使用者提示）；dialogue 區段的報告另行附加，不計入系統提示預算。 */
+export interface DialogueHistory {
+  text: string;
+  report: AIContextSectionReport;
+}
+
+const SENDER_LABELS: Record<StoryMessage['sender'], string> = { user: '玩家', ai: 'GM', system: '系統' };
+
+/**
+ * 組裝近期對話視窗（O39 第二版）：取最近 maxTurns 輪（一輪從玩家訊息開始，之前的開場敘事算在最舊一輪），
+ * 預設排除系統訊息（結算結果已反映在系統提示的狀態中）；單則超過 maxCharsPerMessage 時保留開頭，
+ * 整段超過 maxChars 時從最舊的訊息開始捨棄。
+ */
+export function buildDialogueHistory(messages: StoryMessage[]): DialogueHistory {
+  const { maxTurns, maxChars, maxCharsPerMessage, includeSystemMessages } = aiContextConfig.dialogue;
+  const candidates = messages.filter((message) => includeSystemMessages || message.sender !== 'system');
+  let start = candidates.length;
+  let turns = 0;
+  while (start > 0 && turns < maxTurns) {
+    start -= 1;
+    if (candidates[start].sender === 'user') turns += 1;
+  }
+  // 取滿輪數時 start 停在最舊一輪的玩家訊息；未取滿時為 0，連同開場敘事一起送出。
+  const lines = candidates.slice(start).map((message) => {
+    const text = message.text.replace(/\s+/g, ' ').trim();
+    return `${SENDER_LABELS[message.sender]}: ${text.length > maxCharsPerMessage ? `${text.slice(0, maxCharsPerMessage)}…` : text}`;
+  });
+  let dropped = start;
+  const joined = () => lines.join('\n');
+  while (lines.length > 0 && joined().length > maxChars) {
+    lines.shift();
+    dropped += 1;
+  }
+  const text = joined();
+  return { text, report: { id: 'dialogue', chars: text.length, maxChars, droppedEntries: dropped } };
+}
+
 function buildRules(): string {
   return `請根據玩家行動進行劇情描述，並按下列規則判斷地區移動意圖：
 - 每次回應都必須包含 travelRequest；不移動時設為 null。storyText 不得宣稱玩家已抵達或切換地區，除非同一回應提供有效 travelRequest.destinationMapId。
@@ -137,6 +176,7 @@ function buildRules(): string {
 - 「歷代角色」的 death 與 deeds 是前任冒險者生前造成的既成事實，該前任冒險者不是目前玩家，不可復活，玩家也不可取得其物品；在場人物是否知道某件事與該前任冒險者有關，同樣只依該事件的 presentKnowledge。
 - 每次回應都必須包含 eventProposals（陣列）；只有玩家行動確實促成「可提議的世界事件」所描述的情況（符合 when 說明）時，才填入該事件 ID，否則為空陣列。事件效果由遊戲驗證後套用，storyText 可描述促成事件的經過，但不可自行宣告超出事件描述的世界改變。
 - 每次回應都必須包含 questProposals（陣列，最多一件）。只有玩家在本回合明確向在場人物詢問工作、委託或需要幫忙的事時，才從「可發布的支線委託」提議：templateId、giverId（玩家詢問的對象；若玩家未指定對象則選清單中的人）、targetUnitId（收集範本另填 itemId，討伐範本 itemId 為 null）、quantity（在範圍內）。閒聊、交易、詢問劇本任務或人物自己想找人幫忙都不算，questProposals 必須為空陣列；不可讓人物主動提出委託。報酬、標題、目標與經驗值由遊戲依範本與委託人持有物決定（約為 rewardValuePerQuantity × quantity 的價值），storyText 不可說出具體報酬數字，也不可宣稱玩家已接下委託；發布後玩家需另外表示接受。
+- 每次回應都必須包含 memoryNotes（陣列，最多 ${aiContextConfig.memory.maxNotesPerResponse} 則）。只有本回合玩家與在場人物的互動中出現該人物日後應該記得的新資訊（玩家告知的名字、身分或來歷、做出的承諾或請託、透露的祕密、明顯改變印象的言行）時，才填入 unitId 與一句話（${aiContextConfig.memory.maxNoteChars} 字以內，從該人物的角度簡述，例如「玩家自稱來自北方的鐵匠學徒」）。寒暄、單純詢問，或該人物 memories 已記得的內容都不要填。在場人物的 memories 是他記得的與玩家往來，交談時要自然延續，不可與之矛盾；【近期劇情回顧】中的對話同樣是已發生的事實。
 - 只有玩家行動或明確世界事件確實改變了當前地區單位對玩家的關係時，才在 stateChanges.unitDispositionChanges 回報單位 ID 與 friendly/neutral/hostile；純對話、陣營傾向或臆測不能改變關係。單位關係變更須與 storyText 敘事一致。
 - 每次回應都必須包含 encounterRequest；若玩家尚未實際看見或接觸敵人，設為 null。只有探索、搜索或情境中確實遇見敵人時，才指定本地區可遭遇清單中的 unitId，並在敘事中描述遭遇。不可只因單位存在於地圖資料，就宣稱玩家已遭遇；不可遭遇未列出的敵人。
 - 玩家在對話中明確要求攻擊目前地區的敵人時，不可假裝攻擊已命中、敵人已受傷或已被擊敗；戰鬥與獎勵由遊戲端確定性規則處理，若無法由遊戲端執行，只能說明尚未發起戰鬥。
@@ -174,7 +214,8 @@ function buildRules(): string {
   },
   "failureStateChanges": null,
   "eventProposals": [],
-  "questProposals": []
+  "questProposals": [],
+  "memoryNotes": []
 }
 \`\`\`
 只可回報玩家已接取且客觀目標已完成的任務；不可自行接取任務或宣告未完成目標完成。`;
@@ -211,7 +252,8 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
     isDead: playerState.unitInstances[unit.id]?.isDead ?? playerState.unitInstances[unit.id]?.currentHp === 0,
     currentHp: playerState.unitInstances[unit.id]?.currentHp ?? unit.stats.hp,
     holdings: playerState.unitInstances[unit.id] ?? { gold: unit.startingGold ?? 0, inventory: unit.startingInventory ?? [] },
-    description: unit.description
+    description: unit.description,
+    ...(getUnitMemoriesForAI(playerState, unit.id).length ? { memories: getUnitMemoriesForAI(playerState, unit.id) } : {})
   }] : []);
   const visibleQuests = listVisibleQuests(playerState);
   const availableQuests = visibleQuests.filter((quest) => canAcceptQuest(playerState, quest))
@@ -262,7 +304,7 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
       `- 可前往的相鄰地區（只可選這些 ID）: ${JSON.stringify(availableDestinations)}`,
       `- 上一個地區: ${previousMap ? `${previousMap.name} (${previousMap.id})，分類 ${JSON.stringify(previousMap.locationTags ?? [])}` : '無'}`
     ) },
-    { id: 'residents', dropped: 0, droppedEntries: 0, text: `- 當前地區在場人物及數值: ${JSON.stringify(presentResidents)}` },
+    { id: 'residents', dropped: 0, droppedEntries: 0, text: `- 當前地區在場人物及數值（memories 為該人物記得的與目前玩家的往來，舊→新）: ${JSON.stringify(presentResidents)}` },
     { id: 'factions', dropped: 0, droppedEntries: 0, text: lines(
       `- 各勢力對玩家的聲望（遊戲依勢力得知的事件結算，AI 不可自行改變；可依此調整人物語氣、價格談判與傳聞內容）: ${JSON.stringify(factionContext.reputation)}`,
       `- 勢力間關係（未列出者為中立）: ${JSON.stringify(factionContext.relations)}`,
@@ -331,6 +373,7 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
   const dispositionUnitIds = currentUnits.filter((unit) => unit.population ||
     (!playerState.unitInstances[unit.id]?.isDead && playerState.unitInstances[unit.id]?.currentHp !== 0)).map((unit) => unit.id);
   const knownItemIds = itemsDatabase.map((item) => item.id);
+  const memoryUnitIds = getMemoryEligibleUnitIds(playerState);
   const postingGivers = questPostingOptions.flatMap((option) => option.givers);
   const postingTargets = postingGivers.flatMap((giver) => giver.targets);
   const postingItemIds = [...new Set(postingTargets.flatMap((target) => target.itemId ? [target.itemId] : []))];
@@ -429,10 +472,26 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
             additionalProperties: false
           }
         }
+        : { type: 'array', items: { type: 'object' }, maxItems: 0 },
+      // 沒有可記憶的在場人物時只允許空陣列。
+      memoryNotes: memoryUnitIds.length
+        ? {
+          type: 'array',
+          maxItems: aiContextConfig.memory.maxNotesPerResponse,
+          items: {
+            type: 'object',
+            properties: {
+              unitId: { type: 'string', enum: memoryUnitIds },
+              note: { type: 'string', maxLength: aiContextConfig.memory.maxNoteChars }
+            },
+            required: ['unitId', 'note'],
+            additionalProperties: false
+          }
+        }
         : { type: 'array', items: { type: 'object' }, maxItems: 0 }
     },
     required: [
-      'formatVersion', 'storyText', 'suggestedActions', 'encounterRequest', 'travelRequest', 'serviceRequest', 'checkRequest', 'checkOutcomes', 'stateChanges', 'failureStateChanges', 'eventProposals', 'questProposals'
+      'formatVersion', 'storyText', 'suggestedActions', 'encounterRequest', 'travelRequest', 'serviceRequest', 'checkRequest', 'checkOutcomes', 'stateChanges', 'failureStateChanges', 'eventProposals', 'questProposals', 'memoryNotes'
     ],
     additionalProperties: false
   };

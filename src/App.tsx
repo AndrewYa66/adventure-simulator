@@ -3,6 +3,7 @@ import type { ActionCheckResult, CharacterHistoryEntry, SaveSlotId, SkillStatic,
 import { AUTO_SLOT_ID, clearLegacySaves, continueWorldWithCharacter, createHistoryEntry, createWorld, deleteSlot, deleteWorld, exportWorld, getLastWriteFailed, importWorld, loadSaveIndex, readSlot, setActiveWorld, subscribeSaveStatus, writeSlot, type LoadedSlot } from './utils/saveStorage';
 import { SaveManager } from './components/SaveManager';
 import { applyStateChanges } from './utils/applyStateChanges';
+import { applyMemoryNotes, getMemoryEligibleUnitIds } from './utils/unitMemory';
 import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getShopById, getUnlockedSkills, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, scenario } from './data/staticData';
 import { getPlayerStatBreakdown, resolveActionCheck } from './utils/gameChecks';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from './utils/travelIntent';
@@ -753,8 +754,7 @@ export default function App() {
     setLoading(true);
 
     try {
-      const historyTexts = messages.map((m) => `${m.sender === 'user' ? '玩家' : 'GM'}: ${m.text}`);
-      const aiResponse = await sendPlayerAction(modelSettings, apiKey, player, actionText, historyTexts, characterHistory);
+      const aiResponse = await sendPlayerAction(modelSettings, apiKey, player, actionText, messages, characterHistory);
       let storyText = aiResponse.storyText;
       let resultToApply = aiResponse;
       let checkResult: ActionCheckResult | undefined;
@@ -779,6 +779,8 @@ export default function App() {
       // AI 依任務範本提議的支線委託：同樣只在沒有檢定或檢定成功時考慮，由遊戲驗證後發布並預扣報酬。
       const questPosting = !checkResult || checkResult.success ? postQuestProposals(nextPlayer, aiResponse.questProposals) : undefined;
       if (questPosting) nextPlayer = questPosting.state;
+      // 人物記憶：對話已發生，不論檢定結果都記下；以行動前的在場人物驗證。
+      nextPlayer = applyMemoryNotes(nextPlayer, aiResponse.memoryNotes, getMemoryEligibleUnitIds(player)).state;
       const postedQuestNotice = questPosting?.posted.length
         ? `
 

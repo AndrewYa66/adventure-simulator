@@ -441,6 +441,10 @@ export interface AIContextConfigStatic {
   knowledge: { legendAfterDays: number };
   /** priority 數字越小越重要；超出整體預算時先截斷數字大的區段。 */
   trimmableSections: Record<AIContextTrimmableSectionId, { priority: number; maxChars: number }>;
+  /** 近期對話視窗（O39 第二版）：一輪從玩家訊息開始；超出 maxChars 時從最舊的訊息捨棄。 */
+  dialogue: { maxTurns: number; maxChars: number; maxCharsPerMessage: number; includeSystemMessages: boolean };
+  /** 人物記憶（memoryNotes）：每次回應最多幾則、每則字數上限、每個人物保留幾則（超出捨棄最舊）。 */
+  memory: { maxNotesPerResponse: number; maxNoteChars: number; maxNotesPerUnit: number };
 }
 
 export interface QuestTemplateDataStatic {
@@ -563,6 +567,16 @@ export interface WorldRuntimeState {
   /** 依任務範本生成的支線委託（O30）。 */
   generatedQuests: GeneratedQuest[];
   nextGeneratedQuestSeq: number;
+  /** 人物記憶（O39 第二版）：單位 ID → 該人物記得的與玩家往來，舊→新。 */
+  unitMemories: Record<string, UnitMemoryNote[]>;
+}
+
+/** 人物記得的一件事（由 AI 的 memoryNotes 經前端驗證後寫入）。 */
+export interface UnitMemoryNote {
+  note: string;
+  gameTimeMinutes: number;
+  /** 記下時的玩家角色代數；只有同一代角色的記憶會送給 AI。 */
+  characterSeq: number;
 }
 
 /** 玩家動態存檔狀態 (寫入 LocalStorage) */
@@ -765,4 +779,6 @@ export interface AIResponsePayload {
   eventProposals?: string[];
   /** 依任務範本提議的支線委託（最多一件）；只可選遊戲提供的候選，前端驗證後發布。 */
   questProposals?: QuestProposal[];
+  /** 在場人物值得記住的一句話（第 4 版）；前端驗證人物在場且存活後存入人物記憶。 */
+  memoryNotes?: { unitId: string; note: string }[];
 }

@@ -1,8 +1,8 @@
-import type { PlayerState, AIResponsePayload, CharacterHistoryEntry } from '../types/game';
+import type { PlayerState, AIResponsePayload, CharacterHistoryEntry, StoryMessage } from '../types/game';
 import type { AIModelSettings } from './aiModels';
 import { getItemById } from '../data/staticData';
 import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from '../utils/travelIntent';
-import { buildAIContext, recordAIContextReport, SUPPORTED_AI_RESPONSE_FORMAT_VERSIONS } from './aiContext';
+import { buildAIContext, buildDialogueHistory, estimateTokens, recordAIContextReport, SUPPORTED_AI_RESPONSE_FORMAT_VERSIONS } from './aiContext';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -163,6 +163,8 @@ function parseAIResponse(raw: unknown): AIResponsePayload | null {
   ))) return null;
   if (value.eventProposals !== undefined && value.eventProposals !== null &&
       (!Array.isArray(value.eventProposals) || !value.eventProposals.every((eventId) => typeof eventId === 'string'))) return null;
+  if (value.memoryNotes !== undefined && value.memoryNotes !== null && (!Array.isArray(value.memoryNotes) || !value.memoryNotes.every((entry) =>
+    isRecord(entry) && typeof entry.unitId === 'string' && typeof entry.note === 'string'))) return null;
 
   const storyText = getReadableNarrative(value.storyText);
   if (storyText === FORMAT_FALLBACK) return null;
@@ -178,7 +180,9 @@ function parseAIResponse(raw: unknown): AIResponsePayload | null {
     delete rest.rewardItems;
     return rest;
   });
-  return { ...value, formatVersion: version, storyText, stateChanges, travelRequest, eventProposals, questProposals } as unknown as AIResponsePayload;
+  // 人物記憶的在場與存活條件、字數與則數上限由 applyMemoryNotes 驗證。
+  const memoryNotes = ((value.memoryNotes as { unitId: string; note: string }[] | null | undefined) ?? []).map(({ unitId, note }) => ({ unitId, note }));
+  return { ...value, formatVersion: version, storyText, stateChanges, travelRequest, eventProposals, questProposals, memoryNotes } as unknown as AIResponsePayload;
 }
 
 /**
@@ -264,7 +268,8 @@ export async function sendPlayerAction(
   apiKey: string,
   playerState: PlayerState,
   actionText: string,
-  storyHistory: string[],
+  /** 本回合玩家行動之前的對話紀錄；依 ai_context.json 的 dialogue 設定取近期視窗。 */
+  storyHistory: StoryMessage[],
   /** 同一世界中已結束的歷代角色，供傳聞與人物回憶。 */
   characterHistory: CharacterHistoryEntry[] = []
 ): Promise<AIResponsePayload> {
@@ -274,9 +279,10 @@ export async function sendPlayerAction(
   }
 
   const { systemPrompt, report, responseSchema: jsonResponseSchema, availableDestinationIds } = buildAIContext(playerState, characterHistory);
-  const recentHistory = storyHistory.slice(-4).join('\n');
-  const userPrompt = `【近期劇情回顧】\n${recentHistory}\n\n【玩家行動】\n${actionText}`;
-  recordAIContextReport({ ...report, builtAt: Date.now(), userPrompt });
+  const dialogue = buildDialogueHistory(storyHistory);
+  const userPrompt = `【近期劇情回顧】\n${dialogue.text || '（尚無）'}\n\n【玩家行動】\n${actionText}`;
+  // totalChars 與預算只計系統提示；估計 tokens 含使用者提示，反映整個請求的大小。
+  recordAIContextReport({ ...report, sections: [...report.sections, dialogue.report], estimatedTokens: estimateTokens(systemPrompt + userPrompt), builtAt: Date.now(), userPrompt });
 
   const isOpenAI = settings.provider === 'openai';
   const endpoint = isOpenAI

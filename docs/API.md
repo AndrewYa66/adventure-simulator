@@ -23,12 +23,12 @@ sendPlayerAction(
   apiKey: string,
   playerState: PlayerState,
   actionText: string,
-  storyHistory: string[],
+  storyHistory: StoryMessage[],
   characterHistory?: CharacterHistoryEntry[]
 ): Promise<AIResponsePayload>
 ```
 
-`settings.provider` 為 `gemini` 或 `openai`；`settings.model` 為該服務的模型 ID。近期劇情只傳入最後四筆；`characterHistory` 是同一世界的歷代角色紀錄。系統提示與 Gemini JSON Schema 由上下文組裝器 `buildAIContext`（`src/services/aiContext.ts`）產生，見下方「AI 上下文組裝與回應格式版本」。
+`settings.provider` 為 `gemini` 或 `openai`；`settings.model` 為該服務的模型 ID。`storyHistory` 是本回合行動之前的對話紀錄，由 `buildDialogueHistory` 取近期視窗放進使用者提示（見下方「近期對話與人物記憶」）；`characterHistory` 是同一世界的歷代角色紀錄。系統提示與 Gemini JSON Schema 由上下文組裝器 `buildAIContext`（`src/services/aiContext.ts`）產生，見下方「AI 上下文組裝與回應格式版本」。
 
 ## AI 上下文組裝與回應格式版本（O39）
 
@@ -36,7 +36,10 @@ sendPlayerAction(
 - **token 預算** `src/data/ai_context.json`：`totalBudgetChars`（整體字元上限，目前 20,000）、`maxCallsPerTurn`（每回合呼叫上限，目前 2：敘事 1 次 + 移動修正 1 次；設為 1 即不送修正請求）、`legacy.maxCharacters`／`maxDeedsPerCharacter`（5／5）、`worldEvents.maxEvents`（12）、`chronicle.maxLines`（10），以及可截斷區段的 `trimmableSections: { legacy, worldEvents, modifiers, chronicle }` 各自的 `priority`（數字越小越重要）與 `maxChars`。只有這四個歷史類區段可截斷；候選清單（地區、任務、遭遇、物品、可提議事件）與規則不截斷，避免 AI 看不到合法選項。截斷時先套用各區段上限，整體仍超出時從優先順序最低的區段繼續省略；列表從最舊的項目開始省略並在標籤註明省略筆數，歷代角色先省略各角色較舊的事蹟（每位保留最新一件，標示 `omittedDeeds`），最後才省略最早的角色。token 數以「中日韓文字 1 字 1 token、其他 4 字元 1 token」估算。2026-10-06 實測一般狀態約 13,200 字元（約 6,500 tokens）。
 - **組裝報告**：每次呼叫記錄 `AIContextReport`（總字元、估計 tokens、預算、是否超出、各區段字元／上限／省略數、完整系統提示與使用者提示）。開發模式（`import.meta.env.DEV`）在 HUD 顯示「AI 上下文」面板；模型設定頁顯示每回合呼叫上限與上一次請求的估計大小。正式版不顯示面板。
 - **歷代角色區段**：每位歷代角色（最多 5 位）提供 `generation`（代數）、名稱、種族職階等級、陣營、結束時間地點、`death`（死亡事件）與 `deeds`（事蹟）。事蹟為該角色任內（事件的 `characterSeq` 等於其代數）殺害 NPC 或頭目的死亡事件、未由殺害衍生的聲望事件（攻擊成員、完成委託）、以及 AI 提議並由玩家行動促成的劇本事件；一般魔物擊殺不列入。殺害造成的聲望事件以 `consequence` 附在死亡事件上，不重複列出。每件事蹟（與死亡事件）附上在場 NPC 的認知層級 `presentKnowledge`（見「世界事件、世界修正與世界規則」的認知層級），已列在此區段的事件不在世界事件區段重複；主持規則要求親眼目擊者被問到時明確說出前任冒險者做了什麼，傳聞者以聽說的口吻提到，公開消息者只知道結果。已壓縮進編年史的事件不再列為事蹟。
-- **回應格式版本**：回應加入 `formatVersion`，目前為 `3`（`AI_RESPONSE_FORMAT_VERSION`），Gemini JSON Schema 要求填入此值。可解析的版本為 1、2、3；沒有 `formatVersion` 的回應視為第 1 版。第 3 版（單位模型合併）將單位欄位改名：`encounterRequest.monsterId` → `unitId`、`stateChanges.npcItemTransfers[].npcId` → `unitItemTransfers[].unitId`、`defeatedMonsters[].monsterId` → `defeatedUnits[].unitId`；第 1、2 版回應的舊欄位名會在解析時轉成新名稱，第 3 版使用舊欄位名則視為格式錯誤。版本號不支援的回應會被拒絕：顯示「格式版本不受支援，本回合未套用任何變更」，不顯示其敘事、不套用狀態、不重試。日後新增請求類型（劇情片段選擇、重要角色決策等）時提高版本號，並各自加上前端驗證。
+- **近期對話與人物記憶（O39 第二版）**：
+  - 近期對話視窗（`buildDialogueHistory`）：設定在 `ai_context.json` 的 `dialogue`。取最近 `maxTurns` 輪（目前 8；一輪從玩家訊息開始，未取滿時連同開場敘事），`includeSystemMessages` 為 `false` 時排除系統訊息（戰鬥結算、道具使用等結果已反映在系統提示的狀態中）；每則超過 `maxCharsPerMessage`（400）時保留開頭並加上「…」，整段超過 `maxChars`（4,000）時從最舊的訊息捨棄。以「玩家:」「GM:」標示發言者放在使用者提示的【近期劇情回顧】；組裝報告另列 `dialogue` 區段（字元、上限、省略的較舊訊息數），不計入系統提示的 `totalBudgetChars`，但估計 tokens 包含使用者提示。
+  - 人物記憶 `memoryNotes`（第 4 版必填陣列，沒有時為空陣列）：`[{ unitId, note }]`，AI 在本回合互動出現在場人物日後應記得的新資訊（玩家告知的名字或來歷、承諾、請託、透露的祕密、明顯改變印象的言行）時提出。前端以 `applyMemoryNotes`（`src/utils/unitMemory.ts`）驗證：人物須是行動前目前地區存活的居民（非遭遇型單位），每次最多 `memory.maxNotesPerResponse` 則（2），每則正規化空白後截到 `maxNoteChars`（40）字，與既有記憶相同則略過；不論檢定結果都寫入（對話已發生）。寫入世界層 `world.unitMemories[unitId]`（`{ note, gameTimeMinutes, characterSeq }`，舊→新），每人超過 `maxNotesPerUnit`（8）則時捨棄最舊的。系統提示的在場人物附上 `memories`（只含目前角色代數的記憶），主持規則要求自然延續、不可矛盾。不增加 AI 呼叫次數。
+- **回應格式版本**：回應加入 `formatVersion`，目前為 `4`（`AI_RESPONSE_FORMAT_VERSION`），Gemini JSON Schema 要求填入此值。可解析的版本為 1、2、3、4；第 4 版加入 `memoryNotes`，較舊版本沒有此欄位時視為空陣列；沒有 `formatVersion` 的回應視為第 1 版。第 3 版（單位模型合併）將單位欄位改名：`encounterRequest.monsterId` → `unitId`、`stateChanges.npcItemTransfers[].npcId` → `unitItemTransfers[].unitId`、`defeatedMonsters[].monsterId` → `defeatedUnits[].unitId`；第 1、2 版回應的舊欄位名會在解析時轉成新名稱，第 3 版使用舊欄位名則視為格式錯誤。版本號不支援的回應會被拒絕：顯示「格式版本不受支援，本回合未套用任何變更」，不顯示其敘事、不套用狀態、不重試。日後新增請求類型（劇情片段選擇、重要角色決策等）時提高版本號，並各自加上前端驗證。
 
 ## 提供者 API 呼叫
 
@@ -62,7 +65,7 @@ sendPlayerAction(
 
 ```json
 {
-  "formatVersion": 3,
+  "formatVersion": 4,
   "storyText": "你察覺林間傳來一陣急促的腳步聲。",
   "suggestedActions": ["躲到樹後", "拔出武器戒備"],
   "encounterRequest": null,
@@ -80,7 +83,8 @@ sendPlayerAction(
   "stateChanges": { "hpChange": 0, "expChange": 5, "questAcceptances": [], "unitDispositionChanges": [] },
   "failureStateChanges": { "hpChange": -3 },
   "eventProposals": [],
-  "questProposals": []
+  "questProposals": [],
+  "memoryNotes": [{ "unitId": "<在場人物 ID>", "note": "玩家說自己在找失散的妹妹" }]
 }
 ```
 
@@ -234,13 +238,13 @@ sendPlayerAction(
 
 ## 存檔架構（世界與角色兩層）
 
-- **兩層存檔**：每個存檔欄位分為 `world`（世界存檔：`gameTimeMinutes`、`unitInstances`、`storyFlags`、世界狀態 `world`（事件紀錄、編年史、世界修正、已觸發事件、地區結算、勢力間關係、生成委託）與歷代角色紀錄 `characterHistory`）與 `character`（角色存檔：其餘玩家欄位，包含能力、背包、金幣、任務、戰鬥、單位對此角色的關係覆寫、各勢力聲望等）。哪些欄位屬於世界層由 `types/game.ts` 的 `WORLD_STATE_KEYS` 定義。執行期仍合併為 `PlayerState`，只在存讀檔時拆分與合併（`utils/saveStorage.ts`）。
+- **兩層存檔**：每個存檔欄位分為 `world`（世界存檔：`gameTimeMinutes`、`unitInstances`、`storyFlags`、世界狀態 `world`（事件紀錄、編年史、世界修正、已觸發事件、地區結算、勢力間關係、生成委託、人物記憶 `unitMemories`）與歷代角色紀錄 `characterHistory`）與 `character`（角色存檔：其餘玩家欄位，包含能力、背包、金幣、任務、戰鬥、單位對此角色的關係覆寫、各勢力聲望等）。哪些欄位屬於世界層由 `types/game.ts` 的 `WORLD_STATE_KEYS` 定義。執行期仍合併為 `PlayerState`，只在存讀檔時拆分與合併（`utils/saveStorage.ts`）。
 - **存檔欄位**：每個世界一個自動存檔（狀態變更且非 AI 回合進行中時覆寫；戰鬥中與玩家死亡後不覆寫，因此停在致命行動或該場戰鬥開始之前）與 3 個手動存檔（死亡狀態與戰鬥中不能存檔）。每個世界只有一條時間線：讀取手動存檔即取代目前進度，之後的自動存檔從該時間點繼續。可有多個世界，存檔索引記錄目前世界；切換世界即讀取該世界的自動存檔。
 - **新角色接續（停用，保留給 O42）**：死亡改為讀檔制後，「以新角色接續這個世界」入口與角色建立的「與前任冒險者有關聯」選項不再提供，以下程式保留供 O42 非同步多人使用。原設計為角色死亡後可在同一世界建立新角色。世界層欄位保留，玩家狀態的 `characterSeq` 記錄角色代數（第一位為 1，接續的新角色加一）；前一位角色以 `characterHistory`（代數、名稱、種族、職階、等級、結束時間與地區、死亡事件 ID 與公開描述、攜帶物快照）記錄並提供給 AI 作為傳聞素材（最多 5 位，附上其事蹟，見「AI 上下文組裝與回應格式版本」）；新角色不繼承等級、背包、任務與單位關係；勢力聲望重置為初始值，或依劇本設定部分繼承（見「勢力聲望與勢力間關係」）。死亡遺物（O26）尚未實作，攜帶物快照留待之後使用。
 - **匯出／匯入**：存檔管理可將一個世界的所有欄位匯出為 JSON（`format: "adventure-simulator-world"`）。匯入時驗證格式、版本、劇本與每個欄位內容，任何欄位無效即整份拒絕；一律以新世界 ID 匯入，不覆蓋任何現有存檔，寫入中途失敗會移除已寫入的欄位。
 - **容量管理**：存檔管理顯示本遊戲在 localStorage 的估計用量（以約 5 MB 上限計），達 80% 時警示；寫入失敗（例如容量不足）時 HUD 提示匯出備份，其他欄位不受影響。事件紀錄超過 200 件即壓縮成編年史，且存檔只保存有差異的單位實例；目前容量足夠，暫不改用 IndexedDB。
 
-存檔帶有 `schemaVersion`（`saveStorage.ts` 的 `SAVE_SCHEMA_VERSION`，目前為 8）。開發階段每次變更存檔格式就將版本加一；版本不符、缺少欄位或格式無效的存檔直接捨棄，不提供舊格式遷移；舊版單一快照（`TRPG_GAME_SESSION`、`TRPG_PLAYER_STATE`）在啟動時移除。正式上線後才開始為舊版本撰寫遷移。
+存檔帶有 `schemaVersion`（`saveStorage.ts` 的 `SAVE_SCHEMA_VERSION`，目前為 9）。開發階段每次變更存檔格式就將版本加一；版本不符、缺少欄位或格式無效的存檔直接捨棄，不提供舊格式遷移；舊版單一快照（`TRPG_GAME_SESSION`、`TRPG_PLAYER_STATE`）在啟動時移除。正式上線後才開始為舊版本撰寫遷移。
 
 ## 金鑰安全限制
 

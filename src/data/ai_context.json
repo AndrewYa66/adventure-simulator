@@ -10,5 +10,7 @@
     "worldEvents": { "priority": 2, "maxChars": 3000 },
     "modifiers": { "priority": 3, "maxChars": 1000 },
     "chronicle": { "priority": 4, "maxChars": 1000 }
-  }
+  },
+  "dialogue": { "maxTurns": 8, "maxChars": 4000, "maxCharsPerMessage": 400, "includeSystemMessages": false },
+  "memory": { "maxNotesPerResponse": 2, "maxNoteChars": 40, "maxNotesPerUnit": 8 }
 }

@@ -46,7 +46,7 @@ export const MAX_CHRONICLE_LINES = 100;
 const MINUTES_PER_DAY = 24 * 60;
 
 export function createWorldState(): WorldRuntimeState {
-  return { events: [], chronicle: [], nextEventSeq: 1, modifiers: [], firedEventIds: [], regions: {}, factionRelations: {}, generatedQuests: [], nextGeneratedQuestSeq: 1 };
+  return { events: [], chronicle: [], nextEventSeq: 1, modifiers: [], firedEventIds: [], regions: {}, factionRelations: {}, generatedQuests: [], nextGeneratedQuestSeq: 1, unitMemories: {} };
 }
 
 export interface DeathHint {

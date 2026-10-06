@@ -1,5 +1,5 @@
 // AI 實際呼叫的意圖測試：以真實模型驗證結構化欄位（服務、任務、移動、關係、遭遇、世界事件）是否只在玩家明確要求時出現，
-// 支線委託提議，並計算每個情境實際送出的 API 請求數（含移動修正請求），可同時比較多個模型。
+// 支線委託提議、對話記憶，並計算每個情境實際送出的 API 請求數（含移動修正請求），可同時比較多個模型。
 // 金鑰讀自專案根目錄的 ai-test.local.json（已列入 .gitignore，不會被提交，也不會打包進網站）：
 //   { "provider": "gemini", "model": "gemini-3.8-flash", "apiKey": "..." }
 // 執行：npm run test:ai                                       （使用設定檔中的模型）
@@ -69,6 +69,23 @@ const witnessNpc = data.getWorldUnitById(formerDead.world.events.find((event) =>
 const successorElsewhere = { ...successor, currentMapId: otherMap.id };
 const proposableEvent = world.getProposableEvents(base)[0];
 
+// 對話記憶情境（O39 第二版）：關鍵資訊在 5 輪前說出（舊版只送最後 4 則訊息會遺忘），之後聊了其他話題。
+const say = (sender, text, i) => ({ id: `mem-${i}`, sender, text, timestamp: '' });
+const memoryFact = '失散多年的妹妹小蓮';
+const memoryHistory = [
+  say('user', `${merchant.name}，我叫測試員。我這趟出來，是為了找${memoryFact}，她左手腕有一道月牙形的疤。`, 1),
+  say('ai', `${merchant.name}放下手中的鐵鎚，認真地聽你說完，點點頭說會替你留意左手腕有月牙疤的姑娘。`, 2),
+  say('user', '對了，你這把劍的鋼是從哪裡來的？', 3),
+  say('ai', `${merchant.name}得意地說鋼材是從南方運來的，鍛打了七次才成形。`, 4),
+  say('user', '最近天氣變冷了，生意還好嗎？', 5),
+  say('ai', `${merchant.name}嘆了口氣，說天冷了來修農具的人少了些，但還過得去。`, 6),
+  say('user', '村子裡晚上安全嗎？', 7),
+  say('ai', `${merchant.name}說晚上最好別一個人往古道走，最近不太平靜。`, 8),
+  say('user', '你打鐵多少年了？', 9),
+  say('ai', `${merchant.name}笑說從十二歲當學徒算起，快三十年了。`, 10)
+];
+const rememberedPlayer = { ...base, world: { ...base.world, unitMemories: { [merchant.id]: [{ note: `玩家在找${memoryFact}`, gameTimeMinutes: base.gameTimeMinutes, characterSeq: base.characterSeq }] } } };
+
 const none = (value) => value === undefined || value === null || (Array.isArray(value) && value.length === 0);
 const accepted = (response) => response.stateChanges?.questAcceptances ?? [];
 
@@ -119,6 +136,15 @@ const scenarios = [
     expect: '提議一件合法委託' },
   { group: '委託', name: '閒聊不發布委託', player: base, action: `我跟${merchant.name}聊聊他最近打造的武器`,
     check: (r) => none(r.questProposals), expect: '無 questProposals' },
+  { group: '對話記憶', name: '連續交談記得前文', player: base, messages: memoryHistory,
+    action: `${merchant.name}，你還記得我一開始說我在找誰嗎？她身上有什麼特徵？`,
+    check: (r) => r.storyText.includes('小蓮') && r.storyText.includes('月牙'), expect: '說出小蓮與月牙疤' },
+  { group: '對話記憶', name: '記下值得記住的事', player: base,
+    action: `${merchant.name}，我叫測試員，我在找${memoryFact}。如果你看到她，請一定要告訴我。`,
+    check: (r) => (r.memoryNotes ?? []).some((entry) => entry.unitId === merchant.id && entry.note.includes('小蓮')), expect: `memoryNotes 記下 ${merchant.id} 與小蓮` },
+  { group: '對話記憶', name: '依人物記憶延續', player: rememberedPlayer,
+    action: `${merchant.name}，好久不見。你還記得我在找誰嗎？`,
+    check: (r) => r.storyText.includes('小蓮'), expect: '依 memories 說出小蓮' },
   ...(proposableEvent ? [
     { group: '世界事件', name: '促成可提議事件', player: base,
       action: `我嚴肅地向${victimNpc.name}警告：古道上的哥布林越來越多，最近有人遇襲，請村民務必結伴出入、夜裡緊閉門戶。`,
@@ -141,7 +167,7 @@ for (const model of models) {
     requestCount = 0;
     let response;
     try {
-      response = await ai.sendPlayerAction({ provider: config.provider, model }, config.apiKey, scenario.player, scenario.action, [], scenario.history ?? []);
+      response = await ai.sendPlayerAction({ provider: config.provider, model }, config.apiKey, scenario.player, scenario.action, scenario.messages ?? [], scenario.history ?? []);
     } catch (error) {
       errors += 1;
       totalCalls += requestCount;
@@ -158,7 +184,8 @@ for (const model of models) {
       unitDispositionChanges: response.stateChanges?.unitDispositionChanges ?? [],
       encounterRequest: response.encounterRequest ?? null,
       eventProposals: response.eventProposals ?? [],
-      questProposals: response.questProposals ?? []
+      questProposals: response.questProposals ?? [],
+      memoryNotes: response.memoryNotes ?? []
     };
     const shown = Object.fromEntries(Object.entries(fields).filter(([, value]) => !none(value)));
     console.log(`${ok ? '✅' : '❌'} [${scenario.group}] ${scenario.name}（預期：${scenario.expect}；請求 ${requestCount} 次）`);
