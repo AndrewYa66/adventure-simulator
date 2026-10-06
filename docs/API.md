@@ -136,7 +136,7 @@ sendPlayerAction(
   - `maxOpenQuests`：全世界同時開放的委託上限（已接取未完成的也算在內）；`maxOpenPerGiver`：每位發布者的上限；`giverCooldownDays`：同一發布者兩次發布至少相隔的遊戲日。
   - 範本欄位：`{ id: "QTPL-xxx", type: "defeat" | "collect", name, titlePattern, objectivePattern, aiHint, giver?: { factionIds?, classIds? }, quantity: { min, max }, durationDays, reward: { expRatio, maxExp, valuePerLevel, maxValue, maxItemQuantity }, requires?: { flags?, reputation?, factionRelations? }, excludes?: { flags? } }`。
   - `titlePattern` 與 `objectivePattern` 可用 `{target}`、`{quantity}`；`requires` 的勢力條件與事件共用 `matchesFactionConditions`。
-  - 目前範本：討伐（擊敗附近魔物）、收集（收集附近魔物的掉落物），暫定上限見 `docs/PROJECT_GOALS.md` O30。
+  - 目前範本：討伐（擊敗附近魔物）、收集（收集附近魔物的掉落物），數值見 `docs/PROJECT_GOALS.md`「已確認的設計決策」。
 - **AI 提議** `questProposals`（必填陣列，最多一件，沒有時為空陣列）：`{ templateId, giverId, targetUnitId, itemId, quantity }`；收集範本以 `itemId` 為準，討伐範本的 `itemId` 為 `null`。
   - 只有玩家明確向在場人物詢問工作或委託時才提議。只在沒有檢定或檢定成功時考慮。
   - AI 回應中的報酬欄位一律忽略。
