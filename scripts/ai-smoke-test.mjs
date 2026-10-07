@@ -45,6 +45,8 @@ const { module: world } = await runnerImport('/src/utils/worldEvents.ts');
 const { module: saves } = await runnerImport('/src/utils/saveStorage.ts');
 const { module: generated } = await runnerImport('/src/utils/generatedQuests.ts');
 const { module: story } = await runnerImport('/src/utils/storylets.ts');
+const { module: route } = await runnerImport('/src/utils/travelRoute.ts');
+const { module: travelIntent } = await runnerImport('/src/utils/travelIntent.ts');
 
 const base = init.createInitialPlayer('測試員', data.scenario.defaultPlayer.classId, data.scenario.defaultPlayer.alignment, true);
 const startMap = data.getMapById(base.currentMapId);
@@ -93,6 +95,24 @@ const storyGiver = storyCandidate?.giver.kind === 'unit' ? data.getWorldUnitById
 const storyActive = storyCandidate ? story.startStorylets(base, base, [storyCandidate.storylet.id]).state : base;
 const storyBystander = startNpcs.find((unit) => unit.id !== storyGiver?.id && unit.id !== storyCandidate?.storylet.giver.preferredUnitId) ?? merchant;
 
+// 多段移動情境（O44）：從距離起始地 2 段以上的地區回到起始地，由規則先結算移動（沒有遭遇／途中遭遇）。
+const allMapQuests = [...new Set(data.mapsDatabase.flatMap((map) => map.requiredQuestId ? [map.requiredQuestId] : []))]
+  .map((questId) => ({ questId, status: 'in_progress', progress: { defeatedUnits: {} } }));
+const explorer = { ...base, activeQuests: allMapQuests };
+const farRoute = [...route.getReachableRoutes(explorer).values()].find((path) => path.length >= 2);
+const farPlayer = farRoute ? { ...explorer, currentMapId: farRoute.at(-1), previousMapId: farRoute.at(-2) } : undefined;
+const safeTrip = farPlayer ? route.travelAlongRoute(farPlayer, startMap.id, () => 0.99) : undefined;
+const ambushTrip = farPlayer ? route.travelAlongRoute(farPlayer, startMap.id, () => 0) : undefined;
+const routeIgnore = (trip) => [trip.origin.id, ...trip.passed.map((map) => map.id)];
+const consistentWithTrip = (trip) => (r) => none(r.travelRequest) && travelIntent.getClaimedArrivalMapIds(r.storyText, trip.arrived.id, routeIgnore(trip)).length === 0;
+
+// 委託多樣性情境（O43）：已有一件委託開放中，另一位委託人不可再提議同範本同目標。
+const firstOption = generated.getQuestPostingOptions(base).find((option) => option.givers.length >= 2);
+const firstGiver = firstOption?.givers[0];
+const postedOnce = firstGiver ? generated.postQuestProposals(base, [{ templateId: firstOption.templateId, giverId: firstGiver.giverId,
+  targetUnitId: firstGiver.targets[0].targetUnitId, itemId: firstGiver.targets[0].itemId ?? null, quantity: 1 }]).state : base;
+const secondGiver = firstOption ? data.getWorldUnitById(firstOption.givers[1].giverId) : merchant;
+
 const none = (value) => value === undefined || value === null || (Array.isArray(value) && value.length === 0);
 const accepted = (response) => response.stateChanges?.questAcceptances ?? [];
 
@@ -124,6 +144,10 @@ const scenarios = [
     check: (r) => none(r.travelRequest), expect: '無 travelRequest' },
   { group: '移動', name: '同地區內走動', player: base, action: `我走進旅館找${innService?.provider ?? '老闆'}聊聊`,
     check: (r, _p, calls) => none(r.travelRequest) && calls === 1, expect: '無 travelRequest 且只呼叫 1 次' },
+  ...(safeTrip ? [{ group: '移動', name: '多段移動先結算後敘事', player: safeTrip.player, travel: safeTrip, action: `我要回${startMap.name}找${merchant.name}`,
+    check: consistentWithTrip(safeTrip), expect: `以${safeTrip.arrived.name}為抵達地、無 travelRequest` }] : []),
+  ...(ambushTrip?.interruptedByUnitId ? [{ group: '移動', name: '途中遭遇停在中途', player: ambushTrip.player, travel: ambushTrip, action: `我要回${startMap.name}找${merchant.name}`,
+    check: consistentWithTrip(ambushTrip), expect: `停在${ambushTrip.arrived.name}、不宣稱抵達${startMap.name}` }] : []),
   { group: '關係', name: '和 NPC 開玩笑', player: base, action: `我跟${merchant.name}開玩笑說他的手藝退步了`,
     check: (r) => none(r.stateChanges?.unitDispositionChanges), expect: '不改變關係' },
   { group: '遭遇', name: '和 NPC 閒聊', player: elsewhere, action: `我坐下來和${otherNpc?.name ?? '旅人'}聊聊最近的見聞`,
@@ -141,6 +165,9 @@ const scenarios = [
   { group: '委託', name: '向在場人物詢問工作', player: base, action: `${merchant.name}，你這邊有沒有什麼工作可以讓我幫忙？`,
     check: (r, p) => (r.questProposals ?? []).length === 1 && generated.validateQuestProposal(p, r.questProposals[0]).ok,
     expect: '提議一件合法委託' },
+  { group: '委託', name: '同目標開放中不重複提議', player: postedOnce, action: `${secondGiver.name}，你這邊有沒有什麼工作可以讓我幫忙？`,
+    check: (r, p) => (r.questProposals ?? []).every((proposal) => generated.validateQuestProposal(p, proposal).ok),
+    expect: '沒有提議或提議合法（不重複同目標）' },
   { group: '委託', name: '閒聊不發布委託', player: base, action: `我跟${merchant.name}聊聊他最近打造的武器`,
     check: (r) => none(r.questProposals), expect: '無 questProposals' },
   { group: '對話記憶', name: '連續交談記得前文', player: base, messages: memoryHistory,
@@ -184,7 +211,7 @@ for (const model of models) {
     requestCount = 0;
     let response;
     try {
-      response = await ai.sendPlayerAction({ provider: config.provider, model }, config.apiKey, scenario.player, scenario.action, scenario.messages ?? [], scenario.history ?? []);
+      response = await ai.sendPlayerAction({ provider: config.provider, model }, config.apiKey, scenario.player, scenario.action, scenario.messages ?? [], scenario.history ?? [], scenario.travel);
     } catch (error) {
       errors += 1;
       totalCalls += requestCount;
@@ -211,7 +238,7 @@ for (const model of models) {
     if (Object.keys(shown).length) console.log(`   欄位：${JSON.stringify(shown)}`);
     const invalidQuest = (response.questProposals ?? []).map((proposal) => generated.validateQuestProposal(scenario.player, proposal)).find((result) => !result.ok);
     if (invalidQuest) console.log(`   委託驗證：${invalidQuest.reason}`);
-    if (!ok) console.log(`   敘事：${response.storyText.slice(0, 100)}${response.storyText.length > 100 ? '…' : ''}`);
+    if (!ok || scenario.travel) console.log(`   敘事：${response.storyText.slice(0, 100)}${response.storyText.length > 100 ? '…' : ''}`);
   }
   summaries.push({ model, passed, errors, totalCalls });
 }
