@@ -99,9 +99,9 @@ content/
 - 「物品送達」需要「交給非發布者」的交付規則，暫不支援；需要時改用旗標目標。
 - 結局（O33）：最後一幕也有卡死保底，因此最後一幕的預設片段必須「進入結局」。
 
-### 結局（O33，範本待設計確認後補上）
+### 結局（O33）
 
-遊戲資料見 `src/data/story.json` 的 `endings` 與 `docs/API.md`「結局（O33）」。建議的寫手格式：
+遊戲資料見 `src/data/story.json` 的 `endings` 與 `docs/API.md`「結局（O33）」。寫手格式（範本 `content/_templates/結局.md`，放在 `content/story/endings/`）：
 
 - frontmatter：`id`（END-n）、標題→title、結局後→afterEnding（世界繼續→continue、時間線結束→end）。
 - 內文：結果→summary（寫入事件紀錄、提供給 AI 的公開結果）；「尾聲」下每個小節是一段尾聲，小節第一行寫顯示條件（例如「條件：結局特徵 魔王的下場=被奪取；旗標 X；角色 Y 存活」，沒有條件則每次都顯示），其餘為段落文字→epilogues[].when／text。
