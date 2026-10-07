@@ -70,5 +70,21 @@
     },
     "knownBy": "region",
     "summary": "哥布林酋長的威脅解除後，綠林古道恢復了通行，商隊重新上路。"
+  },
+  {
+    "id": "EVT-007",
+    "title": "巡守隊加強巡邏",
+    "trigger": "agent",
+    "agentUnitIds": ["NPC-001"],
+    "requires": { "flags": ["村民提高警覺"] },
+    "excludes": { "flags": ["巡守隊加強巡邏"] },
+    "effects": {
+      "setFlags": ["巡守隊加強巡邏"],
+      "worldModifiers": [
+        { "scope": "unit:NPC-005", "stat": "def", "op": "add", "value": 2, "durationMinutes": 10080 }
+      ]
+    },
+    "knownBy": "region",
+    "summary": "橡木村的巡守隊開始沿綠林古道加強巡邏，村民出入安心了些。"
   }
 ]

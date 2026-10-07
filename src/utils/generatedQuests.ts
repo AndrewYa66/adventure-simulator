@@ -64,10 +64,16 @@ function targetBlockReason(state: QuestState, key: string): string | undefined {
   return undefined;
 }
 
+/** 發布選項：requirePresence 為 false 時發布者不必與玩家同在一地（重要角色自行發布，O34）。 */
+export interface QuestPostingOptions {
+  requirePresence?: boolean;
+}
+
 /** 發布者不能發布的原因；可發布時回傳 undefined。 */
-function giverBlockReason(state: QuestState, template: QuestTemplateStatic, giver: WorldUnitStatic | undefined): string | undefined {
+function giverBlockReason(state: QuestState, template: QuestTemplateStatic, giver: WorldUnitStatic | undefined, options: QuestPostingOptions = {}): string | undefined {
   const map = getMapById(state.currentMapId);
-  if (!giver || giver.requiresEncounter || !map?.unitsPresent.includes(giver.id)) return '發布者不在目前地區';
+  if (!giver || giver.requiresEncounter) return '發布者不是地區居民';
+  if (options.requirePresence !== false && !map?.unitsPresent.includes(giver.id)) return '發布者不在目前地區';
   if (!isAlive(state, giver.id)) return '發布者已死亡';
   if (getWorldUnitDisposition(state, giver.id) === 'hostile') return '發布者對你敵對';
   if (!giver.factionId) return '發布者不屬於任何勢力';
@@ -84,7 +90,7 @@ function giverBlockReason(state: QuestState, template: QuestTemplateStatic, give
   return undefined;
 }
 
-interface TargetCandidate {
+export interface TargetCandidate {
   targetUnitId: string;
   itemId?: string;
   name: string;
@@ -131,6 +137,15 @@ const computeExp = (template: QuestTemplateStatic, target: TargetCandidate, quan
 
 const computeValueCap = (template: QuestTemplateStatic, target: TargetCandidate, quantity: number) =>
   Math.min(template.reward.maxValue, target.level * template.reward.valuePerLevel * quantity);
+
+/** 某位發布者依某範本目前可發布的目標（依目標資料順序）；發布者或範本不可用時為空陣列。重要角色的規則後備由此選目標。 */
+export function getQuestTargetOptions(state: QuestState, templateId: string, giverId: string, options: QuestPostingOptions = {}): TargetCandidate[] {
+  const template = getQuestTemplateById(templateId);
+  const giver = getWorldUnitById(giverId, state);
+  if (!template || !giver || !templateConditionsMet(state, template) || giverBlockReason(state, template, giver, options)) return [];
+  if (openQuests(state).length >= questTemplateData.limits.maxOpenQuests) return [];
+  return getTargetCandidates(state, template, giver);
+}
 
 /** AI 上下文：目前可提議的範本、發布者（含可作為報酬的持有物）與目標（含經驗與報酬上限）。沒有任何候選時回傳空陣列。 */
 export function getQuestPostingOptions(state: QuestState) {
@@ -181,14 +196,14 @@ const fillPattern = (pattern: string, target: string, quantity: number) =>
   pattern.replaceAll('{target}', target).replaceAll('{quantity}', String(quantity));
 
 /** 驗證 AI 的委託提議；通過時回傳待發布的委託（尚未配發 ID、尚未預扣）。 */
-export function validateQuestProposal(state: QuestState, proposal: QuestProposal):
+export function validateQuestProposal(state: QuestState, proposal: QuestProposal, options: QuestPostingOptions = {}):
   { ok: true; quest: Omit<GeneratedQuest, 'id'> } | { ok: false; reason: string } {
   const template = getQuestTemplateById(proposal.templateId);
   if (!template) return { ok: false, reason: '沒有這種委託範本' };
   if (!templateConditionsMet(state, template)) return { ok: false, reason: '目前不符合此範本的條件' };
   if (openQuests(state).length >= questTemplateData.limits.maxOpenQuests) return { ok: false, reason: '世界上開放中的委託已達上限' };
   const giver = getWorldUnitById(proposal.giverId, state);
-  const blocked = giverBlockReason(state, template, giver);
+  const blocked = giverBlockReason(state, template, giver, options);
   if (blocked || !giver) return { ok: false, reason: blocked ?? '發布者無效' };
   const quantity = proposal.quantity;
   if (!Number.isInteger(quantity) || quantity < template.quantity.min || quantity > template.quantity.max) return { ok: false, reason: `數量須介於 ${template.quantity.min}–${template.quantity.max}` };
@@ -249,11 +264,11 @@ export function validateQuestProposal(state: QuestState, proposal: QuestProposal
 }
 
 /** 發布通過驗證的委託：配發 ID、自發布者持有物預扣報酬並寫入世界狀態。每次最多發布一件。 */
-export function postQuestProposals<T extends QuestState>(state: T, proposals: readonly QuestProposal[] = []):
+export function postQuestProposals<T extends QuestState>(state: T, proposals: readonly QuestProposal[] = [], options: QuestPostingOptions = {}):
   { state: T; posted: GeneratedQuest[]; rejected: string[] } {
   const proposal = proposals[0];
   if (!proposal) return { state, posted: [], rejected: [] };
-  const result = validateQuestProposal(state, proposal);
+  const result = validateQuestProposal(state, proposal, options);
   if (!result.ok) return { state, posted: [], rejected: [result.reason] };
   const quest: GeneratedQuest = { id: `QST-GEN-${String(state.world.nextGeneratedQuestSeq).padStart(4, '0')}`, ...result.quest };
   const holdings = state.unitInstances[quest.questGiverId];

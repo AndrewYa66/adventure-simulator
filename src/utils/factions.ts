@@ -118,7 +118,8 @@ export function createSuccessorReputation(previous: Pick<PlayerState, 'factionRe
     [factionId, clampReputation(value + ratio * (getFactionReputation(previous, factionId) - value))]));
 }
 
-const RELATION_NAMES = { war: '交戰', hostile: '敵對', tense: '緊張', neutral: '中立', friendly: '友好', alliance: '同盟' } as const;
+/** 勢力關係的顯示名稱。 */
+export const RELATION_NAMES = { war: '交戰', hostile: '敵對', tense: '緊張', neutral: '中立', friendly: '友好', alliance: '同盟' } as const;
 
 /** 提供給主持人 AI 的勢力資訊：各勢力對玩家的聲望、非中立的勢力關係，以及在場人物所屬勢力的公開簡介。 */
 export function getFactionContextForAI(state: Pick<PlayerState, 'factionReputation' | 'world' | 'currentMapId' | 'unitInstances'>) {

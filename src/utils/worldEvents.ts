@@ -30,6 +30,7 @@ import { formatGameTime, getGameDay } from './gameTime';
 import { isModifierActive } from './worldModifiers';
 import { findQuest, getActiveQuestGiverId, isGeneratedQuest } from './questRules';
 import { closeGeneratedQuest, expireGeneratedQuests, pruneGeneratedQuests } from './generatedQuests';
+import { settleAgents } from './agents';
 import {
   applyFactionRelationChanges,
   applyReputationChanges,
@@ -50,7 +51,7 @@ import {
 const MINUTES_PER_DAY = 24 * 60;
 
 export function createWorldState(startMinutes: number): WorldRuntimeState {
-  return { events: [], chronicle: [], nextEventSeq: 1, modifiers: [], firedEventIds: [], regions: {}, factionRelations: {}, generatedQuests: [], nextGeneratedQuestSeq: 1, unitMemories: {}, story: createStoryState(startMinutes) };
+  return { events: [], chronicle: [], nextEventSeq: 1, modifiers: [], firedEventIds: [], regions: {}, factionRelations: {}, generatedQuests: [], nextGeneratedQuestSeq: 1, unitMemories: {}, story: createStoryState(startMinutes), agents: {} };
 }
 
 export interface DeathHint {
@@ -61,9 +62,9 @@ export interface DeathHint {
 }
 
 const isUnitDead = (instance: UnitInstance | undefined) => !!instance && (instance.isDead === true || instance.currentHp === 0);
-const isUnitAlive = (state: PlayerState, unitId: string) => !!state.unitInstances[unitId] && !isUnitDead(state.unitInstances[unitId]);
+export const isUnitAlive = (state: PlayerState, unitId: string) => !!state.unitInstances[unitId] && !isUnitDead(state.unitInstances[unitId]);
 /** 確實死亡過（潛伏單位雖不在場，但沒有死亡）。 */
-const hasUnitDied = (instance: UnitInstance | undefined) => isUnitDead(instance) && !instance?.isDormant;
+export const hasUnitDied = (instance: UnitInstance | undefined) => isUnitDead(instance) && !instance?.isDormant;
 
 /** 玩家角色的顯示名稱，例如「冒險者亞瑟」。 */
 export const getCharacterDisplayName = (player: Pick<PlayerState, 'name' | 'classId'>) =>
@@ -76,7 +77,7 @@ function isUniqueUnit(unitId: string): boolean {
 }
 
 /** 事件寫入的唯一入口：配發序號、依傳播範圍決定得知事件的勢力，並附加到紀錄。 */
-function appendEvent(state: PlayerState, event: Omit<WorldEvent, 'id' | 'awareFactionIds'> & { knownByFactions?: string[] }): { state: PlayerState; event: WorldEvent } {
+export function appendEvent(state: PlayerState, event: Omit<WorldEvent, 'id' | 'awareFactionIds'> & { knownByFactions?: string[] }): { state: PlayerState; event: WorldEvent } {
   const world = state.world;
   const { knownByFactions, ...fields } = event;
   const awareFactionIds = getAwareFactionIds(state, { knownBy: event.knownBy, mapId: event.mapId, witnessUnitIds: event.witnessUnitIds, knownByFactions });
@@ -246,34 +247,45 @@ function settleRegion(state: PlayerState, mapId: string): PlayerState {
   return next;
 }
 
-/** 靜態事件的條件是否成立（尚未觸發、旗標、單位生死、玩家所在地區、聲望與勢力關係）。 */
-export function canTriggerEvent(state: PlayerState, event: EventStatic): boolean {
+/**
+ * 靜態事件的條件是否成立（尚未觸發、旗標、單位生死、發生地區、聲望與勢力關係）。
+ * 發生地區預設為玩家所在地；重要角色觸發的事件以角色居所判定（O34）。
+ */
+export function canTriggerEvent(state: PlayerState, event: EventStatic, atMapId: string = state.currentMapId): boolean {
   if (state.world.firedEventIds.includes(event.id)) return false;
   const requires = event.requires ?? {};
   return (requires.flags ?? []).every((flag) => state.storyFlags[flag] === true) &&
     !(event.excludes?.flags ?? []).some((flag) => state.storyFlags[flag] === true) &&
     (requires.unitsAlive ?? []).every((unitId) => isUnitAlive(state, unitId)) &&
     (requires.unitsDead ?? []).every((unitId) => hasUnitDied(state.unitInstances[unitId])) &&
-    (!requires.mapIds?.length || requires.mapIds.includes(state.currentMapId)) &&
+    (!requires.mapIds?.length || requires.mapIds.includes(atMapId)) &&
     matchesFactionConditions(state, requires);
 }
 
-/** 事件發生地：玩家所在的條件地區，其次是條件中居民的所在地，最後為玩家所在地。 */
-function resolveEventMapId(state: PlayerState, event: EventStatic): string {
+/** 事件發生地：指定地區（玩家所在地或角色居所）符合條件時為該地，其次是條件地區、條件中居民的所在地，最後為指定地區。 */
+function resolveEventMapId(event: EventStatic, atMapId: string): string {
   const mapIds = event.requires?.mapIds ?? [];
-  if (mapIds.includes(state.currentMapId)) return state.currentMapId;
+  if (mapIds.includes(atMapId)) return atMapId;
   if (mapIds.length) return mapIds[0];
   for (const unitId of [...(event.requires?.unitsDead ?? []), ...(event.requires?.unitsAlive ?? [])]) {
     const unit = getWorldUnitById(unitId);
     if (unit && !unit.requiresEncounter) return unit.homeMapId;
   }
-  return state.currentMapId;
+  return atMapId;
+}
+
+/** 套用靜態事件的選項：重要角色決策觸發時，以角色居所判定條件與發生地，並在事件記下決策者與動機（O34）。 */
+export interface ScenarioEventOptions {
+  atMapId?: string;
+  agent?: NonNullable<WorldEvent['agent']>;
 }
 
 /** 套用靜態事件：設定/清除旗標、建立世界修正、改變聲望與勢力關係，並寫入事件紀錄。條件不成立時不改動狀態。 */
-export function applyScenarioEvent(state: PlayerState, event: EventStatic, cause: string): PlayerState {
-  if (!canTriggerEvent(state, event)) return state;
-  const mapId = resolveEventMapId(state, event);
+export function applyScenarioEvent(state: PlayerState, event: EventStatic, cause: string, options: ScenarioEventOptions = {}): PlayerState {
+  const atMapId = options.atMapId ?? state.currentMapId;
+  if (!canTriggerEvent(state, event, atMapId)) return state;
+  // 重要角色觸發的事件發生在角色居所（條件地區已以居所驗證）。
+  const mapId = options.agent ? atMapId : resolveEventMapId(event, atMapId);
   const eventMap = getMapById(mapId);
   const storyFlags = { ...state.storyFlags };
   for (const flag of event.effects.setFlags ?? []) storyFlags[flag] = true;
@@ -295,6 +307,7 @@ export function applyScenarioEvent(state: PlayerState, event: EventStatic, cause
     type: 'scenario_event', gameTimeMinutes: state.gameTimeMinutes, mapId, summary: event.summary, knownBy: event.knownBy,
     ...(event.knownByFactions?.length ? { knownByFactions: event.knownByFactions } : {}),
     witnessUnitIds: eventMap ? getResidentUnitIds(eventMap).filter((unitId) => isUnitAlive(state, unitId)) : [], cause, eventId: event.id,
+    ...(options.agent ? { agent: options.agent, detail: `${event.summary}${getUnitDisplayName(options.agent.unitId)}這麼做的用意：${options.agent.intent}` } : {}),
     changes: {
       ...(event.effects.setFlags?.length ? { setFlags: event.effects.setFlags } : {}),
       ...(event.effects.clearFlags?.length ? { clearFlags: event.effects.clearFlags } : {}),
@@ -493,6 +506,8 @@ export function finalizeWorld(previous: PlayerState, next: PlayerState, hints: R
   state = applyActionReputation(previous, state, newDeaths);
   state = resolveOrphanedQuests(state);
   state = settleRegion(state, state.currentMapId);
+  // 重要角色（O34）：處理死亡角色的接手，並在跨過遊戲日時依規則後備每日決策一次。
+  state = settleAgents(previous, state);
   // 自動事件、劇情片段完成、卡死保底與幕期限可能互相使對方的條件成立；交替結算到沒有變化為止（有上限，避免循環）。
   for (let pass = 0; pass <= storyletsDatabase.length + 2; pass += 1) {
     const before = state;
@@ -611,6 +626,17 @@ export function getEventKnowledgeLevel(state: PlayerState, event: WorldEvent, un
   if (!knowsResult) return undefined;
   if (state.gameTimeMinutes - event.gameTimeMinutes >= aiContextConfig.knowledge.legendAfterDays * MINUTES_PER_DAY) return 'legend';
   return heard ? 'rumor' : 'public';
+}
+
+/**
+ * 某個單位已知的事件與認知層級（O34 知識範圍）：重要角色的條件判定與日後的 AI 決策上下文只使用這些事件，不提供全知世界狀態。
+ * 已壓縮進編年史的事件不在紀錄中，以「傳說」看待。
+ */
+export function getKnownEventsForUnit(state: PlayerState, unitId: string): { event: WorldEvent; level: EventKnowledgeLevel; knows: string }[] {
+  return state.world.events.flatMap((event) => {
+    const level = getEventKnowledgeLevel(state, event, unitId);
+    return level ? [{ event, level, knows: describeKnowledge(event, level) }] : [];
+  });
 }
 
 /** 各認知層級能說出的內容；經過（detail）只交給親眼目擊者。 */

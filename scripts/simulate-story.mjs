@@ -42,6 +42,7 @@ if (summary.stuckGroups.length) {
 }
 console.log(`AI 上下文：最大 ${summary.maxContextChars} 字元，超出預算 ${summary.contextOverBudgetRuns} 次；事件紀錄最多 ${summary.maxFinalEvents} 件，編年史最多 ${summary.maxChronicleLines} 行`);
 if (summary.stress) console.log(`壓力測試（灌入 ${config.stressEvents} 件事件）：保留 ${summary.stress.events} 件、編年史 ${summary.stress.chronicleLines} 行、上下文 ${summary.stress.contextChars} 字元${summary.stress.overBudget ? '（超出預算）' : ''}`);
+console.log(`重要角色行動（規則後備）：${Object.entries(summary.agentActions).map(([action, entry]) => `${action} ${entry.total} 次（${percent(entry.runs)} 的模擬）`).join('、') || '無'}`);
 console.log(`結局判定不可重現：${summary.irreproducibleEndings} 次；同一種子重跑一致：${summary.deterministic ? '是' : '否'}`);
 
 if (summary.stallGroups.length) {

@@ -1,5 +1,5 @@
-import type { GeneratedQuest, PlayerState, StoryMessage, StoryState, UnitMemoryNote, WorldEvent, WorldModifier, WorldRuntimeState } from '../types/game';
-import { clampReputation, createDefaultUnitInstance, createInitialReputation, FACTION_RELATION_STATUSES, factionData, getBaseExpForLevel, getEventById, getCharacterClassById, getFactionById, getItemById, getMapById, getPlayerResourceCaps, getQuestTemplateById, getSpeciesById, getStoryActById, getStoryEndingById, getStoryletById, getUnitAbilities, getUnitLevelCap, getWorldUnitById, MAX_UNIT_LEVEL, PLAYER_UNIT_ID, scenario, unitTemplatesDatabase } from '../data/staticData';
+import type { AgentRuntimeState, GeneratedQuest, PlayerState, StoryMessage, StoryState, UnitMemoryNote, WorldEvent, WorldModifier, WorldRuntimeState } from '../types/game';
+import { AGENT_ACTION_TYPES, clampReputation, createDefaultUnitInstance, createInitialReputation, FACTION_RELATION_STATUSES, factionData, getBaseExpForLevel, getEventById, getCharacterClassById, getFactionById, getItemById, getMapById, getPlayerResourceCaps, getQuestTemplateById, getSpeciesById, getStoryActById, getStoryEndingById, getStoryletById, getUnitAbilities, getUnitLevelCap, getWorldUnitById, MAX_UNIT_LEVEL, PLAYER_UNIT_ID, scenario, unitTemplatesDatabase } from '../data/staticData';
 import { isValidGameTime } from './gameTime';
 import { isValidSpeciesClassCombo, UNIT_STAT_KEYS } from './unitGrowth';
 import { createCombat } from './combatState';
@@ -13,7 +13,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every((entry) => typeof entry === 'string');
-const EVENT_TYPES = ['unit_death', 'unit_respawn', 'unit_occupation', 'quest_failed', 'quest_transferred', 'reputation_change', 'scenario_event', 'story_progress'];
+const EVENT_TYPES = ['unit_death', 'unit_respawn', 'unit_occupation', 'quest_failed', 'quest_transferred', 'reputation_change', 'scenario_event', 'story_progress', 'agent_action'];
 const KNOWN_BY = ['witnesses', 'faction', 'region', 'world'];
 const DEATH_CAUSES = ['combat', 'self_inflicted', 'misadventure', 'unknown'];
 
@@ -30,6 +30,8 @@ function isWorldEvent(value: unknown): value is WorldEvent {
     if (!isRecord(death) || typeof death.victimUnitId !== 'string' || typeof death.victimName !== 'string' || !DEATH_CAUSES.includes(String(death.cause)) ||
         (death.killerUnitId !== undefined && typeof death.killerUnitId !== 'string') || (death.killerName !== undefined && typeof death.killerName !== 'string')) return false;
   }
+  if (value.agent !== undefined && !(isRecord(value.agent) && typeof value.agent.unitId === 'string' && typeof value.agent.intent === 'string' &&
+    [...AGENT_ACTION_TYPES, 'succession'].includes(String(value.agent.action)))) return false;
   return value.changes === undefined || (isRecord(value.changes) &&
     Object.values(value.changes).every((entry) => isStringArray(entry)));
 }
@@ -103,7 +105,7 @@ function normalizeWorldState(value: unknown): WorldRuntimeState | null {
       !Number.isSafeInteger(value.nextEventSeq) || (value.nextEventSeq as number) < 1 ||
       !Array.isArray(value.modifiers) || !value.modifiers.every(isWorldModifier) || !isStringArray(value.firedEventIds) || !isRecord(value.regions) ||
       !isRecord(value.factionRelations) || !Array.isArray(value.generatedQuests) ||
-      !Number.isSafeInteger(value.nextGeneratedQuestSeq) || (value.nextGeneratedQuestSeq as number) < 1 || !isRecord(value.unitMemories)) return null;
+      !Number.isSafeInteger(value.nextGeneratedQuestSeq) || (value.nextGeneratedQuestSeq as number) < 1 || !isRecord(value.unitMemories) || !isRecord(value.agents)) return null;
   const story = normalizeStoryState(value.story);
   if (!story) return null;
   const generatedQuests: GeneratedQuest[] = [];
@@ -136,6 +138,20 @@ function normalizeWorldState(value: unknown): WorldRuntimeState | null {
     if (!isKnownUnitId(unitId)) continue;
     unitMemories[unitId] = notes as UnitMemoryNote[];
   }
+  // 重要角色（O34）：冷卻日、接手對象與接手者；靜態資料移除的單位與行動略過，其餘格式錯誤即整份拒絕。
+  const agents: WorldRuntimeState['agents'] = {};
+  for (const [unitId, record] of Object.entries(value.agents)) {
+    if (!isRecord(record) || !isRecord(record.actionDays) || !Object.values(record.actionDays).every((day) => Number.isSafeInteger(day) && (day as number) >= 1) ||
+        (record.inheritedFrom !== undefined && !isStringArray(record.inheritedFrom)) || (record.succeededBy !== undefined && typeof record.succeededBy !== 'string')) return null;
+    if (!isKnownUnitId(unitId)) continue;
+    const actionDays = Object.fromEntries(Object.entries(record.actionDays).filter(([action]) => AGENT_ACTION_TYPES.includes(action as never))) as AgentRuntimeState['actionDays'];
+    const inheritedFrom = (record.inheritedFrom as string[] | undefined)?.filter(isKnownUnitId);
+    agents[unitId] = {
+      actionDays,
+      ...(inheritedFrom?.length ? { inheritedFrom } : {}),
+      ...(record.succeededBy !== undefined ? { succeededBy: record.succeededBy === '' || isKnownUnitId(record.succeededBy as string) ? record.succeededBy as string : '' } : {})
+    };
+  }
   return {
     events: value.events as WorldEvent[],
     chronicle: value.chronicle,
@@ -148,7 +164,8 @@ function normalizeWorldState(value: unknown): WorldRuntimeState | null {
     generatedQuests,
     nextGeneratedQuestSeq: value.nextGeneratedQuestSeq as number,
     unitMemories,
-    story
+    story,
+    agents
   };
 }
 

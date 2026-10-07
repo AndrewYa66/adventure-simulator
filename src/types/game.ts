@@ -167,6 +167,89 @@ export interface UnitStatic extends UnitBuild {
       applyUnconsciousTurnsOnFailure?: number;
     };
   }[];
+  /** 重要角色（O34）：設定後每個遊戲日依盤算決策一次；未設定的單位只有規則行為。 */
+  agent?: AgentProfileStatic;
+}
+
+/** 重要角色的行動種類（O34 第 1 階段）。 */
+export type AgentActionType = 'idle' | 'post_quest' | 'trigger_event' | 'change_faction_relation';
+
+/** 重要角色規則後備的條件：旗標、聲望與勢力關係，以及「角色已知」的死亡與劇本事件（依認知層級判定，不是全知）。 */
+export interface AgentCondition extends FactionConditions {
+  flags?: string[];
+  excludesFlags?: string[];
+  /** 角色知道這些單位已經死亡。 */
+  knownDeaths?: string[];
+  /** 角色知道這些劇本事件（events.json）已經發生。 */
+  knownEvents?: string[];
+}
+
+/** 規則後備的一條規則；依序嘗試，第一條條件成立且通過驗證者即為當天的行動。 */
+export interface AgentFallbackRule {
+  action: AgentActionType;
+  /** 寫手撰寫的動機（一句話），寫入事件經過。 */
+  intent: string;
+  when?: AgentCondition;
+  /** post_quest：任務範本與數量（未填時取範本下限）；目標由規則從候選中選第一個。 */
+  templateId?: string;
+  quantity?: number;
+  /** trigger_event：觸發方式為 agent 的事件。 */
+  eventId?: string;
+  /** change_faction_relation：對象勢力、方向（每次一階）與停止的關係。 */
+  factionId?: string;
+  direction?: 'worse' | 'better';
+  until?: FactionRelationStatus;
+}
+
+/** 重要角色的角色設定（units.json 的 agent）。 */
+export interface AgentProfileStatic {
+  /** 盤算：角色想達成的事（給 AI 的內心動機，不直接說破）。 */
+  goals: string[];
+  /** 個性。 */
+  traits: string[];
+  /** 擔任領袖的勢力；只有領袖能改變勢力關係。 */
+  leaderOf?: string;
+  /** 死亡後優先接手盤算的單位（依序）；都不可用時由同勢力、同職階的存活居民接手。 */
+  successors?: string[];
+  ruleFallback: AgentFallbackRule[];
+}
+
+/** 重要角色的一次決策（規則後備與日後的 AI 決策共用）。 */
+export interface AgentDecision {
+  unitId: string;
+  action: AgentActionType;
+  params: {
+    templateId?: string;
+    targetUnitId?: string;
+    itemId?: string | null;
+    quantity?: number;
+    rewardGold?: number;
+    rewardItems?: { itemId: string; quantity: number }[];
+    eventId?: string;
+    factionId?: string;
+    direction?: 'worse' | 'better';
+  };
+  intent: string;
+  /** 決策來源：規則後備或 AI（第 2 階段）。 */
+  source: 'rule' | 'ai';
+}
+
+/** 重要角色的世界狀態（世界存檔）。 */
+export interface AgentRuntimeState {
+  /** 各行動最後一次執行的遊戲日（冷卻用）。 */
+  actionDays: Partial<Record<AgentActionType, number>>;
+  /** 接手的已故角色（依接手順序）；其盤算與規則後備併入本角色。 */
+  inheritedFrom?: string[];
+  /** 本角色死亡後的接手者；空字串代表沒有人接手（已處理過）。 */
+  succeededBy?: string;
+}
+
+/** 重要角色決策規則（agent_rules.json）。 */
+export interface AgentRulesStatic {
+  /** 跨多日的行動最多補算幾天（只算最近的天數），避免一次補算過多。 */
+  maxCatchUpDays: number;
+  /** 各行動的顯示名稱與冷卻（遊戲日）：同一角色兩次同種行動至少相隔的天數。 */
+  actions: Record<AgentActionType, { cooldownDays: number; label: string }>;
 }
 
 /** 共用查詢層回傳的正規化單位視圖；stats/expReward 依種族、職階、等級計算，source 保留完整樣板。 */
@@ -341,9 +424,11 @@ export interface EventStatic {
   title: string;
   /**
    * auto：條件成立時由遊戲自動觸發；aiProposal：只能由 AI 提議，前端驗證條件後套用；storylet：劇情片段完成時觸發（O31）；
-   * stuck：目前幕卡死超過寬限期時觸發的保底事件（幕的 stuckEventId，O32）。
+   * stuck：目前幕卡死超過寬限期時觸發的保底事件（幕的 stuckEventId，O32）；agent：重要角色決策觸發（O34）。
    */
-  trigger: 'auto' | 'aiProposal' | 'storylet' | 'stuck';
+  trigger: 'auto' | 'aiProposal' | 'storylet' | 'stuck' | 'agent';
+  /** trigger 為 agent 時可觸發此事件的重要角色（含接手其盤算的人，O34）；requires.mapIds 以角色居所判定。 */
+  agentUnitIds?: string[];
   requires?: { flags?: string[]; unitsAlive?: string[]; unitsDead?: string[]; mapIds?: string[] } & FactionConditions;
   excludes?: { flags?: string[] };
   effects: {
@@ -670,7 +755,7 @@ export type DeathCause = 'combat' | 'self_inflicted' | 'misadventure' | 'unknown
  */
 export interface WorldEvent {
   id: string;
-  type: 'unit_death' | 'unit_respawn' | 'unit_occupation' | 'quest_failed' | 'quest_transferred' | 'reputation_change' | 'scenario_event' | 'story_progress';
+  type: 'unit_death' | 'unit_respawn' | 'unit_occupation' | 'quest_failed' | 'quest_transferred' | 'reputation_change' | 'scenario_event' | 'story_progress' | 'agent_action';
   gameTimeMinutes: number;
   mapId: string;
   summary: string;
@@ -693,6 +778,8 @@ export interface WorldEvent {
   characterSeq?: number;
   /** 由另一事件衍生時的來源事件 ID，例如殺害造成的聲望變化引用死亡事件。 */
   sourceEventId?: string;
+  /** 重要角色決策造成的事件（O34）：決策者、行動與動機（動機同時寫在 detail，只有目擊者知道）。 */
+  agent?: { unitId: string; action: AgentActionType | 'succession'; intent: string };
 }
 
 /** 世界修正：一律為相對值（加減或倍率），疊加在公式數值之上，靜態數值調整後仍自動生效。 */
@@ -727,6 +814,8 @@ export interface WorldRuntimeState {
   unitMemories: Record<string, UnitMemoryNote[]>;
   /** 主線進度（O31）。 */
   story: StoryState;
+  /** 重要角色的冷卻與接手狀態（O34）；只保存有紀錄的角色。 */
+  agents: Record<string, AgentRuntimeState>;
 }
 
 /** 人物記得的一件事（由 AI 的 memoryNotes 經前端驗證後寫入）。 */

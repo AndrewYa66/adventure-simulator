@@ -1,5 +1,7 @@
 import type {
   AbilityScores,
+  AgentActionType,
+  AgentRulesStatic,
   ItemStatic,
   CharacterClassStatic,
   EventStatic,
@@ -50,6 +52,7 @@ import rawFactions from './factions.json';
 import rawQuestTemplates from './quest_templates.json';
 import rawAIContext from './ai_context.json';
 import rawStory from './story.json';
+import rawAgentRules from './agent_rules.json';
 
 // 進行靜態型別轉型，確保導出的資料陣列完全符合 DTO 規範
 export const itemsDatabase: ItemStatic[] = rawItems as ItemStatic[];
@@ -69,6 +72,9 @@ export const questTemplateData: QuestTemplateDataStatic = rawQuestTemplates as Q
 export const questTemplatesDatabase: QuestTemplateStatic[] = questTemplateData.templates;
 export const aiContextConfig: AIContextConfigStatic = rawAIContext as AIContextConfigStatic;
 export const storyData: StoryDataStatic = rawStory as StoryDataStatic;
+export const agentRules: AgentRulesStatic = rawAgentRules as AgentRulesStatic;
+/** 重要角色的行動種類（O34 第 1 階段）。 */
+export const AGENT_ACTION_TYPES: AgentActionType[] = ['idle', 'post_quest', 'trigger_event', 'change_faction_relation'];
 /** 依順序排列的幕。 */
 export const storyActs: StoryActStatic[] = [...storyData.acts].sort((a, b) => a.order - b.order);
 export const storyletsDatabase: StoryletStatic[] = storyData.storylets;
@@ -194,6 +200,9 @@ export const getEncounterLevelCap = (unitId: string): number => {
 /** 單位樣板（units.json）。 */
 export const getUnitTemplateById = (id: string): UnitStatic | undefined =>
   unitsDatabase.find((unit) => unit.id === id);
+
+/** 設有 agent 的重要角色（O34）。 */
+export const getAgentUnitIds = (): string[] => unitsDatabase.filter((unit) => unit.agent).map((unit) => unit.id);
 
 export const getShopById = (id: string): ShopStatic | undefined =>
   shopsDatabase.find((shop) => shop.id === id);
@@ -515,7 +524,16 @@ export function validateEventData(): string[] {
     if (seen.has(event.id)) issues.push(`事件 ID 重複：${event.id}`);
     seen.add(event.id);
     if (!event.title?.trim() || !event.summary?.trim()) issues.push(`${label}: 缺少標題或描述`);
-    if (!['auto', 'aiProposal', 'storylet', 'stuck'].includes(event.trigger)) issues.push(`${label}: 無效觸發方式 ${event.trigger}`);
+    if (!['auto', 'aiProposal', 'storylet', 'stuck', 'agent'].includes(event.trigger)) issues.push(`${label}: 無效觸發方式 ${event.trigger}`);
+    if (event.trigger === 'agent') {
+      if (!event.agentUnitIds?.length) issues.push(`${label}: 重要角色觸發的事件須列出 agentUnitIds`);
+      for (const unitId of event.agentUnitIds ?? []) {
+        if (!getUnitTemplateById(unitId)?.agent) issues.push(`${label}: agentUnitIds 中的 ${unitId} 不是重要角色（沒有 agent）`);
+      }
+      if (!unitsDatabase.some((unit) => unit.agent?.ruleFallback.some((rule) => rule.action === 'trigger_event' && rule.eventId === event.id))) {
+        issues.push(`${label}: 沒有任何重要角色的規則後備會觸發此事件`);
+      }
+    } else if (event.agentUnitIds !== undefined) issues.push(`${label}: 只有觸發方式為 agent 的事件可設定 agentUnitIds`);
     if (event.trigger === 'stuck') {
       if (!storyData.acts.some((act) => act.stuckEventId === event.id)) issues.push(`${label}: 卡死保底事件沒有任何幕引用`);
       // 保底事件必須在玩家身處何處都能觸發。
@@ -903,5 +921,65 @@ export function validateStoryData(): string[] {
   return issues;
 }
 
+/**
+ * 驗證重要角色（O34）：決策規則的數值、角色的盤算與個性、規則後備的行動與參照、接手人選。
+ * 規則後備的最後一條必須是沒有條件的 idle，保證每天都有合法行動。
+ */
+export function validateAgentData(): string[] {
+  const issues: string[] = [];
+  if (!Number.isInteger(agentRules.maxCatchUpDays) || agentRules.maxCatchUpDays < 1) issues.push('重要角色規則 maxCatchUpDays 須為正整數');
+  for (const action of AGENT_ACTION_TYPES) {
+    const rule = agentRules.actions?.[action];
+    if (!rule || !rule.label?.trim() || !Number.isInteger(rule.cooldownDays) || rule.cooldownDays < 0) issues.push(`重要角色規則 actions.${action} 須有名稱與 0 以上的整數冷卻`);
+  }
+  for (const unit of unitsDatabase) {
+    const agent = unit.agent;
+    if (!agent) continue;
+    const label = `重要角色 ${unit.id}`;
+    if (unit.population) issues.push(`${label}: 族群樣板不可是重要角色`);
+    if (!agent.goals?.length || agent.goals.some((goal) => !goal?.trim())) issues.push(`${label}: 至少需要一項盤算（goals）`);
+    if (!agent.traits?.length || agent.traits.some((trait) => !trait?.trim())) issues.push(`${label}: 至少需要一項個性（traits）`);
+    if (agent.leaderOf !== undefined && (!getFactionById(agent.leaderOf) || agent.leaderOf !== unit.factionId)) issues.push(`${label}: leaderOf 須為自己所屬的勢力`);
+    for (const successorId of agent.successors ?? []) {
+      const successor = getUnitTemplateById(successorId);
+      if (!successor || successor.requiresEncounter || successorId === unit.id) issues.push(`${label}: 接手人選 ${successorId} 須為其他地區居民`);
+    }
+    const rules = agent.ruleFallback ?? [];
+    const last = rules[rules.length - 1];
+    if (!last || last.action !== 'idle' || last.when) issues.push(`${label}: 規則後備的最後一條必須是沒有條件的 idle`);
+    for (const [index, rule] of rules.entries()) {
+      const where = `${label} 規則後備第 ${index + 1} 條`;
+      if (!AGENT_ACTION_TYPES.includes(rule.action)) issues.push(`${where}: 無效行動 ${rule.action}`);
+      if (!rule.intent?.trim()) issues.push(`${where}: 缺少動機（intent）`);
+      const when = rule.when ?? {};
+      validateFactionConditions(where, when, issues);
+      for (const unitId of when.knownDeaths ?? []) {
+        if (!getUnitTemplateById(unitId)) issues.push(`${where}: 找不到單位 ${unitId}`);
+      }
+      for (const eventId of when.knownEvents ?? []) {
+        if (!getEventById(eventId)) issues.push(`${where}: 找不到事件 ${eventId}`);
+      }
+      if (rule.action === 'post_quest') {
+        const template = rule.templateId ? getQuestTemplateById(rule.templateId) : undefined;
+        if (!template) issues.push(`${where}: 找不到任務範本 ${rule.templateId}`);
+        if (unit.requiresEncounter || !unit.factionId) issues.push(`${where}: 只有屬於勢力的地區居民可以發布委託`);
+        if (template && rule.quantity !== undefined && !(Number.isInteger(rule.quantity) && rule.quantity >= template.quantity.min && rule.quantity <= template.quantity.max)) issues.push(`${where}: 數量超出範本範圍`);
+      }
+      if (rule.action === 'trigger_event') {
+        const event = rule.eventId ? getEventById(rule.eventId) : undefined;
+        if (!event || event.trigger !== 'agent') issues.push(`${where}: 事件 ${rule.eventId} 不存在或觸發方式不是 agent`);
+        else if (!event.agentUnitIds?.includes(unit.id)) issues.push(`${where}: 事件 ${event.id} 的 agentUnitIds 沒有列出 ${unit.id}`);
+      }
+      if (rule.action === 'change_faction_relation') {
+        if (!agent.leaderOf) issues.push(`${where}: 只有勢力領袖（leaderOf）可以改變勢力關係`);
+        if (!rule.factionId || !getFactionById(rule.factionId) || rule.factionId === agent.leaderOf) issues.push(`${where}: 對象勢力 ${rule.factionId} 無效`);
+        if (!['worse', 'better'].includes(String(rule.direction))) issues.push(`${where}: direction 須為 worse 或 better`);
+        if (rule.until !== undefined && !FACTION_RELATION_STATUSES.includes(rule.until)) issues.push(`${where}: until 不是有效的勢力關係`);
+      }
+    }
+  }
+  return issues;
+}
+
 /** 全部靜態資料驗證；建置前由 scripts/validate-data.mjs 執行，有錯誤即中止建置。 */
-export const validateGameData = (): string[] => [...validateGrowthData(), ...validateWorldUnitData(), ...validateEventData(), ...validateFactionData(), ...validateQuestTemplateData(), ...validateStoryData()];
+export const validateGameData = (): string[] => [...validateGrowthData(), ...validateWorldUnitData(), ...validateEventData(), ...validateFactionData(), ...validateQuestTemplateData(), ...validateStoryData(), ...validateAgentData()];

@@ -20,7 +20,38 @@
       }
     ],
     "alignment": "守序善良",
-    "description": "負責管理橡木村並發布村莊委託。"
+    "description": "負責管理橡木村並發布村莊委託。",
+    "agent": {
+      "goals": [
+        "保護橡木村的村民與田地",
+        "讓綠林古道恢復商隊通行"
+      ],
+      "traits": [
+        "謹慎",
+        "重承諾",
+        "對外來者先觀察再信任"
+      ],
+      "leaderOf": "FAC-001",
+      "successors": [
+        "NPC-005"
+      ],
+      "ruleFallback": [
+        {
+          "action": "trigger_event",
+          "eventId": "EVT-007",
+          "intent": "村民已經人心惶惶，村長決定讓巡守隊沿古道加強巡邏。"
+        },
+        {
+          "action": "post_quest",
+          "templateId": "QTPL-001",
+          "intent": "古道上的哥布林讓村民不敢出門，村長拿出積蓄懸賞討伐。"
+        },
+        {
+          "action": "idle",
+          "intent": "村裡暫時無事，村長忙著處理日常村務。"
+        }
+      ]
+    }
   },
   {
     "id": "NPC-002",
@@ -209,7 +240,37 @@
         }
       ]
     },
-    "tactics": "巢穴酋長會觀察冒險者，再以裂地重擊打亂其節奏；不會因玩家生命低而取消攻擊。"
+    "tactics": "巢穴酋長會觀察冒險者，再以裂地重擊打亂其節奏；不會因玩家生命低而取消攻擊。",
+    "agent": {
+      "goals": [
+        "佔據綠林古道、劫掠往來的商隊",
+        "讓灰燼部族壯大，不向人類低頭"
+      ],
+      "traits": [
+        "狡猾",
+        "好鬥",
+        "重視部族的面子"
+      ],
+      "leaderOf": "FAC-008",
+      "ruleFallback": [
+        {
+          "action": "change_faction_relation",
+          "factionId": "FAC-001",
+          "direction": "worse",
+          "until": "war",
+          "when": {
+            "flags": [
+              "巡守隊加強巡邏"
+            ]
+          },
+          "intent": "人類的巡守隊沿古道搜索，格羅姆認定橡木村要開戰了。"
+        },
+        {
+          "action": "idle",
+          "intent": "格羅姆在巢穴裡盤點掠奪來的財物，等待下一次機會。"
+        }
+      ]
+    }
   },
   {
     "id": "MON-004",

@@ -202,7 +202,9 @@ export default function App() {
     // 劇情片段完成與推進幕另以主線訊息呈現，不重複列在世界變化中。
     const storyNotice = describeStoryProgress(player, finalized);
     if (storyNotice) setTimeout(() => appendSystemMessage(storyNotice), 0);
-    const worldChanges = newEvents.filter((event) => event.type !== 'story_progress');
+    // 重要角色在別處的決策（O34）不直接告訴玩家，之後經由傳聞與現場結果得知。
+    const worldChanges = newEvents.filter((event) => event.type !== 'story_progress' &&
+      (!event.agent || event.mapId === finalized.currentMapId || event.knownBy === 'world'));
     if (worldChanges.length) {
       // 劇情事件附帶的聲望變化另外列出（玩家行動造成的聲望事件已寫在描述中）。
       const describe = (event: typeof newEvents[number]) => event.type === 'scenario_event' && event.reputationChanges?.length

@@ -254,6 +254,22 @@ function canStillDefeat({ state, reachable }: ProgressContext, unitId: string): 
 const getOpenActStorylets = (state: PlayerState) =>
   storyletsDatabase.filter((storylet) => storylet.actId === state.world.story.currentActId && !isCompleted(state.world.story, storylet.id));
 
+/**
+ * 重要角色觸發的事件仍有人能觸發（O34）：列出的角色存活或潛伏中（日後可能出現），或其盤算沿接手鏈交到存活者手上；
+ * 死亡但尚未處理接手時視為仍可能（寧可漏報）。
+ */
+function canAgentEventStillFire(state: PlayerState, event: EventStatic): boolean {
+  const canAct = (unitId: string, visited: Set<string>): boolean => {
+    if (visited.has(unitId)) return false;
+    visited.add(unitId);
+    const instance = state.unitInstances[unitId];
+    if (!instance || instance.isDormant || (!instance.isDead && instance.currentHp !== 0)) return !!instance;
+    const successorId = state.world.agents[unitId]?.succeededBy;
+    return successorId === undefined || (!!successorId && canAct(successorId, visited));
+  };
+  return (event.agentUnitIds ?? []).some((unitId) => canAct(unitId, new Set()));
+}
+
 /** 事件日後仍可能觸發：尚未觸發、未被排除、需要存活的單位未死、需要死亡的單位可擊倒、發生地點可抵達；完成事件需本幕尚未完成的片段引用。 */
 function canEventStillFire(progress: ProgressContext, event: EventStatic): boolean {
   const { state, reachable } = progress;
@@ -263,7 +279,8 @@ function canEventStillFire(progress: ProgressContext, event: EventStatic): boole
     (requires.unitsAlive ?? []).every((unitId) => { const instance = state.unitInstances[unitId]; return !!instance && !instance.isDead && instance.currentHp !== 0; }) &&
     (requires.unitsDead ?? []).every((unitId) => canStillDefeat(progress, unitId)) &&
     (!requires.mapIds?.length || requires.mapIds.some((mapId) => reachable.has(mapId))) &&
-    (event.trigger !== 'storylet' || getOpenActStorylets(state).some((storylet) => storylet.onComplete.eventIds?.includes(event.id)));
+    (event.trigger !== 'storylet' || getOpenActStorylets(state).some((storylet) => storylet.onComplete.eventIds?.includes(event.id))) &&
+    (event.trigger !== 'agent' || canAgentEventStillFire(state, event));
 }
 
 /** 旗標已成立，或日後仍可能由事件（不含卡死保底事件）或本幕尚未完成的片段設定。 */

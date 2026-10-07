@@ -9,6 +9,7 @@ import { formatGameTime } from '../utils/gameTime';
 import { getCharacterLegacyForAI, getProposableEvents, getWorldContextForAI } from '../utils/worldEvents';
 import { getMemoryEligibleUnitIds, getUnitMemoriesForAI } from '../utils/unitMemory';
 import { getStoryContextForAI } from '../utils/storylets';
+import { getEffectiveAgentProfile } from '../utils/agents';
 
 /**
  * AI 上下文組裝器（O39）：集中負責主持人 AI 每次呼叫的上下文。
@@ -173,6 +174,7 @@ function buildRules(): string {
 - 一般戰鬥由遊戲規則結算，不可敘事中自行宣告擊敗或扣除敵人。
 - 每次回應都必須包含 serviceRequest；只有玩家明確要求使用、購買某項服務（例如住店、休息一晚）時，才從「當前可使用服務」清單填入 shopId 與 serviceId，否則設為 null。詢問價格或服務內容不算使用。服務的費用、恢復效果與耗時由遊戲端結算，不可同時用 hpChange/mpChange/goldChange 描述同一服務，也不可在 storyText 宣稱已付款或已恢復；若清單中沒有對應服務，只能說明目前無法使用。
 - 遊戲時間由遊戲依行動類型推進；玩家要求原地等待時由遊戲處理，AI 不可在敘事中自行跳過時間。玩家要求等待、睡覺或停留數天等長時間時，本回合只經過一般回合時間：storyText 不得描述數小時以上的時間流逝，應說明單次等待上限為 8 小時，請玩家分次等待或使用旅店休息。
+- 在場人物的 agenda 是重要角色的盤算（goals）與個性（traits），屬於內心動機：依此揣摩他的語氣、立場與取捨，可透過言行流露，但不可讓他直接把盤算說給玩家聽，也不可替他做出世界事件以外的重大行動（重要角色自己的行動由遊戲每日決策並寫入世界事件）。
 - 世界事件與死因只能依「世界事件紀錄」「歷代角色」與「世界編年史」敘述，不可捏造未記錄的死亡、兇手或世界變化。
 - 認知層級：每件事的 presentKnowledge 列出此刻在場人物對它的認知（who），他們只能說出自己層級的 knows 內容。「親眼目擊」者肯定、具體地說出經過與兇手（被問到時必須明確說出是誰、做了什麼、何時何地，不可含糊帶過或推說不清楚）；「傳聞」者只能以聽說的口吻提到兇手或死因，不知道經過，可建議去問 heardFrom 中的目擊者；「公開消息」者只知道結果，可以猜測但不可斷定兇手；「傳說」者以久遠往事的口吻模糊帶過。沒有列在該事件 presentKnowledge 中的人不知道這件事。旁白也不可向玩家揭露在場者都不知道的經過；玩家角色只能從在場人物口中得知。
 - 「歷代角色」的 death 與 deeds 是前任冒險者生前造成的既成事實，該前任冒險者不是目前玩家，不可復活，玩家也不可取得其物品；在場人物是否知道某件事與該前任冒險者有關，同樣只依該事件的 presentKnowledge。
@@ -258,6 +260,11 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
     currentHp: playerState.unitInstances[unit.id]?.currentHp ?? unit.stats.hp,
     holdings: playerState.unitInstances[unit.id] ?? { gold: unit.startingGold ?? 0, inventory: unit.startingInventory ?? [] },
     description: unit.description,
+    ...(() => {
+      // 重要角色（O34）：盤算與個性是內心動機，供 AI 揣摩言行；動機的結果見世界事件。
+      const agent = getEffectiveAgentProfile(playerState.world, unit.id);
+      return agent ? { agenda: { goals: agent.goals, traits: agent.traits } } : {};
+    })(),
     ...(getUnitMemoriesForAI(playerState, unit.id).length ? { memories: getUnitMemoriesForAI(playerState, unit.id) } : {})
   }] : []);
   const visibleQuests = listVisibleQuests(playerState);

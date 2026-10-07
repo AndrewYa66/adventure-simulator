@@ -1,0 +1,9 @@
+{
+  "maxCatchUpDays": 7,
+  "actions": {
+    "idle": { "label": "維持現狀", "cooldownDays": 0 },
+    "post_quest": { "label": "發布委託", "cooldownDays": 2 },
+    "trigger_event": { "label": "採取行動", "cooldownDays": 1 },
+    "change_faction_relation": { "label": "改變勢力關係", "cooldownDays": 7 }
+  }
+}

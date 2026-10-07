@@ -34,11 +34,12 @@ import { buildAIContext } from '../services/aiContext';
  * 主線自動模擬（O33）：不呼叫 AI，以規則代替玩家與主持人 AI，大量重複遊玩同一份劇本資料，
  * 檢查是否存在卡死於某一幕的世界狀態、統計各結局可達性與保底觸發頻率，並量測長流程後的 AI 上下文大小。
  *
- * 行為模型（O34 重要角色決策完成前的替代）：
+ * 行為模型：
  * - 玩家：以「朝目標前進」為主（前往片段發生地點與目標、接取與交付任務、擊倒目標），夾雜隨機的搗亂行為
  *   （殺害在場居民、隨意移動、等待）；戰鬥一律視為玩家獲勝，不模擬戰鬥能力。
  * - 主持人 AI：給予者在場時開始候選片段、依機率提議目前可提議的事件（目標需要的旗標優先）。
- * - 世界：依機率讓某位具名居民死亡（死因不明），代替 O34 的角色行動與意外。
+ * - 世界：依機率讓某位具名居民死亡（死因不明），代表意外與玩家看不到的衝突。
+ * - 重要角色（O34）：由 finalizeWorld 每日以規則後備決策（與實際遊戲在 AI 未呼叫或失敗時相同），報告統計各行動的次數。
  * 所有狀態變更都經過 finalizeWorld，與實際遊戲走同一套世界規則。
  */
 
@@ -103,6 +104,8 @@ export interface RunResult {
   chronicleLines: number;
   /** 結局判定可重現：存讀檔後結局與尾聲段落一致，且以同一狀態重新判定得到相同段落。 */
   endingReproducible: boolean;
+  /** 重要角色寫入事件的行動次數（依行動種類；維持現狀不寫事件，不列入）。 */
+  agentActions: Record<string, number>;
   errors: string[];
 }
 
@@ -364,9 +367,14 @@ export function simulateRun(config: SimulationConfig, seed: number, profile: Sim
   let steps = 0;
   let endingSnapshot: PlayerState | undefined;
   let afterEndingLimit = limitMinutes;
+  const agentActions: Record<string, number> = {};
   for (; steps < config.maxSteps && state.gameTimeMinutes < Math.min(limitMinutes, afterEndingLimit) && !isTimelineEnded(state); steps += 1) {
     try {
+      const firstNewSeq = state.world.nextEventSeq;
       state = simulateStep(state, profile.policy, rng);
+      for (const event of state.world.events) {
+        if (event.agent && Number(event.id.slice(3)) >= firstNewSeq) agentActions[event.agent.action] = (agentActions[event.agent.action] ?? 0) + 1;
+      }
     } catch (error) {
       errors.push(`第 ${steps} 步發生例外：${error instanceof Error ? error.message : String(error)}`);
       break;
@@ -430,6 +438,7 @@ export function simulateRun(config: SimulationConfig, seed: number, profile: Sim
     finalEventCount: state.world.events.length,
     chronicleLines: state.world.chronicle.length,
     endingReproducible,
+    agentActions,
     errors
   };
 }
@@ -489,6 +498,8 @@ export interface SimulationSummary {
   /** 同一種子重跑兩次結果相同（模擬本身可重現）。 */
   deterministic: boolean;
   stress?: ReturnType<typeof stressEventLog>;
+  /** 重要角色各行動的總次數與發生過的模擬次數。 */
+  agentActions: Record<string, { total: number; runs: number }>;
 }
 
 function groupSignatures(results: RunResult[]) {
@@ -554,6 +565,14 @@ export function runSimulation(config: SimulationConfig, onProgress?: (done: numb
     irreproducibleEndings: results.filter((result) => !result.endingReproducible).length,
     errors: results.flatMap((result) => result.errors.map((message) => ({ seed: result.seed, message }))),
     deterministic: !first || JSON.stringify(rerun) === JSON.stringify(first),
+    agentActions: results.reduce<Record<string, { total: number; runs: number }>>((totals, result) => {
+      for (const [action, count] of Object.entries(result.agentActions)) {
+        const entry = (totals[action] ??= { total: 0, runs: 0 });
+        entry.total += count;
+        entry.runs += 1;
+      }
+      return totals;
+    }, {}),
     ...(stress ? { stress } : {})
   };
 }
