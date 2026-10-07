@@ -253,6 +253,8 @@ export interface ScenarioStatic {
   rules: {
     /** 擊倒地區居民（非 requiresEncounter 單位）是否依單位公式給予經驗值（後果另由勢力聲望承擔）；需遭遇的單位一律給予。 */
     residentKillGrantsExp: boolean;
+    /** 多段移動（O44）：前往不相鄰地區時沿最短路徑逐段移動，單次行動最多走幾段（每段照常耗時）。 */
+    routeTravel: { maxSegmentsPerAction: number };
   };
   /** 新角色接續：劇本允許新角色與前一位角色有關聯時，可部分繼承勢力聲望的變化量。 */
   succession?: {
@@ -602,6 +604,10 @@ export interface QuestTemplateDataStatic {
     maxOpenPerGiver: number;
     /** 同一發布者兩次發布之間至少相隔的遊戲日。 */
     giverCooldownDays: number;
+    /** 同範本、同目標（討伐以單位、收集以物品為準）全世界同時開放的委託上限。 */
+    maxOpenPerTarget: number;
+    /** 同範本、同目標的委託結束（完成、逾期、失敗）後，需經過的遊戲日數（以 24 小時計）才能再發布。 */
+    targetCooldownDays: number;
   };
   templates: QuestTemplateStatic[];
 }
@@ -617,6 +623,8 @@ export interface GeneratedQuest extends QuestStatic {
   status: 'open' | 'completed' | 'failed' | 'expired';
   postedAtMinutes: number;
   expiresAtMinutes: number;
+  /** 結束（完成、逾期、失敗）的遊戲時間；同目標冷卻由此起算。 */
+  closedAtMinutes?: number;
 }
 
 /**

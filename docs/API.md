@@ -95,6 +95,12 @@ sendPlayerAction(
 
 `stateChanges` 支援 HP/MP/EXP/金幣增減、道具增加/移除、單位擊倒紀錄（`defeatedUnits`）、單位關係變更、任務接受及任務完成回報。劇情旗標不能由 AI 直接設定（舊格式的 `setFlags` 會被忽略），只能經由世界事件成立（見下方「世界事件、世界修正與世界規則」）。AI 只能對遊戲提供的「目前地區可接取任務」提出 `questAcceptances: ["QST-001"]`；玩家詢問任務不等於接受。HUD 按鈕及對話接受會共用同一驗證，確認玩家位於任務指定地圖、任務給予者（地區居民）確實在場且存活、非敵對，且任務尚未接取或完成。靜態任務資料定義需求、獎勵值及上下限，完成時再次檢查需求；交付道具會從背包扣除，獎勵只發放一次。單位樣板以 ID、名稱、稱號、種族、職階與等級定義，數值由單位成長公式計算，可用 `statAdjustments` 做有上限的相對修正；所在地由地圖的 `unitsPresent` 決定。消耗品的 `usableInCombat` 布林欄位控制是否可在戰鬥中使用，描述文字只用於說明；consumable 的 `effect.hpRestore`/`effect.mpRestore` 定義固定回復量；玩家可從 HUD 使用背包中的消耗品，回復不會超過角色資源上限，無實際回復時不扣除道具。戰鬥中使用消耗品會觸發敵方反擊與 d20 閃避檢定。戰鬥狀態以 `{ "round": 1, "participants": [{ "unitId": "PLAYER-001", "side": "party" }, { "unitId": "NPC-001", "side": "enemy", "currentHp": 20 }], "targetUnitId": "NPC-001" }` 表示，預留 O35 多對多戰鬥；我方 HP 存於各自存檔/實例，敵方 HP 於戰鬥中追蹤。目前規則仍為玩家對單一敵人。玩家存檔包含穩定單位 ID `unitId: "PLAYER-001"`（存檔中必須為此保留 ID）；共用查詢 `resolveWorldUnit(player, unitId)` 可辨識玩家與其他單位，玩家視圖的 `stats` 以相同公式計算並加上裝備。玩家 ID 不可作為 `unitDispositionChanges`、`encounterRequest` 或戰鬥目標，單位資料也不得使用此 ID。主動技能定義於 `skills.json`，由職階的 `skillUnlocks` 依等級解鎖，技能 effect 定義傷害倍率，程式以 `max(1, floor(玩家 ATK × multiplier) - 敵方 DEF)` 計算傷害；技能消耗 MP 並消耗玩家回合。地圖移動使用獨立欄位 `travelRequest`，格式為 `{ "destinationMapId": "MAP-002" }`。Gemini GenerateContent 請求會使用 JSON Schema 強制包含所有回應欄位，並將 `travelRequest.destinationMapId` 限制為本次可移動的相鄰地圖 ID、將 `encounterRequest.unitId` 限制為可遭遇單位 ID、將 `questAcceptances` 限制為本區可接取任務 ID、將 `unitDispositionChanges.unitId` 限制為當前地區單位 ID；這保證格式與欄位，不代表語意正確，因此遊戲端仍會驗證。只有玩家明確要求移動時才設定；模型收到的可移動地區清單包含相鄰地圖 ID、正式名稱、專屬別名及分類標籤。泛稱地點會根據可到達候選和上一個地區解析；若仍有多個候選，前端要求玩家選擇，不把泛稱綁定到單一地圖。若 AI 敘事聲稱玩家已移動，但缺少或填錯 `travelRequest`，系統會附上合法目的地清單要求模型重產一次完整 JSON（受 `ai_context.json` 的 `maxCallsPerTurn` 限制）；判斷敘事是否宣稱移動時，會略過引號內的對話（「」『』“”）以及移動動詞前帶有過去、假設或打算語氣（例如曾經、上次、打算、如果、等你）的句子，避免人物談到其他地名時誤送修正請求；前端從玩家文字判斷的明確移動意圖（會優先於 AI 的 `travelRequest`）排除否定、詢問（含「嗎」與問號）、過去經歷（上次、以前、曾）與安危打聽，例如「你上次去那裡是什麼時候？」不算移動；仍無有效請求時不會移動，並會在對話明確提示。前端再次驗證地圖 ID、連通性及戰鬥狀態後，才更新 `currentMapId`。詢問地點、觀察或含糊意圖不會移動。回應不可用 `stateChanges` 修改地圖。
 
+**多段移動與先移動再敘事（O44）**：
+- `src/utils/travelRoute.ts` 的 `getReachableRoutes(player)`／`findTravelRoute` 以相連地圖與 `canPlayerEnterMap` 求最短路徑；`travelAlongRoute(player, mapId, random?)` 逐段移動（每段 `ACTION_DURATIONS.travel`），途經的中間地區以 `rollWaitInterruption` 擲遭遇，被打斷就停下並設定 `encounteredUnitId`；最多走 `scenario.json` 的 `rules.routeTravel.maxSegmentsPerAction` 段。回傳 `{ player, origin, destination, arrived, passed, elapsedMinutes, interruptedByUnitId?, stoppedBySegmentLimit }`。
+- 前端移動意圖的候選是所有可抵達地區；泛稱取最近的符合地區，同樣近的有多個時列出按鈕。HUD 與按鈕的移動同樣走 `travelAlongRoute`。
+- 玩家文字的移動意圖明確時，送 AI 前先移動：`sendPlayerAction(..., resolvedTravel)` 以移動後的狀態組裝上下文，並在使用者提示附上「本回合移動結果（遊戲已結算）」；AI 依實際抵達地敘事，`travelRequest` 須為 null 且會被忽略，該回合不另計對話時間。意圖不明確時仍由 AI 提出相鄰的 `travelRequest`。
+- 一致性：`getClaimedArrivalMapIds(text, currentMapId, ignoreMapIds)` 找出敘事宣稱抵達的其他地區（略過引號內對話與非實際語氣，`ignoreMapIds` 為本回合途經的地區）。已先移動時宣稱與實際所在地不符、或 `travelRequest` 合法但敘事宣稱抵達另一個地區時，會送修正請求（受 `maxCallsPerTurn` 限制）；修正後仍不符或額度不足時，訊息後附上「系統說明：你實際位於某地」。
+
 ## 角色建立、章節任務與特殊戰鬥
 
 新角色從 `playerSelectable` 職階中選擇，種族取自劇本設定的 `defaultPlayer.speciesId`；能力值、HP/MP 與攻防速依下方單位成長公式計算，起始裝備和物品由職階資料提供。角色可選九大陣營之一。靜態數值調整後，存檔中超出新上限的 HP/MP 會夾回上限，而非讓存檔失效。姓名與職稱只描述身份，不決定數值。單位的 `startingInventory`/`startingGold` 初始化為可保存的世界持有物；交易、任務交付和單位物品轉移會改變此存檔狀態。
@@ -169,18 +175,20 @@ sendPlayerAction(
 
 主持人 AI 可依任務範本為在場 NPC 發布支線委託（`src/utils/generatedQuests.ts`）；範本與上限由劇本資料定義，程式不寫死任何內容。
 
-- **範本資料** `src/data/quest_templates.json`：`{ limits: { maxOpenQuests, maxOpenPerGiver, giverCooldownDays }, templates }`。
+- **範本資料** `src/data/quest_templates.json`：`{ limits: { maxOpenQuests, maxOpenPerGiver, giverCooldownDays, maxOpenPerTarget, targetCooldownDays }, templates }`。
   - `maxOpenQuests`：全世界同時開放的委託上限（已接取未完成的也算在內）；`maxOpenPerGiver`：每位發布者的上限；`giverCooldownDays`：同一發布者兩次發布至少相隔的遊戲日。
+  - `maxOpenPerTarget`（O43）：同範本、同目標全世界同時開放的上限（討伐以目標單位、收集以要收集的物品為準）；`targetCooldownDays`：同範本、同目標的委託結束（完成、逾期、失敗）後，需經過 `targetCooldownDays × 24` 遊戲小時才能再發布。
   - 範本欄位：`{ id: "QTPL-xxx", type: "defeat" | "collect", name, titlePattern, objectivePattern, aiHint, giver?: { factionIds?, classIds? }, quantity: { min, max }, durationDays, reward: { expRatio, maxExp, valuePerLevel, maxValue, maxItemQuantity }, requires?: { flags?, reputation?, factionRelations? }, excludes?: { flags? } }`。
   - `titlePattern` 與 `objectivePattern` 可用 `{target}`、`{quantity}`；`requires` 的勢力條件與事件共用 `matchesFactionConditions`。
   - 目前範本：討伐（擊敗附近魔物）、收集（收集附近魔物的掉落物），數值見 `docs/PROJECT_GOALS.md`「已確認的設計決策」。
 - **AI 提議** `questProposals`（必填陣列，最多一件，沒有時為空陣列）：`{ templateId, giverId, targetUnitId, itemId, quantity }`；收集範本以 `itemId` 為準，討伐範本的 `itemId` 為 `null`。
   - 只有玩家明確向在場人物詢問工作或委託時才提議。只在沒有檢定或檢定成功時考慮。
   - AI 回應中的報酬欄位一律忽略。
-  - AI 上下文提供「可發布的支線委託」：各範本可發布的委託人、目標、每單位經驗與報酬價值。Gemini JSON Schema 以 enum 限制範本、委託人、目標與物品；沒有候選時只允許空陣列。
+  - AI 上下文提供「可發布的支線委託」：各範本可發布的委託人、目標、每單位經驗與報酬價值；同目標開放中或冷卻中的目標不列入，範本沒有候選時不送。Gemini JSON Schema 以 enum 限制範本、委託人、目標與物品；沒有候選時只允許空陣列。
 - **驗證** `validateQuestProposal(state, proposal)`：
   - 範本存在且條件成立；
   - 全世界與該委託人的開放委託未達上限，且委託人不在發布冷卻中；
+  - 同範本、同目標沒有開放中的委託，也不在結束後的冷卻中；
   - 委託人是目前地區存活、非敵對、有所屬勢力的 NPC，且符合範本限制；委託人有可接取的劇本任務時不發布；
   - 數量在範圍內；
   - 目標是委託人所在地區或相鄰地區、存活的魔物，不含頭目、需前置任務者、同勢力或友好／同盟勢力；收集範本以掉落該物品、等級最低的魔物為目標；
@@ -195,7 +203,7 @@ sendPlayerAction(
   - 交付時全額發放，且只發放一次；需求物品轉入委託人持有物。
   - 逾期或失敗時退回目前負責的委託人（已死亡者留在其持有物中）。
 - **存檔**：世界存檔的 `world.generatedQuests` 與 `world.nextGeneratedQuestSeq`。
-  - 委託格式：`{ id: "QST-GEN-0001", generated: true, templateId, targetUnitId, title, questGiverId, questGiver, mapId, objective, requirements, rewards, status: "open" | "completed" | "failed" | "expired", postedAtMinutes, expiresAtMinutes }`。
+  - 委託格式：`{ id: "QST-GEN-0001", generated: true, templateId, targetUnitId, title, questGiverId, questGiver, mapId, objective, requirements, rewards, status: "open" | "completed" | "failed" | "expired", postedAtMinutes, expiresAtMinutes, closedAtMinutes? }`；`closedAtMinutes` 是結束的遊戲時間（存檔版本 13 起）。
   - 是否已接取取決於目前角色的 `activeQuests`，因此新角色接續時，前任未完成的委託會重新開放。
   - 已結束且與目前角色無關的委託最多保留 30 筆。
   - 引用的範本、單位或物品已從靜態資料移除時，讀檔略過該委託；格式錯誤時整份存檔無效。
@@ -316,7 +324,7 @@ sendPlayerAction(
 - **匯出／匯入**：存檔管理可將一個世界的所有欄位匯出為 JSON（`format: "adventure-simulator-world"`）。匯入時驗證格式、版本、劇本與每個欄位內容，任何欄位無效即整份拒絕；一律以新世界 ID 匯入，不覆蓋任何現有存檔，寫入中途失敗會移除已寫入的欄位。
 - **容量管理**：存檔管理顯示本遊戲在 localStorage 的估計用量（以約 5 MB 上限計），達 80% 時警示；寫入失敗（例如容量不足）時 HUD 提示匯出備份，其他欄位不受影響。事件紀錄超過 200 件即壓縮成編年史，且存檔只保存有差異的單位實例；目前容量足夠，暫不改用 IndexedDB。
 
-存檔帶有 `schemaVersion`（`saveStorage.ts` 的 `SAVE_SCHEMA_VERSION`，目前為 12）。開發階段每次變更存檔格式就將版本加一；版本不符、缺少欄位或格式無效的存檔直接捨棄，不提供舊格式遷移；舊版單一快照（`TRPG_GAME_SESSION`、`TRPG_PLAYER_STATE`）在啟動時移除。正式上線後才開始為舊版本撰寫遷移。
+存檔帶有 `schemaVersion`（`saveStorage.ts` 的 `SAVE_SCHEMA_VERSION`，目前為 13）。開發階段每次變更存檔格式就將版本加一；版本不符、缺少欄位或格式無效的存檔直接捨棄，不提供舊格式遷移；舊版單一快照（`TRPG_GAME_SESSION`、`TRPG_PLAYER_STATE`）在啟動時移除。正式上線後才開始為舊版本撰寫遷移。
 
 ## 金鑰安全限制
 

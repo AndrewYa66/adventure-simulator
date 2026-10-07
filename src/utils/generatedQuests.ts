@@ -48,6 +48,22 @@ const templateConditionsMet = (state: QuestState, template: QuestTemplateStatic)
 /** 仍開放（含已被目前角色接取、尚未完成）的生成委託。 */
 const openQuests = (state: QuestState) => state.world.generatedQuests.filter((quest) => quest.status === 'open');
 
+/** 同範本、同目標的識別：收集範本以物品、討伐範本以單位為準。 */
+const questTargetKey = (quest: GeneratedQuest) =>
+  `${quest.templateId}:${quest.requirements.collectItems?.[0]?.itemId ?? quest.targetUnitId}`;
+const candidateTargetKey = (template: QuestTemplateStatic, target: { targetUnitId: string; itemId?: string }) =>
+  `${template.id}:${target.itemId ?? target.targetUnitId}`;
+
+/** 同範本、同目標不能再發布的原因（O43）：開放中已達上限，或上一件結束後仍在冷卻；可發布時回傳 undefined。 */
+function targetBlockReason(state: QuestState, key: string): string | undefined {
+  const { maxOpenPerTarget, targetCooldownDays } = questTemplateData.limits;
+  const same = state.world.generatedQuests.filter((quest) => questTargetKey(quest) === key);
+  if (same.filter((quest) => quest.status === 'open').length >= maxOpenPerTarget) return '同一目標的委託已經開放中';
+  if (same.some((quest) => quest.status !== 'open' && quest.closedAtMinutes !== undefined &&
+      state.gameTimeMinutes < quest.closedAtMinutes + targetCooldownDays * MINUTES_PER_DAY)) return '同一目標的委託剛結束，仍在冷卻中';
+  return undefined;
+}
+
 /** 發布者不能發布的原因；可發布時回傳 undefined。 */
 function giverBlockReason(state: QuestState, template: QuestTemplateStatic, giver: WorldUnitStatic | undefined): string | undefined {
   const map = getMapById(state.currentMapId);
@@ -76,8 +92,15 @@ interface TargetCandidate {
   expReward: number;
 }
 
-/** 目標候選：發布者所在地區與相鄰地區需遭遇的單位（不含頭目、需前置任務者、同勢力或友好勢力）；收集範本取其掉落物，以等級最低的掉落者計算。 */
+/**
+ * 目標候選：發布者所在地區與相鄰地區需遭遇的單位（不含頭目、需前置任務者、同勢力或友好勢力）；收集範本取其掉落物，以等級最低的掉落者計算。
+ * 同範本、同目標受限（O43）者不列入。
+ */
 function getTargetCandidates(state: QuestState, template: QuestTemplateStatic, giver: WorldUnitStatic): TargetCandidate[] {
+  return getNearbyTargets(state, template, giver).filter((target) => !targetBlockReason(state, candidateTargetKey(template, target)));
+}
+
+function getNearbyTargets(state: QuestState, template: QuestTemplateStatic, giver: WorldUnitStatic): TargetCandidate[] {
   const giverMap = getMapById(giver.mapIds[0]);
   if (!giverMap) return [];
   const mapIds = [giverMap.id, ...giverMap.connectedMapIds];
@@ -169,12 +192,14 @@ export function validateQuestProposal(state: QuestState, proposal: QuestProposal
   if (blocked || !giver) return { ok: false, reason: blocked ?? '發布者無效' };
   const quantity = proposal.quantity;
   if (!Number.isInteger(quantity) || quantity < template.quantity.min || quantity > template.quantity.max) return { ok: false, reason: `數量須介於 ${template.quantity.min}–${template.quantity.max}` };
-  const candidates = getTargetCandidates(state, template, giver);
+  const candidates = getNearbyTargets(state, template, giver);
   // 收集範本以物品為準（目標單位由遊戲依掉落資料決定）；討伐範本以單位為準。
   const target = template.type === 'collect'
     ? candidates.find((candidate) => candidate.itemId === proposal.itemId)
     : candidates.find((candidate) => candidate.targetUnitId === proposal.targetUnitId);
   if (!target) return { ok: false, reason: '目標不是附近實際存在的單位或物品' };
+  const targetBlocked = targetBlockReason(state, candidateTargetKey(template, target));
+  if (targetBlocked) return { ok: false, reason: targetBlocked };
 
   const holdings = state.unitInstances[giver.id];
   const cap = computeValueCap(template, target, quantity);
@@ -249,7 +274,7 @@ export function postQuestProposals<T extends QuestState>(state: T, proposals: re
 }
 
 /** 結束一件生成委託：改變狀態，失敗或逾期時把預扣的報酬退回目前負責的委託人（即使已死亡，也留在其持有物中）。 */
-export function closeGeneratedQuest<T extends Pick<PlayerState, 'world' | 'unitInstances'>>(state: T, questId: string, status: 'failed' | 'expired', giverId: string): T {
+export function closeGeneratedQuest<T extends Pick<PlayerState, 'world' | 'unitInstances' | 'gameTimeMinutes'>>(state: T, questId: string, status: 'failed' | 'expired', giverId: string): T {
   const quest = state.world.generatedQuests.find((entry) => entry.id === questId);
   if (!quest || quest.status !== 'open') return state;
   const holdings = state.unitInstances[giverId];
@@ -266,7 +291,7 @@ export function closeGeneratedQuest<T extends Pick<PlayerState, 'world' | 'unitI
   return {
     ...state,
     unitInstances,
-    world: { ...state.world, generatedQuests: state.world.generatedQuests.map((entry) => entry.id === questId ? { ...entry, status } : entry) }
+    world: { ...state.world, generatedQuests: state.world.generatedQuests.map((entry) => entry.id === questId ? { ...entry, status, closedAtMinutes: state.gameTimeMinutes } : entry) }
   };
 }
 
@@ -291,8 +316,8 @@ export function pruneGeneratedQuests<T extends QuestState>(state: T): T {
 }
 
 /** 標記生成委託已完成（報酬已由交付流程自預扣中發放）。 */
-export const markGeneratedQuestCompleted = (world: PlayerState['world'], questId: string): PlayerState['world'] => ({
+export const markGeneratedQuestCompleted = (world: PlayerState['world'], questId: string, closedAtMinutes: number): PlayerState['world'] => ({
   ...world,
-  generatedQuests: world.generatedQuests.map((quest) => quest.id === questId && quest.status === 'open' ? { ...quest, status: 'completed' } : quest)
+  generatedQuests: world.generatedQuests.map((quest) => quest.id === questId && quest.status === 'open' ? { ...quest, status: 'completed', closedAtMinutes } : quest)
 });
 

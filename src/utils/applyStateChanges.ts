@@ -109,7 +109,7 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
       questExp += quest.rewards.exp;
       questGold += quest.rewards.gold;
       rewardItems.push(...(quest.rewards.items ?? []).map((item) => ({ ...item })));
-      world = markGeneratedQuestCompleted(world, quest.id);
+      world = markGeneratedQuestCompleted(world, quest.id, player.gameTimeMinutes);
       const itemText = (quest.rewards.items ?? []).map((item) => `${getItemById(item.itemId)?.name ?? item.itemId} ×${item.quantity}`).join('、');
       recordTransaction('quest_reward', `完成任務「${quest.title}」，領取 ${quest.rewards.gold} 金幣${itemText ? `、${itemText}` : ''}（委託人預先保留的報酬）`, quest.rewards.gold);
     } else {

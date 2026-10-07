@@ -1,7 +1,9 @@
 import type { PlayerState, AIResponsePayload, CharacterHistoryEntry, StoryMessage } from '../types/game';
 import type { AIModelSettings } from './aiModels';
-import { getItemById } from '../data/staticData';
-import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from '../utils/travelIntent';
+import { getItemById, getMapById, getWorldUnitById } from '../data/staticData';
+import { formatDuration } from '../utils/gameTime';
+import { getClaimedArrivalMapIds, resolveExplicitTravelIntent } from '../utils/travelIntent';
+import type { RouteTravelResult } from '../utils/travelRoute';
 import { buildAIContext, buildDialogueHistory, estimateTokens, recordAIContextReport, SUPPORTED_AI_RESPONSE_FORMAT_VERSIONS } from './aiContext';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -267,6 +269,47 @@ async function fetchWithRetry(url: string, options: RequestInit, retries = 2, de
   return res;
 }
 
+const mapName = (mapId: string) => getMapById(mapId)?.name ?? mapId;
+
+/** 本回合已結算移動的說明（放在使用者提示）：AI 依實際抵達地敘事，不再提出移動。 */
+function describeResolvedTravel(travel: RouteTravelResult, playerState: PlayerState): string {
+  const via = travel.passed.length ? `，途經${travel.passed.map((map) => map.name).join('、')}` : '';
+  const unit = travel.interruptedByUnitId ? getWorldUnitById(travel.interruptedByUnitId, playerState) : undefined;
+  const result = unit
+    ? `玩家從${travel.origin.name}出發前往${travel.destination.name}${via}，在${travel.arrived.name}遇到${unit.name}（${unit.id}），移動被打斷，停在${travel.arrived.name}，尚未抵達${travel.destination.name}。`
+    : travel.stoppedBySegmentLimit
+      ? `玩家從${travel.origin.name}出發前往${travel.destination.name}${via}，這次行動只走到${travel.arrived.name}，尚未抵達${travel.destination.name}。`
+      : `玩家從${travel.origin.name}出發${via}，抵達${travel.arrived.name}。`;
+  return `【本回合移動結果（遊戲已結算，共耗時 ${formatDuration(travel.elapsedMinutes)}）】
+${result}
+- 玩家目前實際位於${travel.arrived.name}；系統提示中的地區、在場人物與可前往清單都已是移動後的狀態。
+- storyText 先簡短描述路程（途經地區一句帶過即可），再以${travel.arrived.name}為場景回應玩家行動中的其他部分；不可描述抵達${travel.arrived.name}以外的地區。
+- travelRequest 必須為 null（移動已完成）。${unit ? `
+- 描述${unit.name}在路上出現、擋住去路；遭遇已由遊戲記錄，不可描述戰鬥結果或已擺脫對方。` : ''}`;
+}
+
+/** 未結算移動時的修正請求：travelRequest 缺漏或無效，或敘事宣稱抵達的地區與 travelRequest 不同。不需修正時回傳 undefined。 */
+function getTravelRepairPrompt(parsed: AIResponsePayload, availableDestinationIds: string[], actionText: string, playerState: PlayerState, userPrompt: string): string | undefined {
+  const requestedId = parsed.travelRequest?.destinationMapId;
+  const requestIsValid = !!requestedId && availableDestinationIds.includes(requestedId);
+  const localIntent = resolveExplicitTravelIntent(actionText, playerState);
+  const claimed = getClaimedArrivalMapIds(parsed.storyText, playerState.currentMapId);
+  const header = `${userPrompt}\n\n【移動回應一致性修正】\n上一份 JSON 的玩家行動為「${actionText}」，AI 敘事為「${parsed.storyText}」，`;
+  if ((!!requestedId && !requestIsValid) || (!requestedId && (localIntent.kind === 'ambiguous' || claimed.length > 0))) {
+    return `${header}但 travelRequest 缺漏或不是合法的相鄰地區 ID。請重新產生完整 JSON：如果玩家確實要求移動且目的地可唯一判斷，travelRequest.destinationMapId 必須使用可前往清單中的精確 ID；若目的地有多個可能，travelRequest 設為 null 並在 storyText 詢問玩家；若沒有實際移動，請改寫 storyText，不要描述玩家已抵達或切換地區。不要宣稱未執行的移動已完成。`;
+  }
+  const beyond = requestIsValid ? claimed.filter((mapId) => mapId !== requestedId) : [];
+  if (!beyond.length) return undefined;
+  return `${header}travelRequest 指向${mapName(requestedId!)}，但敘事宣稱抵達${beyond.map(mapName).join('、')}。一次只能移動到相鄰地區，玩家這回合只會抵達${mapName(requestedId!)}。請重新產生完整 JSON：保留 travelRequest，改寫 storyText 以${mapName(requestedId!)}為抵達地點，不要描述抵達其他地區。`;
+}
+
+/** 已結算移動時的修正請求：敘事宣稱抵達實際所在地與途經地區以外的地方。不需修正時回傳 undefined。 */
+function getResolvedTravelRepairPrompt(parsed: AIResponsePayload, travel: RouteTravelResult, playerState: PlayerState, userPrompt: string): string | undefined {
+  const claimed = getClaimedArrivalMapIds(parsed.storyText, playerState.currentMapId, [travel.origin.id, ...travel.passed.map((map) => map.id)]);
+  if (!claimed.length) return undefined;
+  return `${userPrompt}\n\n【移動回應一致性修正】\n上一份 JSON 的敘事為「${parsed.storyText}」，宣稱玩家抵達${claimed.map(mapName).join('、')}，但遊戲已結算的移動讓玩家實際位於${travel.arrived.name}。請重新產生完整 JSON：storyText 以${travel.arrived.name}為玩家所在地，不要描述抵達其他地區；travelRequest 為 null。`;
+}
+
 export async function sendPlayerAction(
   settings: AIModelSettings,
   apiKey: string,
@@ -275,7 +318,9 @@ export async function sendPlayerAction(
   /** 本回合玩家行動之前的對話紀錄；依 ai_context.json 的 dialogue 設定取近期視窗。 */
   storyHistory: StoryMessage[],
   /** 同一世界中已結束的歷代角色，供傳聞與人物回憶。 */
-  characterHistory: CharacterHistoryEntry[] = []
+  characterHistory: CharacterHistoryEntry[] = [],
+  /** 本回合已由遊戲先結算的移動（O44）；playerState 是移動後的狀態。 */
+  resolvedTravel?: RouteTravelResult
 ): Promise<AIResponsePayload> {
   const cleanApiKey = apiKey.trim();
   if (!cleanApiKey) {
@@ -284,7 +329,7 @@ export async function sendPlayerAction(
 
   const { systemPrompt, report, responseSchema: jsonResponseSchema, availableDestinationIds } = buildAIContext(playerState, characterHistory);
   const dialogue = buildDialogueHistory(storyHistory);
-  const userPrompt = `【近期劇情回顧】\n${dialogue.text || '（尚無）'}\n\n【玩家行動】\n${actionText}`;
+  const userPrompt = `【近期劇情回顧】\n${dialogue.text || '（尚無）'}\n\n【玩家行動】\n${actionText}${resolvedTravel ? `\n\n${describeResolvedTravel(resolvedTravel, playerState)}` : ''}`;
   // totalChars 與預算只計系統提示；估計 tokens 含使用者提示，反映整個請求的大小。
   recordAIContextReport({ ...report, sections: [...report.sections, dialogue.report], estimatedTokens: estimateTokens(systemPrompt + userPrompt), builtAt: Date.now(), userPrompt });
 
@@ -332,22 +377,21 @@ export async function sendPlayerAction(
     const rawText = await requestModelText(userPrompt);
     let parsed = parseResponseText(rawText);
     if (parsed) {
-      const requestedId = parsed.travelRequest?.destinationMapId;
-      const requestIsValid = !!requestedId && availableDestinationIds.includes(requestedId);
-      const localIntent = resolveExplicitTravelIntent(actionText, playerState);
-      const narrativeClaimsTravel = storyClaimsPlayerMoved(parsed.storyText, playerState.currentMapId);
-
-      const requestNeedsRepair = (!!requestedId && !requestIsValid) ||
-        (!requestedId && (localIntent.kind === 'ambiguous' || narrativeClaimsTravel));
       // 每回合呼叫上限：主持人敘事 1 次，額度足夠時才送移動修正請求。
-      if (requestNeedsRepair && report.maxCallsPerTurn > 1) {
-        const repairPrompt = `${userPrompt}\n\n【移動回應一致性修正】\n上一份 JSON 的玩家行動為「${actionText}」，AI 敘事為「${parsed.storyText}」，但 travelRequest 缺漏或不是合法的相鄰地區 ID。請重新產生完整 JSON：如果玩家確實要求移動且目的地可唯一判斷，travelRequest.destinationMapId 必須使用可前往清單中的精確 ID；若目的地有多個可能，travelRequest 設為 null 並在 storyText 詢問玩家；若沒有實際移動，請改寫 storyText，不要描述玩家已抵達或切換地區。不要宣稱未執行的移動已完成。`;
+      const repairPrompt = resolvedTravel
+        ? getResolvedTravelRepairPrompt(parsed, resolvedTravel, playerState, userPrompt)
+        : getTravelRepairPrompt(parsed, availableDestinationIds, actionText, playerState, userPrompt);
+      if (repairPrompt && report.maxCallsPerTurn > 1) {
         try {
           const repairedText = await requestModelText(repairPrompt);
           const repaired = parseResponseText(repairedText);
           if (repaired) {
             const repairedId = repaired.travelRequest?.destinationMapId;
-            if (!repairedId || availableDestinationIds.includes(repairedId)) parsed = repaired;
+            // 已結算移動時，只在修正後的敘事與實際所在地一致才採用；否則保留原回應，由遊戲附上系統說明。
+            const usable = resolvedTravel
+              ? !getResolvedTravelRepairPrompt(repaired, resolvedTravel, playerState, userPrompt)
+              : !repairedId || availableDestinationIds.includes(repairedId);
+            if (usable) parsed = repaired;
           }
         } catch (repairError) {
           console.warn('AI 移動回應修正失敗，保留初始回應並由遊戲端驗證。', repairError);

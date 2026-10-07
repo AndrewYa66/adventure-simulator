@@ -6,7 +6,8 @@ import { applyStateChanges } from './utils/applyStateChanges';
 import { applyMemoryNotes, getMemoryEligibleUnitIds } from './utils/unitMemory';
 import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getShopById, getUnlockedSkills, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, scenario } from './data/staticData';
 import { getPlayerStatBreakdown, resolveActionCheck } from './utils/gameChecks';
-import { resolveExplicitTravelIntent, storyClaimsPlayerMoved } from './utils/travelIntent';
+import { getClaimedArrivalMapIds, resolveExplicitTravelIntent, storyClaimsPlayerMoved } from './utils/travelIntent';
+import { travelAlongRoute, type RouteTravelResult } from './utils/travelRoute';
 import { sendPlayerAction } from './services/aiService';
 import { acceptQuest, canTurnInQuest, findQuest, getQuestGiverName } from './utils/questRules';
 import { postQuestProposals } from './utils/generatedQuests';
@@ -97,6 +98,20 @@ function resolveEnemyTurn(player: PlayerState, combat: NonNullable<PlayerState['
     : `${action ? `${special?.name}命中` : `${unit.name}反擊命中`}，你受到 ${damage} 點傷害。${unconsciousTurns ? `你陷入昏迷 ${unconsciousTurns} 回合。` : ''}`;
   const victorLevelText = victorGrowth && victorGrowth.level > victorGrowth.previousLevel ? `\n📈 ${unit.name}升至 Lv.${victorGrowth.level}。` : '';
   return { player: nextPlayer, check, deathHints, text: `${result}${isDead ? `\n☠️ HP 歸零，你已死亡。${victorLevelText}` : `\n第 ${combat.round + 1} 回合開始。`}` };
+}
+
+/** 多段移動的結果說明（O44）：途經地區、耗時，以及途中遭遇或未抵達的原因。 */
+function describeRouteTravel(travel: RouteTravelResult, player: PlayerState): string {
+  const via = travel.passed.length ? `途經${travel.passed.map((map) => map.name).join('、')}，` : '';
+  const unit = travel.interruptedByUnitId ? getWorldUnitById(travel.interruptedByUnitId, player) : undefined;
+  if (unit) {
+    return `📍 你從${travel.origin.name}出發前往${travel.destination.name}，${via}在${travel.arrived.name}遇到${unit.name}，移動被打斷（耗時 ${formatDuration(travel.elapsedMinutes)}）。\n👁️ 遭遇：${unit.name}。已加入 HUD，可從右側開始戰鬥。`;
+  }
+  if (travel.stoppedBySegmentLimit) {
+    return `📍 你從${travel.origin.name}出發前往${travel.destination.name}，${via}走了 ${formatDuration(travel.elapsedMinutes)}，目前停在${travel.arrived.name}，尚未抵達。單次行動最多移動 ${travel.passed.length + 1} 段，請繼續前往。`;
+  }
+  const time = travel.passed.length ? `耗時 ${formatDuration(travel.elapsedMinutes)}，` : '';
+  return `📍 你${travel.passed.length ? `從${travel.origin.name}出發，` : ''}${via}${time}抵達${travel.arrived.name}。${travel.arrived.description}`;
 }
 
 function createRestoreNotice(player: PlayerState, savedAt: number, messageCount: number): StoryMessage {
@@ -318,14 +333,18 @@ export default function App() {
     return { player: nextPlayer, destination };
   };
 
+  /** 沿最短路徑移動（相鄰地區即一段）；戰鬥中、無法行動或無法抵達時回傳 null。 */
+  const travelPlayerTo = (mapId: string, sourcePlayer: PlayerState = player) =>
+    sourcePlayer.combat || !canPlayerAct(sourcePlayer) ? null : travelAlongRoute(sourcePlayer, mapId);
+
   const handleTravel = (mapId: string) => {
-    const travel = movePlayerTo(mapId);
+    const travel = travelPlayerTo(mapId);
     if (!travel) return;
     updatePlayer(travel.player);
     setMessages((previous) => [...previous, {
       id: Date.now().toString(),
       sender: 'system',
-      text: `你已抵達${travel.destination.name}。${travel.destination.description}`,
+      text: describeRouteTravel(travel, travel.player),
       timestamp: new Date().toLocaleTimeString()
     }]);
   };
@@ -761,15 +780,21 @@ export default function App() {
     setMessages((prev) => [...prev, userMsg]);
     setLoading(true);
 
+    // 先移動、再敘事（O44）：玩家文字的移動意圖明確時，由規則先完成移動（不相鄰者沿最短路徑逐段移動），
+    // AI 以移動後的狀態敘事實際抵達地；意圖不明確時維持由 AI 提出 travelRequest 的流程。
+    const textTravelIntent = resolveExplicitTravelIntent(actionText, player);
+    const resolvedTravel = textTravelIntent.kind === 'resolved' ? travelPlayerTo(textTravelIntent.destination.id) ?? undefined : undefined;
+    const turnPlayer = resolvedTravel?.player ?? player;
+
     try {
-      const aiResponse = await sendPlayerAction(modelSettings, apiKey, player, actionText, messages, characterHistory);
+      const aiResponse = await sendPlayerAction(modelSettings, apiKey, turnPlayer, actionText, messages, characterHistory, resolvedTravel);
       let storyText = aiResponse.storyText;
       let resultToApply = aiResponse;
       let checkResult: ActionCheckResult | undefined;
-      let nextPlayer = player;
+      let nextPlayer = turnPlayer;
 
       if (aiResponse.checkRequest && aiResponse.checkOutcomes) {
-        const check = resolveActionCheck(player, aiResponse.checkRequest.stat, aiResponse.checkRequest.dc);
+        const check = resolveActionCheck(turnPlayer, aiResponse.checkRequest.stat, aiResponse.checkRequest.dc);
         storyText = check.success ? aiResponse.checkOutcomes.successText : aiResponse.checkOutcomes.failureText;
         checkResult = { ...check, stat: aiResponse.checkRequest.stat, reason: aiResponse.checkRequest.reason };
         resultToApply = {
@@ -780,7 +805,7 @@ export default function App() {
 
       // 更新玩家 Local State
       if (resultToApply.stateChanges) {
-        nextPlayer = applyStateChanges(player, resultToApply);
+        nextPlayer = applyStateChanges(turnPlayer, resultToApply);
       }
       // AI 提議的世界事件：只在沒有檢定或檢定成功時考慮，條件由遊戲再驗證；劇情旗標只能經由事件設定。
       if (!checkResult || checkResult.success) nextPlayer = applyEventProposals(nextPlayer, aiResponse.eventProposals).state;
@@ -788,9 +813,9 @@ export default function App() {
       const questPosting = !checkResult || checkResult.success ? postQuestProposals(nextPlayer, aiResponse.questProposals) : undefined;
       if (questPosting) nextPlayer = questPosting.state;
       // 人物記憶：對話已發生，不論檢定結果都記下；以行動前的在場人物驗證。
-      nextPlayer = applyMemoryNotes(nextPlayer, aiResponse.memoryNotes, getMemoryEligibleUnitIds(player)).state;
+      nextPlayer = applyMemoryNotes(nextPlayer, aiResponse.memoryNotes, getMemoryEligibleUnitIds(turnPlayer)).state;
       // 劇情片段：只在沒有檢定或檢定成功時考慮，以行動前（AI 看到的狀態）的候選驗證。
-      const storyStart = !checkResult || checkResult.success ? startStorylets(player, nextPlayer, aiResponse.storyletProposals) : undefined;
+      const storyStart = !checkResult || checkResult.success ? startStorylets(turnPlayer, nextPlayer, aiResponse.storyletProposals) : undefined;
       if (storyStart) nextPlayer = storyStart.state;
       if (storyStart?.rejected.length) console.info('劇情片段提議未採用：', storyStart.rejected.join('；'));
       const storyletNotice = storyStart?.started.length
@@ -807,26 +832,27 @@ export default function App() {
       const requestedEncounter = aiResponse.encounterRequest?.unitId;
       const requestedUnit = requestedEncounter ? getWorldUnitById(requestedEncounter) : undefined;
       const encounterUnit = requestedUnit?.requiresEncounter ? requestedUnit : undefined;
-      const currentMap = getMapById(player.currentMapId);
+      const currentMap = getMapById(turnPlayer.currentMapId);
       const encounterAllowed = !nextPlayer.combat && !nextPlayer.isDead && canPlayerAct(nextPlayer) && !!currentMap && !currentMap.isSafeZone &&
         !!encounterUnit && encounterUnit.mapIds.includes(currentMap.id) && currentMap.unitsPresent.includes(encounterUnit.id) &&
         (!encounterUnit.requiredQuestId || nextPlayer.activeQuests.some((quest) => quest.questId === encounterUnit.requiredQuestId && quest.status === 'in_progress'));
-      const encounterNotice = encounterAllowed && encounterUnit
-        ? `\n\n👁️ 遭遇：${encounterUnit.name}。已加入 HUD，可從右側開始戰鬥。`
+      // 移動途中的遭遇已在移動說明中列出，AI 重複提出同一單位時不再提示。
+      const encounterNotice = encounterAllowed && encounterUnit && encounterUnit.id !== turnPlayer.encounteredUnitId
+        ?`\n\n👁️ 遭遇：${encounterUnit.name}。已加入 HUD，可從右側開始戰鬥。`
         : '';
       if (encounterAllowed && encounterUnit) nextPlayer = { ...nextPlayer, encounteredUnitId: encounterUnit.id };
-      const deathNotice = !player.isDead && nextPlayer.isDead
+      const deathNotice = !turnPlayer.isDead && nextPlayer.isDead
         ? '\n\n☠️ 你的生命值降至 0，角色死亡。可讀取死亡前的自動存檔重新嘗試。'
         : '';
       const acceptedQuests = nextPlayer.activeQuests.filter((entry) => entry.status === 'in_progress' &&
-        !player.activeQuests.some((previous) => previous.questId === entry.questId));
+        !turnPlayer.activeQuests.some((previous) => previous.questId === entry.questId));
       const questNotice = acceptedQuests.length
         ? `\n\n📜 已接取任務「${acceptedQuests.map((entry) => findQuest(nextPlayer, entry.questId)?.title ?? entry.questId).join('、')}」。`
         : '';
       const completedQuests = nextPlayer.activeQuests.filter((entry) => entry.status === 'completed' &&
-        player.activeQuests.some((previous) => previous.questId === entry.questId && previous.status === 'in_progress'));
+        turnPlayer.activeQuests.some((previous) => previous.questId === entry.questId && previous.status === 'in_progress'));
       const rewardRecords = nextPlayer.transactionHistory.filter((record) =>
-        record.type === 'quest_reward' && !player.transactionHistory.some((previous) => previous.id === record.id));
+        record.type === 'quest_reward' && !turnPlayer.transactionHistory.some((previous) => previous.id === record.id));
       const questCompletionNotice = completedQuests.length
         ? `\n\n✅ ${completedQuests.map((entry) => {
           const title = findQuest(nextPlayer, entry.questId)?.title ?? entry.questId;
@@ -835,7 +861,7 @@ export default function App() {
         }).join('\n')}`
         : '';
       const newUnitTransfers = nextPlayer.transactionHistory.filter((record) => record.type === 'unit_transfer' &&
-        !player.transactionHistory.some((previous) => previous.id === record.id));
+        !turnPlayer.transactionHistory.some((previous) => previous.id === record.id));
       const requestedUnitTransfers = resultToApply.stateChanges?.unitItemTransfers?.length ?? 0;
       const successfulUnitTransfers = newUnitTransfers.filter((record) => record.description.startsWith('從 '));
       const unitTransferNotice = successfulUnitTransfers.length || successfulUnitTransfers.length < requestedUnitTransfers
@@ -847,28 +873,27 @@ export default function App() {
       const relationLabels = { friendly: '友善', neutral: '中立', hostile: '敵對' } as const;
       const appliedRelationChanges = (resultToApply.stateChanges?.unitDispositionChanges ?? []).filter((change) =>
         nextPlayer.unitDispositionOverrides[change.unitId] === change.disposition &&
-        getWorldUnitDisposition(player, change.unitId) !== change.disposition
+        getWorldUnitDisposition(turnPlayer, change.unitId) !== change.disposition
       );
       const unitDispositionNotice = appliedRelationChanges.length
         ? `\n\n🤝 關係變化：${appliedRelationChanges.map((change) => `${getWorldUnitById(change.unitId)?.name ?? change.unitId} 對你的態度變為${relationLabels[change.disposition]}。`).join('')}`
         : '';
 
-      const textTravelIntent = resolveExplicitTravelIntent(actionText, player);
-      const requestedDestinationId = textTravelIntent.kind === 'resolved'
-        ? textTravelIntent.destination.id
-        : textTravelIntent.kind === 'ambiguous'
-          ? undefined
-          : aiResponse.travelRequest?.destinationMapId;
+      // 已先結算移動時忽略 AI 的 travelRequest；否則只接受相鄰地區（意圖不明確、由 AI 判斷的移動）。
+      const requestedDestinationId = resolvedTravel || textTravelIntent.kind !== 'none'
+        ? undefined
+        : aiResponse.travelRequest?.destinationMapId;
       const travel = requestedDestinationId ? movePlayerTo(requestedDestinationId, nextPlayer) : null;
-      // 服務請求以與 HUD 相同的規則結算（含扣款轉帳、恢復與固定耗時）；同回合移動時不處理服務。
+      // 服務請求以與 HUD 相同的規則結算（含扣款轉帳、恢復與固定耗時）；同回合由 AI 移動時不處理服務（先結算的移動已在 AI 看到的狀態中）。
       // 只處理指向目前地區實際服務的請求；佔位或不存在的 ID 視為沒有請求，不顯示失敗訊息。
-      const requestedService = !travel && aiResponse.serviceRequest && getAvailableServices(player).some((service) =>
+      const requestedService = !travel && aiResponse.serviceRequest && getAvailableServices(turnPlayer).some((service) =>
         service.shopId === aiResponse.serviceRequest?.shopId && service.serviceId === aiResponse.serviceRequest?.serviceId)
         ? aiResponse.serviceRequest : undefined;
       const requestedShop = requestedService ? getShopById(requestedService.shopId) : undefined;
       const serviceResult = requestedService && requestedShop ? purchaseService(nextPlayer, requestedShop, requestedService.serviceId, nextPlayer.currentMapId) : undefined;
       const serviceName = requestedShop?.services?.find((service) => service.id === requestedService?.serviceId)?.name ?? '服務';
-      nextPlayer = travel ? travel.player : serviceResult?.ok ? serviceResult.player : advanceGameTime(nextPlayer, 'dialogue');
+      // 先結算的移動已推進時間，本回合不再另計對話時間。
+      nextPlayer = travel ? travel.player : serviceResult?.ok ? serviceResult.player : resolvedTravel ? nextPlayer : advanceGameTime(nextPlayer, 'dialogue');
       const serviceNotice = !requestedService ? ''
         : serviceResult?.ok
           ? `\n\n🛏️ 使用${serviceName}，支付 ${serviceResult.totalPrice} 金幣，經過 ${formatDuration(ACTION_DURATIONS.rest)}，生命與魔力已恢復。`
@@ -877,15 +902,23 @@ export default function App() {
         ? { [player.unitId]: { cause: isSelfDamageIntent(actionText) ? 'self_inflicted' : 'misadventure', note: checkResult?.reason } }
         : undefined);
 
-      const previousMap = getMapById(player.currentMapId);
+      const previousMap = getMapById(turnPlayer.currentMapId);
       const nextMap = getMapById(nextPlayer.currentMapId);
-      const locationNotice = travel
-        ? `\n\n📍 你已抵達${travel.destination.name}。${travel.destination.description}`
+      // 安全網（O44）：敘事宣稱抵達實際所在地與本回合途經地區以外的地方時，附上系統說明（修正請求已在 AI 服務中處理）。
+      const routeMapIds = resolvedTravel ? [resolvedTravel.origin.id, ...resolvedTravel.passed.map((map) => map.id)] : [player.currentMapId];
+      const mismatchedClaims = resolvedTravel || travel ? getClaimedArrivalMapIds(storyText, nextPlayer.currentMapId, routeMapIds) : [];
+      const mismatchNotice = mismatchedClaims.length
+        ? `\n\n⚠️ 系統說明：敘事提到抵達${mismatchedClaims.map((mapId) => getMapById(mapId)?.name ?? mapId).join('、')}，但你實際位於${nextMap?.name ?? nextPlayer.currentMapId}。`
+        : '';
+      const locationNotice = resolvedTravel
+        ? `\n\n${describeRouteTravel(resolvedTravel, turnPlayer)}${mismatchNotice}`
+        : travel
+        ? `\n\n📍 你已抵達${travel.destination.name}。${travel.destination.description}${mismatchNotice}`
         : textTravelIntent.kind === 'ambiguous'
           ? `\n\n📍 你想前往的地區有多個可能地點，請選擇目的地：`
           : requestedDestinationId
           ? `\n\n⚠️ 目前無法前往「${getMapById(requestedDestinationId)?.name ?? requestedDestinationId}」，所在地區未變更。請選擇右側「鄰近地點」中的可前往區域。`
-          : storyClaimsPlayerMoved(storyText, player.currentMapId)
+          : storyClaimsPlayerMoved(storyText, turnPlayer.currentMapId)
             ? `\n\n⚠️ 目前沒有有效的地區移動請求，因此所在地區未變更。若要移動，請明確指定可前往地點。`
           : previousMap && nextMap && previousMap.id !== nextMap.id
             ? `\n\n⚠️ AI 敘事提及地區變更，但沒有有效的移動請求；所在地區維持${previousMap.name}。`

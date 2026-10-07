@@ -49,6 +49,7 @@ function normalizeGeneratedQuest(value: unknown): GeneratedQuest | null | undefi
       typeof value.templateId !== 'string' || typeof value.targetUnitId !== 'string' || typeof value.title !== 'string' ||
       typeof value.questGiverId !== 'string' || typeof value.questGiver !== 'string' || typeof value.mapId !== 'string' || typeof value.objective !== 'string' ||
       !['open', 'completed', 'failed', 'expired'].includes(String(value.status)) || !isValidGameTime(value.postedAtMinutes) || !isValidGameTime(value.expiresAtMinutes) ||
+      (value.closedAtMinutes !== undefined && !isValidGameTime(value.closedAtMinutes)) ||
       !isRecord(value.requirements) || !isRecord(value.rewards) || !Number.isSafeInteger(value.rewards.exp) || (value.rewards.exp as number) < 0 ||
       !Number.isSafeInteger(value.rewards.gold) || (value.rewards.gold as number) < 0 || !(value.rewards.items === undefined || Array.isArray(value.rewards.items))) return null;
   const requirements = value.requirements;

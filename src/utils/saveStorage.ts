@@ -20,7 +20,7 @@ import { isStoryMessage, normalizePlayerState } from './playerStorage';
  * 存檔格式版本；開發階段每次變更存檔格式就加一，版本不符的存檔直接捨棄，不撰寫遷移程式。
  * 正式上線後才開始為舊版本提供遷移。
  */
-export const SAVE_SCHEMA_VERSION = 12;
+export const SAVE_SCHEMA_VERSION = 13;
 
 export const AUTO_SLOT_ID: SaveSlotId = 'auto';
 export const MANUAL_SLOT_IDS: SaveSlotId[] = ['manual-1', 'manual-2', 'manual-3'];

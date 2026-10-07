@@ -1,5 +1,6 @@
 import type { MapStatic, PlayerState } from '../types/game';
-import { canPlayerEnterMap, getMapById, mapsDatabase } from '../data/staticData';
+import { getMapById, mapsDatabase } from '../data/staticData';
+import { getReachableRoutes } from './travelRoute';
 
 export type TravelIntentResolution =
   | { kind: 'resolved'; destination: MapStatic }
@@ -27,25 +28,34 @@ const quotedSpeech = /「[^」]*」|『[^』]*』|“[^”]*”|"[^"]*"/gu;
 const nonActualMovePrefix = /(曾|曾經|上次|以前|過去|当年|當年|打算|準備|准备|計劃|计划|想要|想|要|將|将|會|会|可以|能|若|如果|假如|等你|一旦|才能)\s*$/u;
 
 /**
- * 敘事是否宣稱玩家已移動到「其他地區」。只有移動動詞後緊接其他地圖的名稱、別名或分類詞才算；
+ * 敘事宣稱玩家已抵達的「其他地區」（O44）。只有移動動詞後緊接其他地圖的名稱、別名或分類詞才算；
  * 「你走進旅館」「你來到櫃檯前」這類同地區內的走動不算，避免誤觸移動修正請求與警示。
+ * currentMapId 是玩家實際所在地；ignoreMapIds 是本回合合法經過的地區（例如多段移動的途經地區），提到它們不算宣稱。
  */
-export function storyClaimsPlayerMoved(text: string, currentMapId: string): boolean {
+export function getClaimedArrivalMapIds(text: string, currentMapId: string, ignoreMapIds: readonly string[] = []): string[] {
   const currentTags = new Set(getMapById(currentMapId)?.locationTags ?? []);
-  const otherLabels = mapsDatabase.filter((map) => map.id !== currentMapId).flatMap((map) => [
-    map.name,
-    ...(map.aliases ?? []),
-    ...(map.locationTags ?? []).filter((tag) => !currentTags.has(tag)).flatMap((tag) => destinationCategoryPhrases[tag] ?? [])
-  ]).filter((label) => label.length >= 2);
+  const others = mapsDatabase.filter((map) => map.id !== currentMapId && !ignoreMapIds.includes(map.id)).map((map) => ({
+    id: map.id,
+    labels: [
+      map.name,
+      ...(map.aliases ?? []),
+      ...(map.locationTags ?? []).filter((tag) => !currentTags.has(tag)).flatMap((tag) => destinationCategoryPhrases[tag] ?? [])
+    ].filter((label) => label.length >= 2)
+  }));
   const moveVerb = /(?:抵達|抵达|到達|到达|來到|来到|回到|返回|走進|走进|踏入|進入|进入|回到了|到了)/gu;
   const narration = text.replace(quotedSpeech, (speech) => ' '.repeat(speech.length));
+  const claimed = new Set<string>();
   for (const match of narration.matchAll(moveVerb)) {
     if (nonActualMovePrefix.test(narration.slice(Math.max(0, match.index - MOVE_CLAIM_LOOKBEHIND), match.index))) continue;
     const following = narration.slice(match.index + match[0].length, match.index + match[0].length + MOVE_CLAIM_WINDOW);
-    if (otherLabels.some((label) => following.includes(label))) return true;
+    for (const map of others) if (map.labels.some((label) => following.includes(label))) claimed.add(map.id);
   }
-  return false;
+  return [...claimed];
 }
+
+/** 敘事是否宣稱玩家已移動到「其他地區」。 */
+export const storyClaimsPlayerMoved = (text: string, currentMapId: string): boolean =>
+  getClaimedArrivalMapIds(text, currentMapId).length > 0;
 
 export function hasExplicitTravelIntent(actionText: string): boolean {
   const normalized = actionText.toLocaleLowerCase();
@@ -56,10 +66,9 @@ export function resolveExplicitTravelIntent(actionText: string, player: PlayerSt
   const normalized = actionText.toLocaleLowerCase();
   if (!hasExplicitTravelIntent(normalized)) return { kind: 'none' };
 
-  const currentMap = getMapById(player.currentMapId);
-  const candidates = currentMap?.connectedMapIds
-    .map((mapId) => getMapById(mapId))
-    .filter((map): map is MapStatic => !!map && canPlayerEnterMap(player, map)) ?? [];
+  // 候選是所有可抵達的地區（O44：不相鄰者由規則沿最短路徑逐段移動）。
+  const routes = getReachableRoutes(player);
+  const candidates = [...routes.keys()].map((mapId) => getMapById(mapId)).filter((map): map is MapStatic => !!map);
   const namedMatches = candidates.filter((map) => [map.name, ...(map.aliases ?? [])]
     .some((label) => label && normalized.includes(label.toLocaleLowerCase())));
   let matches = namedMatches;
@@ -69,7 +78,10 @@ export function resolveExplicitTravelIntent(actionText: string, player: PlayerSt
     for (const [tag, phrases] of Object.entries(destinationCategoryPhrases)) {
       if (phrases.some((phrase) => normalized.includes(phrase.toLocaleLowerCase()))) requestedTags.add(tag);
     }
-    matches = candidates.filter((map) => (map.locationTags ?? []).some((tag) => requestedTags.has(tag)));
+    // 泛稱（例如「回村」）只取最近的符合地區；同樣近的有多個時才請玩家選擇。
+    const tagged = candidates.filter((map) => (map.locationTags ?? []).some((tag) => requestedTags.has(tag)));
+    const nearest = Math.min(...tagged.map((map) => routes.get(map.id)!.length));
+    matches = tagged.filter((map) => routes.get(map.id)!.length === nearest);
   }
 
   const isReturning = returnPhrases.some((phrase) => normalized.includes(phrase));

@@ -677,6 +677,8 @@ export function validateFactionData(): string[] {
   }
 
   if (typeof scenario.rules?.residentKillGrantsExp !== 'boolean') issues.push(`劇本 ${scenario.id}: rules.residentKillGrantsExp 須為布林值`);
+  const maxSegments = scenario.rules?.routeTravel?.maxSegmentsPerAction;
+  if (!Number.isInteger(maxSegments) || maxSegments < 1) issues.push(`劇本 ${scenario.id}: rules.routeTravel.maxSegmentsPerAction 須為正整數`);
   if (scenario.succession) {
     const ratio = scenario.succession.reputationInheritRatio;
     if (!scenario.succession.relatedLabel?.trim()) issues.push(`劇本 ${scenario.id}: succession.relatedLabel 不可為空`);
@@ -689,8 +691,8 @@ export function validateFactionData(): string[] {
 export function validateQuestTemplateData(): string[] {
   const issues: string[] = [];
   const { limits } = questTemplateData;
-  for (const key of ['maxOpenQuests', 'maxOpenPerGiver', 'giverCooldownDays'] as const) {
-    if (!Number.isInteger(limits?.[key]) || limits[key] < (key === 'giverCooldownDays' ? 0 : 1)) issues.push(`任務範本上限 ${key} 無效`);
+  for (const key of ['maxOpenQuests', 'maxOpenPerGiver', 'giverCooldownDays', 'maxOpenPerTarget', 'targetCooldownDays'] as const) {
+    if (!Number.isInteger(limits?.[key]) || limits[key] < (key.endsWith('CooldownDays') ? 0 : 1)) issues.push(`任務範本上限 ${key} 無效`);
   }
   const isPositiveInteger = (value: unknown) => Number.isInteger(value) && (value as number) > 0;
   const seen = new Set<string>();

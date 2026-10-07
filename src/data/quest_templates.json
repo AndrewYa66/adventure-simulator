@@ -2,7 +2,9 @@
   "limits": {
     "maxOpenQuests": 3,
     "maxOpenPerGiver": 1,
-    "giverCooldownDays": 1
+    "giverCooldownDays": 1,
+    "maxOpenPerTarget": 1,
+    "targetCooldownDays": 2
   },
   "templates": [
     {
