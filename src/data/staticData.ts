@@ -22,6 +22,7 @@ import type {
   SpeciesStatic,
   StoryActStatic,
   StoryDataStatic,
+  StoryEndingStatic,
   StoryletStatic,
   UnitBuild,
   UnitDisposition,
@@ -73,6 +74,8 @@ export const storyActs: StoryActStatic[] = [...storyData.acts].sort((a, b) => a.
 export const storyletsDatabase: StoryletStatic[] = storyData.storylets;
 export const getStoryActById = (id: string): StoryActStatic | undefined => storyActs.find((act) => act.id === id);
 export const getStoryletById = (id: string): StoryletStatic | undefined => storyletsDatabase.find((storylet) => storylet.id === id);
+export const storyEndingsDatabase: StoryEndingStatic[] = storyData.endings ?? [];
+export const getStoryEndingById = (id: string): StoryEndingStatic | undefined => storyEndingsDatabase.find((ending) => ending.id === id);
 /** 下一幕；已是最後一幕時為 undefined。 */
 export const getNextStoryAct = (actId: string): StoryActStatic | undefined => {
   const index = storyActs.findIndex((act) => act.id === actId);
@@ -727,7 +730,7 @@ const MAP_FACILITIES: MapFacility[] = ['notice_board'];
 /**
  * 驗證主線資料（O31、O32）：幕與片段的 ID、參照、條件、目標與完成效果；
  * 每一幕有且只有一個預設片段，且預設片段只靠保底管道給予、不依賴任何單位存活；
- * 最後一幕以外，預設片段必須推進幕、且有卡死保底事件；片段用到的旗標都要有設定來源；主線節點要有保底管道。
+ * 最後一幕以外，預設片段必須推進幕、且有卡死保底事件；最後一幕的預設片段必須進入結局（O33）；片段用到的旗標都要有設定來源；主線節點要有保底管道；結局都要有進入方式。
  */
 export function validateStoryData(): string[] {
   const issues: string[] = [];
@@ -756,6 +759,12 @@ export function validateStoryData(): string[] {
       if (!act.stuckEventId) issues.push(`${label}: 缺少卡死保底事件（stuckEventId）`);
     }
     if (act.stuckEventId !== undefined && getEventById(act.stuckEventId)?.trigger !== 'stuck') issues.push(`${label}: 卡死保底事件 ${act.stuckEventId} 不存在或觸發方式不是 stuck`);
+    // 最後一幕的卡死保底同樣會強制完成預設片段，預設片段因此必須進入結局（O33）。
+    if (act.id === lastActId && declared && !declared.onComplete?.endingId) issues.push(`${label}: 最後一幕的預設片段必須進入結局（endingId，卡死保底會強制完成它）`);
+    if (act.deadline !== undefined) {
+      if (!Number.isInteger(act.deadline.days) || act.deadline.days < 1) issues.push(`${label}: 期限天數須為正整數`);
+      if (!getStoryEndingById(act.deadline.endingId)) issues.push(`${label}: 期限結局 ${act.deadline.endingId} 不存在`);
+    }
   }
   if (new Set(acts.map((act) => act.order)).size !== acts.length) issues.push('幕的順序不可重複');
 
@@ -805,7 +814,7 @@ export function validateStoryData(): string[] {
       if (giver.role?.minLevel !== undefined && !(Number.isInteger(giver.role.minLevel) && giver.role.minLevel >= 1)) issues.push(`${label}: 給予者最低等級須為正整數`);
       if (giver.scope !== undefined && !['map', 'world'].includes(giver.scope)) issues.push(`${label}: 接手範圍須為 map 或 world`);
       if (!giver.preferredUnitId && !giver.role && giver.fallback === 'none') issues.push(`${label}: 沒有首選給予者、角色條件或保底管道，永遠無法開始`);
-      const isMainNode = !!storylet.onComplete?.advanceAct || (storylet.onComplete?.setFlags ?? []).some((flag) => flagsUsedByStory.has(flag));
+      const isMainNode = !!storylet.onComplete?.advanceAct || !!storylet.onComplete?.endingId || (storylet.onComplete?.setFlags ?? []).some((flag) => flagsUsedByStory.has(flag));
       if (isMainNode && giver.fallback === 'none') issues.push(`${label}: 主線節點（推進幕或設定其他片段需要的旗標）必須有保底管道`);
       if (giver.fallback === 'notice_board') {
         const locations = requires.mapIds?.length ? requires.mapIds : mapsDatabase.map((map) => map.id);
@@ -845,7 +854,11 @@ export function validateStoryData(): string[] {
     for (const [key, value] of Object.entries(onComplete?.endingTraits ?? {})) {
       if (!key.trim() || typeof value !== 'string' || !value.trim()) issues.push(`${label}: 結局特徵須為「項目: 值」的文字`);
     }
-    if (onComplete?.advanceAct && storylet.actId === lastActId) issues.push(`${label}: 最後一幕不可推進下一幕（結局判定見 O33）`);
+    if (onComplete?.advanceAct && storylet.actId === lastActId) issues.push(`${label}: 最後一幕不可推進下一幕，請改用結局（endingId）`);
+    if (onComplete?.endingId !== undefined) {
+      if (!getStoryEndingById(onComplete.endingId)) issues.push(`${label}: 找不到結局 ${onComplete.endingId}`);
+      if (onComplete.advanceAct) issues.push(`${label}: 推進幕與進入結局只能擇一`);
+    }
 
     const scene = storylet.scene;
     if (!scene?.purpose?.trim() || !Array.isArray(scene.mustConvey) || !Array.isArray(scene.forbidden)) issues.push(`${label}: 演出要求須有場面目的、必須傳達的資訊與禁止事項`);
@@ -855,6 +868,35 @@ export function validateStoryData(): string[] {
       if (giver?.fallback === 'none') issues.push(`${label}: 預設片段的保底管道不可為「無」`);
       if (requires.unitsAlive?.length) issues.push(`${label}: 預設片段不可依賴任何單位存活`);
     }
+  }
+
+  // 結局（O33）：ID、標題、結局後走向、尾聲段落條件；每個結局都要有進入方式（片段或幕期限）。
+  const endingIds = new Set<string>();
+  for (const ending of storyData.endings ?? []) {
+    const label = `結局 ${ending.id}`;
+    if (!/^END-\d+$/.test(ending.id)) issues.push(`${label}: ID 格式應為 END-n`);
+    if (endingIds.has(ending.id)) issues.push(`結局 ID 重複：${ending.id}`);
+    endingIds.add(ending.id);
+    if (!ending.title?.trim() || !ending.summary?.trim()) issues.push(`${label}: 缺少標題或結果描述`);
+    if (!['continue', 'end'].includes(ending.afterEnding)) issues.push(`${label}: 結局後走向須為 continue 或 end`);
+    if (!Array.isArray(ending.epilogues) || !ending.epilogues.length) issues.push(`${label}: 至少需要一段尾聲`);
+    for (const [index, epilogue] of (ending.epilogues ?? []).entries()) {
+      const where = `${label} 尾聲第 ${index + 1} 段`;
+      if (!epilogue.text?.trim()) issues.push(`${where}: 缺少文字`);
+      const when = epilogue.when ?? {};
+      for (const unitId of [...(when.unitsAlive ?? []), ...(when.unitsDead ?? [])]) {
+        if (!unitExists(unitId)) issues.push(`${where}: 找不到單位 ${unitId}`);
+      }
+      for (const flag of [...(when.flags ?? []), ...(when.excludesFlags ?? [])]) {
+        if (!isFlag(flag)) issues.push(`${where}: 旗標名稱無效`);
+        else if (!flagSources.has(flag)) issues.push(`${where}: 旗標「${flag}」沒有任何事件或片段會設定`);
+      }
+      for (const [key, value] of Object.entries(when.traits ?? {})) {
+        if (!key.trim() || typeof value !== 'string' || !value.trim()) issues.push(`${where}: 結局特徵條件須為「項目: 值」的文字`);
+      }
+    }
+    const entered = storylets.some((storylet) => storylet.onComplete?.endingId === ending.id) || acts.some((act) => act.deadline?.endingId === ending.id);
+    if (!entered) issues.push(`${label}: 沒有任何劇情片段或幕期限會進入此結局`);
   }
   return issues;
 }

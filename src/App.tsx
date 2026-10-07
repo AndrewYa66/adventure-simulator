@@ -11,7 +11,7 @@ import { sendPlayerAction } from './services/aiService';
 import { acceptQuest, canTurnInQuest, findQuest, getQuestGiverName } from './utils/questRules';
 import { postQuestProposals } from './utils/generatedQuests';
 import { describeStoryProgress, startStorylets } from './utils/storylets';
-import { canPlayerAct, isPlayerUnconscious } from './utils/playerStatus';
+import { canPlayerAct, isPlayerUnconscious, isTimelineEnded } from './utils/playerStatus';
 import type { AIProvider } from './services/aiModels';
 import { loadAIModelSettings, saveAIModelSettings, type AIModelSettings } from './services/aiModels';
 import { PlayerHUD } from './components/PlayerHUD';
@@ -198,8 +198,9 @@ export default function App() {
 
   // 自動存檔：每次狀態變更（且非 AI 回合進行中）覆寫目前世界的自動存檔欄位。
   // 死亡與戰鬥中不寫入：自動存檔停在致命行動或該場戰鬥開始之前，死亡後讀檔不會落入無法脫身的戰鬥。
+  // 時間線結束的結局（O33）同樣不寫入，自動存檔停在進入結局的行動之前。
   useEffect(() => {
-    if (loading || !activeWorldId || player.isDead || player.combat) return;
+    if (loading || !activeWorldId || player.isDead || player.combat || isTimelineEnded(player)) return;
     const saved = writeSlot(activeWorldId, AUTO_SLOT_ID, player, messages, characterHistory);
     if (!saved) console.warn('自動存檔失敗，瀏覽器儲存空間可能不足。');
   }, [player, messages, characterHistory, loading, activeWorldId]);
@@ -257,6 +258,7 @@ export default function App() {
 
   // ---------- 存檔管理 ----------
   const saveBlockedReason = player.isDead ? '角色已死亡，無法存檔；請讀取死亡前的自動存檔或手動存檔。'
+    : isTimelineEnded(player) ? '這條時間線已經結束，無法存檔；請讀取結局前的自動存檔或手動存檔。'
     : player.combat ? '戰鬥中無法存檔；戰鬥結束後才會存檔。' : undefined;
   const handleSaveManual = (slotId: SaveSlotId) => {
     if (!activeWorldId) return '目前沒有進行中的世界。';
@@ -655,7 +657,8 @@ export default function App() {
     }
 
     if (player.combat || !canPlayerAct(player)) {
-      appendSystemMessage(player.isDead ? '角色已死亡，無法繼續行動。請讀取自動存檔（死亡前），或在存檔管理讀取手動存檔。' : '角色目前昏迷，無法採取行動。');
+      appendSystemMessage(player.isDead ? '角色已死亡，無法繼續行動。請讀取自動存檔（死亡前），或在存檔管理讀取手動存檔。'
+        : isTimelineEnded(player) ? '這條時間線已經結束。請讀取自動存檔（結局前），或在存檔管理讀取手動存檔。' : '角色目前昏迷，無法採取行動。');
       return;
     }
     const explicitSelfDamage = parseExplicitSelfDamage(actionText);
@@ -930,9 +933,10 @@ export default function App() {
         isSidebarOpen={isSidebarOpen}
         onToggleSidebar={() => setIsSidebarOpen((open) => !open)}
         combatActive={!!player.combat}
-        inputDisabled={player.isDead || isPlayerUnconscious(player)}
+        inputDisabled={player.isDead || isPlayerUnconscious(player) || isTimelineEnded(player)}
         onTravel={handleTravel}
-        deathActions={player.isDead ? { onLoadAutoSave: handleLoadAutoSave, onOpenSaveManager: () => setIsSaveManagerOpen(true) } : undefined}
+        deathActions={player.isDead || isTimelineEnded(player)
+          ? { reason: player.isDead ? 'death' : 'ending', onLoadAutoSave: handleLoadAutoSave, onOpenSaveManager: () => setIsSaveManagerOpen(true) } : undefined}
       />
       {isSidebarOpen && <PlayerHUD player={player} onOpenSaveManager={() => setIsSaveManagerOpen(true)} storageWarning={storageWarning || autosaveFailed} onTravel={handleTravel} onAcceptQuest={handleAcceptQuest} onTurnInQuest={handleTurnInQuest} onStartCombat={handleStartCombat} onFleeCombat={handleFleeCombat} onAttack={handleAttack} onUseSkill={handleUseSkill} onUseItem={handleUseItem} onBuyItem={handleBuyItem} onSellItem={handleSellItem} onEquipItem={handleEquipItem} onUseService={handleUseService} />}
       {isKeyModalOpen && <ApiKeyModal

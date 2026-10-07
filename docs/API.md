@@ -33,7 +33,7 @@ sendPlayerAction(
 ## AI 上下文組裝與回應格式版本（O39）
 
 - **區段**：系統提示由具名區段組成，依序為 `player`（玩家狀態、背包、裝備）、`legacy`（歷代角色）、`location`（所在與相鄰地區）、`npcs`、`factions`、`story`（主線，O31）、`quests`、`encounters`（戰鬥、遭遇候選、服務）、`items`（靜態物品清單）、`flags`、`worldEvents`、`chronicle`、`modifiers`、`proposableEvents`、`rules`（主持規則與 JSON 範例）。設定條目與角色卡區段待 O36 加入。
-- **token 預算** `src/data/ai_context.json`：`totalBudgetChars`（整體字元上限，目前 20,000）、`maxCallsPerTurn`（每回合呼叫上限，目前 2：敘事 1 次 + 移動修正 1 次；設為 1 即不送修正請求）、`legacy.maxCharacters`／`maxDeedsPerCharacter`（5／5）、`worldEvents.maxEvents`（12）、`chronicle.maxLines`（10），以及可截斷區段的 `trimmableSections: { legacy, worldEvents, modifiers, chronicle }` 各自的 `priority`（數字越小越重要）與 `maxChars`。只有這四個歷史類區段可截斷；候選清單（地區、任務、遭遇、物品、可提議事件）與規則不截斷，避免 AI 看不到合法選項。截斷時先套用各區段上限，整體仍超出時從優先順序最低的區段繼續省略；列表從最舊的項目開始省略並在標籤註明省略筆數，歷代角色先省略各角色較舊的事蹟（每位保留最新一件，標示 `omittedDeeds`），最後才省略最早的角色。token 數以「中日韓文字 1 字 1 token、其他 4 字元 1 token」估算。2026-10-06 實測一般狀態約 13,200 字元（約 6,500 tokens）。
+- **token 預算** `src/data/ai_context.json`：`totalBudgetChars`（整體字元上限，目前 20,000）、`maxCallsPerTurn`（每回合呼叫上限，目前 2：敘事 1 次 + 移動修正 1 次；設為 1 即不送修正請求）、`legacy.maxCharacters`／`maxDeedsPerCharacter`（5／5）、`worldEvents.maxEvents`（12）、`chronicle.maxLines`（送給 AI 的編年史行數，10；編年史壓縮設定見「世界事件、世界修正與世界規則」），以及可截斷區段的 `trimmableSections: { legacy, worldEvents, modifiers, chronicle }` 各自的 `priority`（數字越小越重要）與 `maxChars`。只有這四個歷史類區段可截斷；候選清單（地區、任務、遭遇、物品、可提議事件）與規則不截斷，避免 AI 看不到合法選項。截斷時先套用各區段上限，整體仍超出時從優先順序最低的區段繼續省略；列表從最舊的項目開始省略並在標籤註明省略筆數，歷代角色先省略各角色較舊的事蹟（每位保留最新一件，標示 `omittedDeeds`），最後才省略最早的角色。token 數以「中日韓文字 1 字 1 token、其他 4 字元 1 token」估算。2026-10-06 實測一般狀態約 13,200 字元（約 6,500 tokens）。
 - **組裝報告**：每次呼叫記錄 `AIContextReport`（總字元、估計 tokens、預算、是否超出、各區段字元／上限／省略數、完整系統提示與使用者提示）。開發模式（`import.meta.env.DEV`）在 HUD 顯示「AI 上下文」面板；模型設定頁顯示每回合呼叫上限與上一次請求的估計大小。正式版不顯示面板。
 - **歷代角色區段**：每位歷代角色（最多 5 位）提供 `generation`（代數）、名稱、種族職階等級、陣營、結束時間地點、`death`（死亡事件）與 `deeds`（事蹟）。事蹟為該角色任內（事件的 `characterSeq` 等於其代數）殺害 NPC 或頭目的死亡事件、未由殺害衍生的聲望事件（攻擊成員、完成委託）、以及 AI 提議並由玩家行動促成的劇本事件；一般魔物擊殺不列入。殺害造成的聲望事件以 `consequence` 附在死亡事件上，不重複列出。每件事蹟（與死亡事件）附上在場 NPC 的認知層級 `presentKnowledge`（見「世界事件、世界修正與世界規則」的認知層級），已列在此區段的事件不在世界事件區段重複；主持規則要求親眼目擊者被問到時明確說出前任冒險者做了什麼，傳聞者以聽說的口吻提到，公開消息者只知道結果。已壓縮進編年史的事件不再列為事蹟。
 - **近期對話與人物記憶（O39 第二版）**：
@@ -155,7 +155,7 @@ sendPlayerAction(
 
 世界的永久變動只經由事件入口套用並寫入事件紀錄（`src/utils/worldEvents.ts`）。每次行動造成的狀態變更都會經過 `finalizeWorld(之前, 之後, 死因提示)`，依序：記錄新的死亡、處理委託人死亡、結算玩家所在地區、觸發自動事件、移除過期的世界修正、壓縮事件紀錄。讀檔與換角色不是行動，不經過此流程。
 
-- **事件紀錄** `world.events`（只增不改）：`{ id, type, gameTimeMinutes, mapId, summary, detail?, knownBy, witnessUnitIds, awareFactionIds, cause, death?, eventId?, changes?, reputationChanges?, characterSeq?, sourceEventId? }`。`characterSeq` 是事件發生時在世的玩家角色代數（每個事件寫入時都會標記），用來把事件連結到歷代角色；`sourceEventId` 是衍生事件的來源，例如殺害造成的聲望事件引用該死亡事件。`type` 為 `unit_death`、`unit_respawn`、`unit_occupation`（他方佔領）、`quest_failed`、`quest_transferred`（委託接手）、`reputation_change`（玩家聲望變化）、`scenario_event`、`story_progress`（劇情片段完成，見「主線：幕與劇情片段」）。`summary` 是公開結果，`detail` 是經過與兇手等細節；`witnessUnitIds` 是事件發生時在場且存活的 NPC 與交戰中/已遭遇的魔物。`knownBy` 為 `witnesses`（目擊者）、`faction`（同勢力）、`region`（本地區）或 `world`（全世界）；`awareFactionIds` 在寫入時依傳播範圍決定：目擊者 → 目擊者所屬勢力；同勢力 → 指定勢力加目擊者勢力；本地區 → 另加在該地區有存活成員的勢力；全世界 → 所有勢力。超過 200 件時，最舊的事件壓縮成 `world.chronicle` 的一行摘要（最多 100 行）。
+- **事件紀錄** `world.events`（只增不改）：`{ id, type, gameTimeMinutes, mapId, summary, detail?, knownBy, witnessUnitIds, awareFactionIds, cause, death?, eventId?, changes?, reputationChanges?, characterSeq?, sourceEventId? }`。`characterSeq` 是事件發生時在世的玩家角色代數（每個事件寫入時都會標記），用來把事件連結到歷代角色；`sourceEventId` 是衍生事件的來源，例如殺害造成的聲望事件引用該死亡事件。`type` 為 `unit_death`、`unit_respawn`、`unit_occupation`（他方佔領）、`quest_failed`、`quest_transferred`（委託接手）、`reputation_change`（玩家聲望變化）、`scenario_event`、`story_progress`（劇情片段完成與進入結局，見「主線：幕與劇情片段」）。`summary` 是公開結果，`detail` 是經過與兇手等細節；`witnessUnitIds` 是事件發生時在場且存活的 NPC 與交戰中/已遭遇的魔物。`knownBy` 為 `witnesses`（目擊者）、`faction`（同勢力）、`region`（本地區）或 `world`（全世界）；`awareFactionIds` 在寫入時依傳播範圍決定：目擊者 → 目擊者所屬勢力；同勢力 → 指定勢力加目擊者勢力；本地區 → 另加在該地區有存活成員的勢力；全世界 → 所有勢力。事件紀錄超過 `ai_context.json` 的 `chronicle.maxEvents`（200）件時，最舊的 `compressBatch`（50）件加上超出的部分以規則壓縮進 `world.chronicle`（O33，`summarizeEventsForChronicle`）：重要事件一件一行（`第 N 天 HH:MM｜地點｜摘要`）；`routineEventTypes`（目前只有 `unit_respawn`）類型的例行事件依類型與地點合併成一行（`第 A～B 天｜地點｜最後一件的摘要（共 N 次）`），各行依該組第一件事件的時間排序；編年史最多保存 `maxStoredLines`（100）行。壓縮不呼叫 AI。
 - **死亡事件**：NPC、頭目與玩家角色死亡時寫入，`death` 記錄死者、死因（`combat` 戰鬥、`self_inflicted` 自我了斷、`misadventure` 意外或風險行動、`unknown`）與兇手。呼叫端提供死因提示；未提供時依事件前的戰鬥狀態推斷。玩家角色的歷代紀錄以 `deathEventId`/`deathSummary` 引用死亡事件。一般魔物樣板代表一群個體，擊敗不寫死亡事件；頭目（`isBoss`）是唯一個體，擊敗即永久死亡。
 - **知識範圍與認知層級（O39；重要角色決策的知識範圍見 O34）**：AI 收到目前地區、全世界周知、與在場 NPC 相關（目擊或死者原屬此地），或在場 NPC 所屬勢力得知的同勢力事件，取最近 12 件（`ai_context.json` 的 `worldEvents.maxEvents`），加上編年史摘要（最近 10 行，視為傳說）。每件事以 `presentKnowledge` 列出在場 NPC 的認知層級（`getEventKnowledgeLevel`）：**親眼目擊**（`witnessUnitIds` 中的單位，知道 `detail`，不會淡化）、**傳聞**（與目擊者同勢力但未在場，事件有 `detail` 時聽說了兇手或死因，不知道經過；附 `heardFrom` 目擊者名單）、**公開消息**（`awareFactionIds` 中勢力的成員、全世界周知事件，或住在事件地區的無勢力 NPC，只知道 `summary`）、**傳說**（傳聞或公開消息經過 `knowledge.legendAfterDays` 天，目前 30 天，只剩模糊往事），其餘為不知道。`detail` 只出現在親眼目擊者的 `knows` 中，沒有在場目擊者時不送給 AI。傳聞不會說錯兇手（會出錯的傳聞留待 O40）。
 - **靜態事件** `src/data/events.json`：`{ id, title, trigger: "auto" | "aiProposal" | "storylet" | "stuck", requires?: { flags, unitsAlive, unitsDead, mapIds, reputation, factionRelations }, excludes?: { flags }, effects: { setFlags?, clearFlags?, worldModifiers?, reputation?, factionRelations? }, knownBy, knownByFactions?, summary, aiHint? }`。勢力條件與效果見「勢力聲望與勢力間關係」；`knownBy: "faction"` 時必須列出 `knownByFactions`。每個事件只觸發一次（`world.firedEventIds`）。`auto` 事件在條件成立時自動觸發；`storylet` 事件只在引用它的劇情片段完成時觸發（見「主線：幕與劇情片段」）；`stuck` 事件只在幕卡死超過寬限期時觸發（O32）；`aiProposal` 事件只能由 AI 在回應的 `eventProposals`（事件 ID 陣列，必填，沒有時為空陣列）提議，遊戲驗證條件成立後才套用，有檢定時只在成功時考慮。Gemini JSON Schema 將 `eventProposals` 限制為目前可提議的事件 ID，沒有候選時只允許空陣列。
@@ -206,17 +206,18 @@ sendPlayerAction(
 - **任務查詢**：`questRules.findQuest(state, id)` 依序查靜態任務與生成委託；HUD、AI 上下文、交付、委託接手與聲望結算都使用此查詢。
 - `npm run validate:data` 驗證範本 ID 格式與唯一性、類型、數量範圍、期限、報酬參數、發布者勢力／職階參照與條件。
 
-## 主線：幕與劇情片段（O31、O32）
+## 主線：幕與劇情片段（O31、O32、O33）
 
 主線採「幕＋劇情片段」結構（`src/utils/storylets.ts`，完成結算在 `src/utils/worldEvents.ts`）；幕與片段由劇本資料定義，程式不寫死任何內容。
 
-- **資料** `src/data/story.json`：`{ rules: { maxActiveStorylets, maxStartsPerTurn, maxCandidatesForAI, stuckGraceMinutes }, acts, storylets }`。
-  - 幕：`{ id: "ACT-n", title, order, defaultStoryletId, stuckEventId?, goal, theme? }`，依 `order` 排序，第一幕為開局的幕。`stuckEventId` 是卡死保底事件（`trigger: "stuck"`），最後一幕以外必填。
+- **資料** `src/data/story.json`：`{ rules: { maxActiveStorylets, maxStartsPerTurn, maxCandidatesForAI, stuckGraceMinutes }, acts, storylets, endings }`。
+  - 幕：`{ id: "ACT-n", title, order, defaultStoryletId, stuckEventId?, deadline?: { days, endingId }, goal, theme? }`，依 `order` 排序，第一幕為開局的幕。`stuckEventId` 是卡死保底事件（`trigger: "stuck"`），最後一幕以外必填。`deadline` 是幕期限（O33）：進入本幕後經過 `days` 個遊戲日仍未達成結局，即進入 `endingId` 結局。
   - 片段：`{ id: "STORY-幕-編號", actId, title, priority (0–100), isDefault?, requires?, excludes?, giver, goal, onComplete, scene }`。
     - `requires`：`{ flags, unitsAlive, unitsDead, mapIds, reputation, factionRelations }`，勢力條件與事件共用 `matchesFactionConditions`；`mapIds` 是發生地點。
     - `giver`：`{ preferredUnitId?, role?: { classIds?, factionIds?, minLevel? }, scope?: "map" | "world", fallback: "notice_board" | "letter" | "relic" | "none" }`；`relic` 需 O26，第一版驗證會拒絕。
     - `goal`：`{ type: "threatRemoved", unitIds, orFlag? }`（唯一單位都已死亡）、`{ type: "locationReached", mapId, orFlag? }`（玩家抵達）或 `{ type: "flagSet", flag }`（旗標成立），都另有給玩家看的 `summary`；`orFlag` 旗標成立時同樣算完成（另一種解法，旗標由 AI 提議事件等設定）。
-    - `onComplete`：`{ eventIds?, setFlags?, advanceAct?, endingTraits?, summary, knownBy? }`；`eventIds` 須為 `trigger: "storylet"` 的事件。
+    - `onComplete`：`{ eventIds?, setFlags?, advanceAct?, endingId?, endingTraits?, summary, knownBy? }`；`eventIds` 須為 `trigger: "storylet"` 的事件；`endingId`（O33）完成時進入結局，與 `advanceAct` 擇一。
+  - 結局（O33）：`{ id: "END-n", title, summary, afterEnding: "continue" | "end", epilogues: [{ when?: { traits?, flags?, excludesFlags?, unitsAlive?, unitsDead? }, text }] }`，見下方「結局」。
     - `scene`：`{ purpose, mustConvey, tone?, keyLines?, playerChoices?, forbidden, giverAbsent? }`，提供給 AI。
 - **候選** `getStoryletCandidates(state)`：
   - 進行中的片段未達 `maxActiveStorylets`；
@@ -236,26 +237,45 @@ sendPlayerAction(
 - **完成** `finalizeWorld`：每次狀態變更後與自動事件交替結算，直到沒有變化。
   - 進行中的片段（開始後不再檢查進入條件）與符合條件但尚未開始的片段，只要目標的結果成立就完成，尚未開始的完成時 `wasActive: false`。
   - 完成時設定 `setFlags`、合併 `endingTraits`，並寫入 `story_progress` 事件：`summary` 為 `onComplete.summary`，`knownBy` 預設 `region`，`changes.storyletIds`／`setFlags`／`actIds`。之後依序套用 `eventIds`，條件不成立的略過。
-  - `advanceAct` 切換到下一幕：進行中的片段清空，上一幕剩下的片段不再完成；最後一幕不可推進（結局判定見 O33）。
+  - `advanceAct` 切換到下一幕：進行中的片段清空，上一幕剩下的片段不再完成，`actStartedAtMinutes` 記為推進的時間（幕期限由此起算）；最後一幕不可推進，改用 `endingId`。
+  - `endingId`：套用完成旗標、結局特徵與完成事件之後進入結局（見「結局」）。
 - **卡死偵測與保底（O32）** `isActStuck(state)`：判斷「日後仍可能達成」而非「現在就能達成」，寧可漏報也不誤判；無法由規則判定的條件（有來源但尚未成立的旗標、聲望與勢力關係）視為可能。
   - 可抵達的地圖：從目前地點沿 `connectedMapIds` 走，地圖的前置任務已接取、已完成或仍可接取（委託人可擔任給予者，前置任務也都可接取）。
   - 目標仍可達成：已達成；或 `orFlag` 仍可設定；威脅消除的單位都已死亡或仍可擊倒（未潛伏、所在地可抵達、`requiredQuestId` 進行中或仍可接取）；抵達的地圖可抵達；旗標仍可設定（未觸發、未被排除、需要存活的單位未死、需要死亡的單位可擊倒、發生地點可抵達的事件，不含 `stuck` 事件；或本幕尚未完成的片段的 `setFlags`）。
-  - 卡死：不是最後一幕，沒有目標仍可達成的進行中片段，且進行中已滿或沒有「進入條件可能成立、給予者在可抵達的發生地點、目標可能達成」的未開始片段。
+  - 卡死：尚未達成結局（O33 起最後一幕也判定），沒有目標仍可達成的進行中片段，且進行中已滿或沒有「進入條件可能成立、給予者在可抵達的發生地點、目標可能達成」的未開始片段。
   - `finalizeWorld` 在自動事件與片段完成之後檢查：卡死時記錄 `stuckSinceMinutes`，脫離卡死或完成任一片段時清除；持續 `stuckGraceMinutes`（範例 1440 分鐘）後先觸發該幕的 `stuckEventId` 事件（原因「主線保底」，每個事件只觸發一次，可設旗標開出救援片段）；觸發後仍卡死（或沒有事件、事件條件不成立）時強制完成該幕的預設片段，`completedStorylets` 記錄 `forced: true`、`story_progress` 事件原因以「主線保底」開頭，主線訊息標示「（主線保底）」。
-- **存檔** `world.story`（世界層）：`{ currentActId, activeStorylets: [{ id, startedAtMinutes, giverUnitId?, giverChannel? }], completedStorylets: [{ id, completedAtMinutes, wasActive, forced? }], endingTraits, stuckSinceMinutes? }`（存檔版本 11）。
-  - 目前幕不存在或格式錯誤時整份存檔無效；
+- **結局（O33）**：由劇情片段完成（`onComplete.endingId`）或幕期限（`deadline`，`finalizeWorld` 交替結算的最後一步，片段完成優先）進入，每個世界只進入一次。
+  - 結局判定 `resolveEpilogueIndexes(state, ending)`：依進入結局當下的結局特徵、旗標、單位生死，挑出所有條件成立的尾聲段落（依資料順序，沒有 `when` 的段落每次都顯示），段落索引存在 `world.story.ending`，之後顯示與 AI 上下文都讀這份紀錄，相同狀態一定得到相同結果。不呼叫 AI。
+  - 進入時清空進行中的片段與卡死計時，寫入 `story_progress` 事件（`summary` 為結局的 `summary`、`knownBy: "world"`、`changes.endingIds`、原因以「結局：」開頭）。之後沒有片段候選、不再完成片段、不判定卡死。
+  - `afterEnding: "continue"`：世界繼續運作，玩家以現在的身分繼續活動，主線已結束。
+  - `afterEnding: "end"`：時間線結束（`isTimelineEnded`，`src/utils/playerStatus.ts`）：比照死亡，`canPlayerAct` 為 false，不寫入自動存檔（自動存檔停在進入結局的行動之前）、禁止手動存檔，故事區顯示「讀取自動存檔（結局前）」與「開啟存檔管理」。
+  - 主線訊息附上結局標題、結果、尾聲段落與結局後的說明；HUD「📖 主線」顯示已達成的結局，或目前幕的期限（到期時間）。
+- **存檔** `world.story`（世界層）：`{ currentActId, activeStorylets: [{ id, startedAtMinutes, giverUnitId?, giverChannel? }], completedStorylets: [{ id, completedAtMinutes, wasActive, forced? }], endingTraits, actStartedAtMinutes, stuckSinceMinutes?, ending?: { id, reachedAtMinutes, epilogueIndexes } }`（存檔版本 12）。
+  - 目前幕或已達成的結局不存在、缺少 `actStartedAtMinutes` 或格式錯誤時整份存檔無效；超出資料範圍的尾聲段落索引略過；
   - 靜態資料已移除的片段讀檔時略過。
 - **AI 上下文** `story` 區段（不截斷）：
   - 目前幕（`title`、`goal`、`theme`，只作敘事方向）與 `endingTraits`；
+  - 幕期限的剩餘遊戲日 `deadline.remainingDays`（O33；AI 可營造時間壓力，不可捏造不同期限或預告結局）；
+  - 達成結局後改附 `ending`（標題、結果、尾聲、結局後走向），不再附幕、期限與候選；
   - 進行中片段與最多 `maxCandidatesForAI` 個候選，各附 `giver`（目前給予者名稱或保底管道）、`goal` 與演出要求；
   - 首選給予者不在時改附 `giverAbsent`，不附 `keyLines`。
-  - 主持規則：遵守 `forbidden`；不可由非給予者帶出片段；不可宣稱片段、目標或幕已完成。
+  - 主持規則：遵守 `forbidden`；不可由非給予者帶出片段；不可宣稱片段、目標、幕或故事已完成，不可自行描寫結局。
 - **HUD**：「📖 主線」顯示目前幕、進行中片段、目標與目前給予者（原給予者不在時提示接手者）；片段開始、完成與進入新的一幕時顯示「📖 主線」訊息（`story_progress` 事件不重複列在「🌍 世界變化」）。
 - `npm run validate:data` 驗證：
   - 幕與片段的 ID 格式與唯一性、參照、條件、給予者、目標類型；族群樣板不可作為威脅消除目標。
   - 完成事件須為 `storylet` 觸發，`storylet` 事件須被片段引用。
-  - 每幕有且只有一個預設片段；預設片段只由保底管道給予、不依賴單位存活；最後一幕不可推進。
+  - 每幕有且只有一個預設片段；預設片段只由保底管道給予、不依賴單位存活；最後一幕不可推進，最後一幕的預設片段必須進入結局（O33）。
+  - O33：結局 ID 格式 `END-n` 與唯一性、標題與結果、`afterEnding`、至少一段尾聲、尾聲條件的單位與旗標（旗標須有設定來源）；`endingId` 與 `advanceAct` 不可同時設定；幕期限天數為正整數、期限結局存在；每個結局都要有片段或幕期限會進入。
   - O32：`stuckGraceMinutes` 為 0 以上的整數；最後一幕以外，預設片段必須 `advanceAct`，且必須有 `stuckEventId`（`trigger: "stuck"`，不可限制發生地點，須被幕引用）；片段的進入條件旗標、目標旗標與 `orFlag` 必須有事件或片段會設定；主線節點（`advanceAct`，或設定其他片段的進入條件／目標所需的旗標）的保底管道不可為 `none`；保底管道為告示板時，發生地點（未設定時為全世界）至少一處有告示板。地圖 `facilities` 只能是 `notice_board`。
+
+## 主線自動模擬測試（O33）
+
+`npm run test:sim`（`scripts/simulate-story.mjs` 載入 `src/dev/storySimulation.ts`）不呼叫 AI，以規則代替玩家與主持人 AI，大量重複遊玩目前的劇本資料；所有狀態變更都經過 `finalizeWorld`，與實際遊戲走同一套世界規則。
+
+- **設定** `scripts/simulation.config.json`：`runs`（1000）、`seed`（亂數種子，第 i 次為 seed + i）、`maxGameDays`（60）、`maxSteps`、`contextSampleEvery`（每幾步量測一次 AI 上下文）、`continueAfterEndingDays`（結局為 continue 時，結局後再模擬幾天）、`stressEvents`（壓力測試灌入的事件數）、`profiles`（玩家類型）。命令列可覆寫 `--runs`、`--seed`、`--days`。
+- **玩家類型** `profiles: [{ name, share, stallDays, requireEnding, policy }]`：依 `share` 分配次數；目前為專注主線（50%）、閒晃搗亂（35%）、拖延放置（15%，不要求達成結局，用來觸發幕期限）。`policy` 為每一步的機率：搗亂（`killResident` 殺害在場居民、`worldDeath` 具名居民在別處死亡、`wander` 隨意移動、`wait` 等待 8 小時），其餘時間朝目標前進（交付與接取任務 `acceptQuest`、開始候選片段 `startStorylet`、提議能設定目標旗標的事件 `proposeGoalEvent`、提議其他可提議事件 `proposeOtherEvent`、擊倒目標或收集物品需要的單位、沿最短路徑前往目標地點）。戰鬥一律視為玩家獲勝；重要角色的規則行為待 O34 `ruleFallback`。
+- **報告**：各玩家類型的結局分布與一次都沒達成的結局、各幕停留天數、保底事件與強制完成的比例、主要卡死情況（第一次判定卡死時的狀態摘要分組）、AI 上下文最大字元數與是否超出預算、事件紀錄與編年史的大小、壓力測試結果、結局判定可重現性（達成結局的狀態存讀檔後結局與尾聲段落一致）、同一種子重跑是否一致，以及疑似漏報的卡死（同一幕超過該玩家類型的 `stallDays` 沒有進展，卡死偵測卻未判定，附狀態摘要與種子）。
+- **失敗條件**（非零結束碼）：模擬中出現例外或存檔驗證失敗、結局達成後被改變或主線仍在前進、結局判定不可重現、AI 上下文或壓力測試超出預算、要求達成結局的玩家類型在期限內沒有達成結局、同一種子重跑不一致。疑似漏報與未達成的結局只列出供人工檢查。
 
 ## 勢力聲望與勢力間關係
 
@@ -296,7 +316,7 @@ sendPlayerAction(
 - **匯出／匯入**：存檔管理可將一個世界的所有欄位匯出為 JSON（`format: "adventure-simulator-world"`）。匯入時驗證格式、版本、劇本與每個欄位內容，任何欄位無效即整份拒絕；一律以新世界 ID 匯入，不覆蓋任何現有存檔，寫入中途失敗會移除已寫入的欄位。
 - **容量管理**：存檔管理顯示本遊戲在 localStorage 的估計用量（以約 5 MB 上限計），達 80% 時警示；寫入失敗（例如容量不足）時 HUD 提示匯出備份，其他欄位不受影響。事件紀錄超過 200 件即壓縮成編年史，且存檔只保存有差異的單位實例；目前容量足夠，暫不改用 IndexedDB。
 
-存檔帶有 `schemaVersion`（`saveStorage.ts` 的 `SAVE_SCHEMA_VERSION`，目前為 10）。開發階段每次變更存檔格式就將版本加一；版本不符、缺少欄位或格式無效的存檔直接捨棄，不提供舊格式遷移；舊版單一快照（`TRPG_GAME_SESSION`、`TRPG_PLAYER_STATE`）在啟動時移除。正式上線後才開始為舊版本撰寫遷移。
+存檔帶有 `schemaVersion`（`saveStorage.ts` 的 `SAVE_SCHEMA_VERSION`，目前為 12）。開發階段每次變更存檔格式就將版本加一；版本不符、缺少欄位或格式無效的存檔直接捨棄，不提供舊格式遷移；舊版單一快照（`TRPG_GAME_SESSION`、`TRPG_PLAYER_STATE`）在啟動時移除。正式上線後才開始為舊版本撰寫遷移。
 
 ## 金鑰安全限制
 

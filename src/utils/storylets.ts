@@ -1,9 +1,10 @@
-import type { EventStatic, PlayerState, StoryletGiverChannel, StoryletStatic, StoryState } from '../types/game';
+import type { EndingEpilogueCondition, EventStatic, PlayerState, StoryEndingStatic, StoryletGiverChannel, StoryletStatic, StoryState } from '../types/game';
 import {
   eventsDatabase,
   getMapById,
   getQuestById,
   getStoryActById,
+  getStoryEndingById,
   getStoryletById,
   getUnitDisplayName,
   getUnitTemplateById,
@@ -21,15 +22,56 @@ import { matchesFactionConditions } from './factions';
  * 主線：幕與劇情片段（O31）。
  * 規則篩出目前可開始的片段候選 → 主持人 AI 依劇情脈絡在回應的 storyletProposals 挑選 → 前端驗證後開始。
  * 目標以結果判定（由 finalizeWorld 每次狀態變更後檢查），由他人或事件達成時同樣推進；完成效果經事件入口套用。
- * 本模組只含判定與開始片段；完成與推進幕寫入事件紀錄，見 worldEvents.ts。
+ * 本模組只含判定與開始片段；完成、推進幕與進入結局寫入事件紀錄，見 worldEvents.ts。
  */
 
-export const createStoryState = (): StoryState => ({
+export const createStoryState = (startMinutes: number): StoryState => ({
   currentActId: storyActs[0]?.id ?? '',
   activeStorylets: [],
   completedStorylets: [],
-  endingTraits: {}
+  endingTraits: {},
+  actStartedAtMinutes: startMinutes
 });
+
+const MINUTES_PER_DAY = 24 * 60;
+
+// ---------- 結局（O33）----------
+
+/** 已達成的結局；尚未達成時為 undefined。 */
+export const getReachedEnding = (state: PlayerState): StoryEndingStatic | undefined =>
+  state.world.story.ending ? getStoryEndingById(state.world.story.ending.id) : undefined;
+
+
+/** 目前幕的期限：到期時間與期限結局；沒有期限或已達成結局時為 undefined。 */
+export function getActDeadline(state: PlayerState): { dueAtMinutes: number; endingId: string } | undefined {
+  const story = state.world.story;
+  const deadline = getStoryActById(story.currentActId)?.deadline;
+  if (!deadline || story.ending) return undefined;
+  return { dueAtMinutes: story.actStartedAtMinutes + deadline.days * MINUTES_PER_DAY, endingId: deadline.endingId };
+}
+
+/** 尾聲段落的條件：結局特徵、旗標、排除旗標、單位生死全部成立（省略的項目不檢查）。 */
+function matchesEpilogueCondition(state: PlayerState, when: EndingEpilogueCondition | undefined): boolean {
+  if (!when) return true;
+  const traits = state.world.story.endingTraits;
+  return Object.entries(when.traits ?? {}).every(([key, value]) => traits[key] === value) &&
+    (when.flags ?? []).every((flag) => state.storyFlags[flag] === true) &&
+    !(when.excludesFlags ?? []).some((flag) => state.storyFlags[flag] === true) &&
+    (when.unitsAlive ?? []).every((unitId) => isAlive(state, unitId)) &&
+    (when.unitsDead ?? []).every((unitId) => hasDied(state, unitId));
+}
+
+/** 結局判定：依進入結局當下的世界狀態，挑出所有符合條件的尾聲段落（依資料順序）。相同狀態一定得到相同結果。 */
+export const resolveEpilogueIndexes = (state: PlayerState, ending: StoryEndingStatic): number[] =>
+  ending.epilogues.flatMap((epilogue, index) => matchesEpilogueCondition(state, epilogue.when) ? [index] : []);
+
+/** 已達成結局的尾聲文字（依存檔記錄的段落）。 */
+export function getEndingEpilogue(state: PlayerState): { ending: StoryEndingStatic; texts: string[] } | undefined {
+  const reached = state.world.story.ending;
+  const ending = getReachedEnding(state);
+  if (!reached || !ending) return undefined;
+  return { ending, texts: reached.epilogueIndexes.flatMap((index) => ending.epilogues[index]?.text ?? []) };
+}
 
 export const CHANNEL_LABELS: Record<StoryletGiverChannel, string> = { notice_board: '告示板', letter: '書信', relic: '遺物', none: '無' };
 
@@ -140,7 +182,7 @@ function getPendingStorylets(state: PlayerState, includeLocation: boolean): Stor
  */
 export function getStoryletCandidates(state: PlayerState): { storylet: StoryletStatic; giver: StoryletGiver }[] {
   const story = state.world.story;
-  if (story.activeStorylets.length >= storyData.rules.maxActiveStorylets) return [];
+  if (story.ending || story.activeStorylets.length >= storyData.rules.maxActiveStorylets) return [];
   const progress = createProgressContext(state);
   const otherPathOpen = story.activeStorylets.some((entry) => {
     const storylet = getStoryletById(entry.id);
@@ -265,11 +307,11 @@ function couldMeetConditions(progress: ProgressContext, storylet: StoryletStatic
 
 /**
  * 目前幕是否卡死：沒有目標仍可達成的進行中片段，且（進行中已滿，或）沒有進入條件可能成立、給予者與發生地點可抵達、目標可能達成的未開始片段。
- * 最後一幕不判定（結局判定見 O33）。
+ * 最後一幕同樣判定（預設片段通往結局，O33）；已達成結局後不再判定。
  */
 export function isActStuck(state: PlayerState): boolean {
   const story = state.world.story;
-  if (storyActs[storyActs.length - 1]?.id === story.currentActId) return false;
+  if (story.ending) return false;
   const progress = createProgressContext(state);
   const active = story.activeStorylets.flatMap((entry) => getStoryletById(entry.id) ?? []);
   if (active.some((storylet) => isGoalAchievable(progress, storylet))) return false;
@@ -283,6 +325,7 @@ export function isActStuck(state: PlayerState): boolean {
  * 進行中的優先，其次依優先度。
  */
 export function findCompletableStorylets(state: PlayerState): { storylet: StoryletStatic; wasActive: boolean }[] {
+  if (state.world.story.ending) return [];
   const active = state.world.story.activeStorylets.flatMap((entry) => {
     const storylet = getStoryletById(entry.id);
     return storylet && isStoryletGoalMet(state, storylet) ? [{ storylet, wasActive: true }] : [];
@@ -321,7 +364,7 @@ export function startStorylets<T extends PlayerState>(before: PlayerState, next:
   return { state, started, rejected };
 }
 
-/** 狀態變更前後的主線進展（完成的片段與新的一幕），給玩家的系統訊息；沒有進展時回傳 undefined。 */
+/** 狀態變更前後的主線進展（完成的片段、新的一幕與結局），給玩家的系統訊息；沒有進展時回傳 undefined。 */
 export function describeStoryProgress(before: PlayerState, after: PlayerState): string | undefined {
   const known = new Set(before.world.story.completedStorylets.map((entry) => entry.id));
   const lines = after.world.story.completedStorylets.filter((entry) => !known.has(entry.id)).flatMap((entry) => {
@@ -330,6 +373,13 @@ export function describeStoryProgress(before: PlayerState, after: PlayerState): 
   });
   const act = after.world.story.currentActId !== before.world.story.currentActId ? getStoryActById(after.world.story.currentActId) : undefined;
   if (act) lines.push(`・進入新的一幕：「${act.title}」`);
+  const epilogue = !before.world.story.ending ? getEndingEpilogue(after) : undefined;
+  if (epilogue) {
+    const afterText = epilogue.ending.afterEnding === 'end'
+      ? '這條時間線到此結束。可以讀取自動存檔（結局前）或手動存檔，嘗試其他走向。'
+      : '世界會繼續運作，你可以用現在的身分繼續活動；主線已經結束。';
+    lines.push('', `🏁 結局「${epilogue.ending.title}」：${epilogue.ending.summary}`, '', ...epilogue.texts.flatMap((text) => [text, '']), afterText);
+  }
   return lines.length ? `📖 主線進展：\n${lines.join('\n')}` : undefined;
 }
 
@@ -348,10 +398,13 @@ function describeScene(storylet: StoryletStatic, giver: StoryletGiver | undefine
   };
 }
 
-/** AI 上下文的主線區段：目前幕、累積的結局特徵、進行中片段與可開始的候選（含演出要求）。 */
+/** AI 上下文的主線區段：目前幕、期限、累積的結局特徵、進行中片段與可開始的候選（含演出要求）；達成結局後附上結局與尾聲。 */
 export function getStoryContextForAI(state: PlayerState) {
   const story = state.world.story;
   const act = getStoryActById(story.currentActId);
+  const epilogue = getEndingEpilogue(state);
+  const deadline = getActDeadline(state);
+  // 達成結局後進行中片段已清空、也沒有候選（getStoryletCandidates 回傳空陣列）。
   const active = story.activeStorylets.flatMap((entry) => {
     const storylet = getStoryletById(entry.id);
     if (!storylet) return [];
@@ -367,7 +420,14 @@ export function getStoryContextForAI(state: PlayerState) {
     ...describeScene(storylet, giver)
   }));
   return {
-    act: act ? { title: act.title, goal: act.goal, ...(act.theme ? { theme: act.theme } : {}) } : undefined,
+    act: act && !epilogue ? { title: act.title, goal: act.goal, ...(act.theme ? { theme: act.theme } : {}) } : undefined,
+    ending: epilogue ? {
+      title: epilogue.ending.title,
+      summary: epilogue.ending.summary,
+      epilogue: epilogue.texts,
+      afterEnding: epilogue.ending.afterEnding === 'end' ? '時間線已結束' : '世界繼續運作，主線已結束'
+    } : undefined,
+    ...(deadline ? { deadline: { remainingDays: Math.max(0, Math.ceil((deadline.dueAtMinutes - state.gameTimeMinutes) / MINUTES_PER_DAY)) } } : {}),
     endingTraits: story.endingTraits,
     active,
     candidates

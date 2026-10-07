@@ -1,5 +1,5 @@
 import type { GeneratedQuest, PlayerState, StoryMessage, StoryState, UnitMemoryNote, WorldEvent, WorldModifier, WorldRuntimeState } from '../types/game';
-import { clampReputation, createDefaultUnitInstance, createInitialReputation, FACTION_RELATION_STATUSES, factionData, getBaseExpForLevel, getEventById, getCharacterClassById, getFactionById, getItemById, getMapById, getPlayerResourceCaps, getQuestTemplateById, getSpeciesById, getStoryActById, getStoryletById, getUnitAbilities, getUnitLevelCap, getWorldUnitById, MAX_UNIT_LEVEL, PLAYER_UNIT_ID, scenario, unitTemplatesDatabase } from '../data/staticData';
+import { clampReputation, createDefaultUnitInstance, createInitialReputation, FACTION_RELATION_STATUSES, factionData, getBaseExpForLevel, getEventById, getCharacterClassById, getFactionById, getItemById, getMapById, getPlayerResourceCaps, getQuestTemplateById, getSpeciesById, getStoryActById, getStoryEndingById, getStoryletById, getUnitAbilities, getUnitLevelCap, getWorldUnitById, MAX_UNIT_LEVEL, PLAYER_UNIT_ID, scenario, unitTemplatesDatabase } from '../data/staticData';
 import { isValidGameTime } from './gameTime';
 import { isValidSpeciesClassCombo, UNIT_STAT_KEYS } from './unitGrowth';
 import { createCombat } from './combatState';
@@ -64,7 +64,7 @@ function normalizeGeneratedQuest(value: unknown): GeneratedQuest | null | undefi
 
 const STORYLET_CHANNELS = ['notice_board', 'letter', 'relic', 'none'];
 
-/** 主線進度：格式錯誤或目前幕已從靜態資料移除時整份拒絕；已移除的片段略過。 */
+/** 主線進度：格式錯誤、目前幕或已達成的結局已從靜態資料移除時整份拒絕；已移除的片段略過。 */
 function normalizeStoryState(value: unknown): StoryState | null {
   if (!isRecord(value) || typeof value.currentActId !== 'string' || !getStoryActById(value.currentActId) ||
       !Array.isArray(value.activeStorylets) || !Array.isArray(value.completedStorylets) || !isRecord(value.endingTraits) ||
@@ -75,12 +75,24 @@ function normalizeStoryState(value: unknown): StoryState | null {
   if (!value.completedStorylets.every((entry) => isRecord(entry) && typeof entry.id === 'string' && isValidGameTime(entry.completedAtMinutes) &&
       typeof entry.wasActive === 'boolean' && (entry.forced === undefined || entry.forced === true))) return null;
   if (value.stuckSinceMinutes !== undefined && !isValidGameTime(value.stuckSinceMinutes)) return null;
+  if (!isValidGameTime(value.actStartedAtMinutes)) return null;
+  const ending = value.ending;
+  if (ending !== undefined && !(isRecord(ending) && typeof ending.id === 'string' && isValidGameTime(ending.reachedAtMinutes) &&
+      Array.isArray(ending.epilogueIndexes) && ending.epilogueIndexes.every((index) => Number.isInteger(index) && (index as number) >= 0))) return null;
+  const endingStatic = isRecord(ending) ? getStoryEndingById(String(ending.id)) : undefined;
+  if (ending !== undefined && !endingStatic) return null;
   return {
     currentActId: value.currentActId,
     activeStorylets: (value.activeStorylets as StoryState['activeStorylets']).filter((entry) => !!getStoryletById(entry.id)),
     completedStorylets: (value.completedStorylets as StoryState['completedStorylets']).filter((entry) => !!getStoryletById(entry.id)),
     endingTraits: value.endingTraits as Record<string, string>,
-    ...(value.stuckSinceMinutes !== undefined ? { stuckSinceMinutes: value.stuckSinceMinutes as number } : {})
+    actStartedAtMinutes: value.actStartedAtMinutes,
+    ...(value.stuckSinceMinutes !== undefined ? { stuckSinceMinutes: value.stuckSinceMinutes as number } : {}),
+    ...(isRecord(ending) && endingStatic ? { ending: {
+      id: endingStatic.id, reachedAtMinutes: ending.reachedAtMinutes as number,
+      // 靜態資料的尾聲段落減少時，略過已不存在的段落。
+      epilogueIndexes: (ending.epilogueIndexes as number[]).filter((index) => index < endingStatic.epilogues.length)
+    } } : {})
   };
 }
 

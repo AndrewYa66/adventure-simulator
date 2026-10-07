@@ -16,7 +16,8 @@ interface StoryLogProps {
   inputDisabled: boolean;
   onTravel: (mapId: string) => void;
   /** 角色死亡時顯示讀檔訊息；未死亡時不傳。 */
-  deathActions?: { onLoadAutoSave: () => void; onOpenSaveManager: () => void };
+  /** 死亡或時間線結束（O33）時的讀檔入口。 */
+  deathActions?: { reason: 'death' | 'ending'; onLoadAutoSave: () => void; onOpenSaveManager: () => void };
 }
 
 export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAction, onOpenKeyModal, hasApiKey, selectedModel, isSidebarOpen, onToggleSidebar, combatActive, inputDisabled, onTravel, deathActions }) => {
@@ -98,9 +99,11 @@ export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAct
         {loading && <div style={{ color: '#888' }}>🎲 GM 正在擲骰子與構思劇情...</div>}
       </div>
 
-      {deathActions && <section role="alert" aria-label="角色死亡" style={{ padding: '14px 16px', backgroundColor: '#3a1c1c', borderTop: '1px solid #8e2424', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px' }}>
-        <span style={{ flex: '1 1 260px', color: '#ffcdd2' }}>☠️ 你已死亡。自動存檔停在致命行動之前（戰鬥中死亡則停在該場戰鬥開始前），可讀取後重新嘗試，或從存檔管理讀取手動存檔。</span>
-        <button onClick={deathActions.onLoadAutoSave} disabled={loading} style={{ padding: '8px 14px', backgroundColor: '#2e5d32', color: '#fff', border: '1px solid #4a8', borderRadius: '4px', cursor: 'pointer' }}>讀取自動存檔（死亡前）</button>
+      {deathActions && <section role="alert" aria-label={deathActions.reason === 'death' ? '角色死亡' : '時間線結束'} style={{ padding: '14px 16px', backgroundColor: deathActions.reason === 'death' ? '#3a1c1c' : '#2a2438', borderTop: `1px solid ${deathActions.reason === 'death' ? '#8e2424' : '#6a5a9a'}`, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px' }}>
+        <span style={{ flex: '1 1 260px', color: deathActions.reason === 'death' ? '#ffcdd2' : '#d8ccff' }}>{deathActions.reason === 'death'
+          ? '☠️ 你已死亡。自動存檔停在致命行動之前（戰鬥中死亡則停在該場戰鬥開始前），可讀取後重新嘗試，或從存檔管理讀取手動存檔。'
+          : '🏁 這條時間線已經結束。自動存檔停在進入結局的行動之前，可讀取後嘗試其他走向，或從存檔管理讀取手動存檔。'}</span>
+        <button onClick={deathActions.onLoadAutoSave} disabled={loading} style={{ padding: '8px 14px', backgroundColor: '#2e5d32', color: '#fff', border: '1px solid #4a8', borderRadius: '4px', cursor: 'pointer' }}>{deathActions.reason === 'death' ? '讀取自動存檔（死亡前）' : '讀取自動存檔（結局前）'}</button>
         <button onClick={deathActions.onOpenSaveManager} style={{ padding: '8px 14px', backgroundColor: '#333', color: '#fff', border: '1px solid #666', borderRadius: '4px', cursor: 'pointer' }}>開啟存檔管理</button>
       </section>}
 

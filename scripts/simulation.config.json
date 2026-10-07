@@ -1,0 +1,59 @@
+{
+  "runs": 1000,
+  "seed": 20261007,
+  "maxGameDays": 60,
+  "maxSteps": 1500,
+  "contextSampleEvery": 100,
+  "continueAfterEndingDays": 10,
+  "stressEvents": 600,
+  "profiles": [
+    {
+      "name": "專注主線",
+      "share": 0.5,
+      "stallDays": 10,
+      "requireEnding": true,
+      "policy": {
+        "killResident": 0.03,
+        "worldDeath": 0.01,
+        "wander": 0.1,
+        "wait": 0.06,
+        "acceptQuest": 0.7,
+        "startStorylet": 0.8,
+        "proposeGoalEvent": 0.3,
+        "proposeOtherEvent": 0.05
+      }
+    },
+    {
+      "name": "閒晃搗亂",
+      "share": 0.35,
+      "stallDays": 30,
+      "requireEnding": true,
+      "policy": {
+        "killResident": 0.06,
+        "worldDeath": 0.02,
+        "wander": 0.3,
+        "wait": 0.3,
+        "acceptQuest": 0.4,
+        "startStorylet": 0.3,
+        "proposeGoalEvent": 0.15,
+        "proposeOtherEvent": 0.1
+      }
+    },
+    {
+      "name": "拖延放置",
+      "share": 0.15,
+      "stallDays": 90,
+      "requireEnding": false,
+      "policy": {
+        "killResident": 0.01,
+        "worldDeath": 0.01,
+        "wander": 0.04,
+        "wait": 0.85,
+        "acceptQuest": 0.5,
+        "startStorylet": 0.5,
+        "proposeGoalEvent": 0.2,
+        "proposeOtherEvent": 0.05
+      }
+    }
+  ]
+}

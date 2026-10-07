@@ -3,7 +3,7 @@
   "totalBudgetChars": 20000,
   "legacy": { "maxCharacters": 5, "maxDeedsPerCharacter": 5 },
   "worldEvents": { "maxEvents": 12 },
-  "chronicle": { "maxLines": 10 },
+  "chronicle": { "maxLines": 10, "maxEvents": 200, "compressBatch": 50, "maxStoredLines": 100, "routineEventTypes": ["unit_respawn"] },
   "knowledge": { "legendAfterDays": 30 },
   "trimmableSections": {
     "legacy": { "priority": 1, "maxChars": 2500 },

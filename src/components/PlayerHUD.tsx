@@ -7,7 +7,7 @@ import { canAcceptQuest, canTurnInQuest, getQuestGiverName, isGeneratedQuest, li
 import { canPlayerAct, isPlayerUnconscious } from '../utils/playerStatus';
 import { getCombatTarget } from '../utils/combatState';
 import { formatGameTime } from '../utils/gameTime';
-import { describeStoryletGiver, resolveStoryletGiver } from '../utils/storylets';
+import { describeStoryletGiver, getActDeadline, getEndingEpilogue, resolveStoryletGiver } from '../utils/storylets';
 
 const RELATION_LABELS = { war: '交戰', hostile: '敵對', tense: '緊張', neutral: '中立', friendly: '友好', alliance: '同盟' } as const;
 
@@ -233,7 +233,13 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
       <div>
         <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #444' }}>📖 主線</h4>
         <div style={{ fontSize: '12px', color: '#ccc', marginBottom: '6px' }}>{getStoryActById(player.world.story.currentActId)?.title ?? player.world.story.currentActId}</div>
-        {player.world.story.activeStorylets.length === 0 && <div style={{ fontSize: '12px', color: '#888' }}>目前沒有進行中的劇情</div>}
+        {(() => {
+          const reached = getEndingEpilogue(player);
+          if (reached) return <div style={{ fontSize: '12px', color: '#d8ccff', marginBottom: '6px' }}>🏁 已達成結局：{reached.ending.title}{reached.ending.afterEnding === 'end' ? '（時間線已結束）' : '（主線已結束，世界繼續運作）'}</div>;
+          const deadline = getActDeadline(player);
+          return deadline && <div style={{ fontSize: '12px', color: '#ffcc80', marginBottom: '6px' }}>⏳ 期限：{formatGameTime(deadline.dueAtMinutes)} 之前</div>;
+        })()}
+        {player.world.story.activeStorylets.length === 0 && !player.world.story.ending && <div style={{ fontSize: '12px', color: '#888' }}>目前沒有進行中的劇情</div>}
         {player.world.story.activeStorylets.map((entry) => {
           const storylet = getStoryletById(entry.id);
           if (!storylet) return null;

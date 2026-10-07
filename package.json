@@ -9,7 +9,8 @@
     "test:ai": "node scripts/ai-smoke-test.mjs",
     "build": "npm run validate:data && tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:sim": "node scripts/simulate-story.mjs"
   },
   "dependencies": {
     "react": "^19.2.8",

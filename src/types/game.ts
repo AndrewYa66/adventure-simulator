@@ -458,6 +458,8 @@ export interface StoryActStatic {
   defaultStoryletId: string;
   /** 卡死保底事件（trigger 須為 stuck）：卡死超過寬限期時先觸發，可設旗標開出救援片段。最後一幕以外必填（O32）。 */
   stuckEventId?: string;
+  /** 期限（O33）：進入本幕後經過 days 個遊戲日仍未達成結局，即進入 endingId 結局。 */
+  deadline?: { days: number; endingId: string };
   /** 幕目標（結果），提供給 AI 作為敘事方向。 */
   goal: string;
   theme?: string;
@@ -501,6 +503,8 @@ export interface StoryletStatic {
     eventIds?: string[];
     setFlags?: string[];
     advanceAct?: boolean;
+    /** 完成時進入的結局（O33），與 advanceAct 擇一；最後一幕的預設片段必填。 */
+    endingId?: string;
     endingTraits?: Record<string, string>;
     /** 完成時寫入事件紀錄的公開結果。 */
     summary: string;
@@ -522,6 +526,31 @@ export interface StoryDataStatic {
   };
   acts: StoryActStatic[];
   storylets: StoryletStatic[];
+  endings: StoryEndingStatic[];
+}
+
+/** 結局尾聲段落的顯示條件（全部成立才顯示；省略的項目不檢查）。 */
+export interface EndingEpilogueCondition {
+  /** 結局特徵須為指定值（項目 → 值）。 */
+  traits?: Record<string, string>;
+  flags?: string[];
+  excludesFlags?: string[];
+  unitsAlive?: string[];
+  unitsDead?: string[];
+}
+
+/**
+ * 結局（O33）：由劇情片段完成（onComplete.endingId）或幕的期限進入。
+ * 尾聲由符合條件的段落依序組成，表達變化軸（例如兩個結局特徵的組合）；由規則判定，不呼叫 AI。
+ * afterEnding：continue 世界繼續運作、主線就此結束；end 播放尾聲後時間線結束（同死亡：不寫自動存檔、可讀檔）。
+ */
+export interface StoryEndingStatic {
+  id: string;
+  title: string;
+  /** 結局的公開結果，寫入事件紀錄並提供給 AI。 */
+  summary: string;
+  afterEnding: 'continue' | 'end';
+  epilogues: { when?: EndingEpilogueCondition; text: string }[];
 }
 
 /** 主線進度（世界存檔）。 */
@@ -532,8 +561,12 @@ export interface StoryState {
   completedStorylets: { id: string; completedAtMinutes: number; wasActive: boolean; forced?: boolean }[];
   /** 目前幕開始卡死的時間；沒有卡死時不存在（O32）。 */
   stuckSinceMinutes?: number;
-  /** 過程中累積的結局特徵（項目 → 值），提供給 AI 作為敘事背景，結局判定見 O33。 */
+  /** 過程中累積的結局特徵（項目 → 值），提供給 AI 作為敘事背景，也是結局尾聲的條件（O33）。 */
   endingTraits: Record<string, string>;
+  /** 目前幕開始的時間；幕期限由此起算（O33）。 */
+  actStartedAtMinutes: number;
+  /** 已達成的結局（O33）：結局 ID、時間與當時符合條件的尾聲段落索引；達成後主線不再前進。 */
+  ending?: { id: string; reachedAtMinutes: number; epilogueIndexes: number[] };
 }
 
 /** 可截斷的 AI 上下文區段；其餘區段（規則、候選清單）不截斷，避免 AI 看不到合法選項。 */
@@ -547,7 +580,11 @@ export interface AIContextConfigStatic {
   totalBudgetChars: number;
   legacy: { maxCharacters: number; maxDeedsPerCharacter: number };
   worldEvents: { maxEvents: number };
-  chronicle: { maxLines: number };
+  /**
+   * 世界編年史（O33）：maxLines 為送給 AI 的最近行數；事件紀錄超過 maxEvents 件時，最舊的 compressBatch 件以規則壓縮成編年史，
+   * routineEventTypes 類型的例行事件依類型與地點合併成一行；編年史最多保存 maxStoredLines 行。
+   */
+  chronicle: { maxLines: number; maxEvents: number; compressBatch: number; maxStoredLines: number; routineEventTypes: WorldEvent['type'][] };
   /** 傳聞或公開消息經過多少遊戲日後變成「傳說」（親眼目擊者不受影響）。 */
   knowledge: { legendAfterDays: number };
   /** priority 數字越小越重要；超出整體預算時先截斷數字大的區段。 */
@@ -641,7 +678,7 @@ export interface WorldEvent {
   /** 靜態事件 ID（scenario_event）。 */
   eventId?: string;
   /** 造成的改變。 */
-  changes?: { setFlags?: string[]; clearFlags?: string[]; modifierIds?: string[]; questIds?: string[]; unitIds?: string[]; factionIds?: string[]; storyletIds?: string[]; actIds?: string[] };
+  changes?: { setFlags?: string[]; clearFlags?: string[]; modifierIds?: string[]; questIds?: string[]; unitIds?: string[]; factionIds?: string[]; storyletIds?: string[]; actIds?: string[]; endingIds?: string[] };
   /** 玩家聲望變化（勢力 ID 與變化量）。 */
   reputationChanges?: { factionId: string; change: number }[];
   /** 事件發生時在世的玩家角色代數（PlayerState.characterSeq）。 */
