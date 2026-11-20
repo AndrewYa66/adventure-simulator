@@ -320,7 +320,9 @@ export async function sendPlayerAction(
   /** 同一世界中已結束的歷代角色，供傳聞與人物回憶。 */
   characterHistory: CharacterHistoryEntry[] = [],
   /** 本回合已由遊戲先結算的移動（O44）；playerState 是移動後的狀態。 */
-  resolvedTravel?: RouteTravelResult
+  resolvedTravel?: RouteTravelResult,
+  /** 遊戲對本回合的補充說明（例如開戰敘事只描述開場，O50），附在玩家行動之後。 */
+  turnNote?: string
 ): Promise<AIResponsePayload> {
   const cleanApiKey = apiKey.trim();
   if (!cleanApiKey) {
@@ -329,7 +331,7 @@ export async function sendPlayerAction(
 
   const { systemPrompt, report, responseSchema: jsonResponseSchema, availableDestinationIds } = buildAIContext(playerState, characterHistory);
   const dialogue = buildDialogueHistory(storyHistory);
-  const userPrompt = `【近期劇情回顧】\n${dialogue.text || '（尚無）'}\n\n【玩家行動】\n${actionText}${resolvedTravel ? `\n\n${describeResolvedTravel(resolvedTravel, playerState)}` : ''}`;
+  const userPrompt = `【近期劇情回顧】\n${dialogue.text || '（尚無）'}\n\n【玩家行動】\n${actionText}${resolvedTravel ? `\n\n${describeResolvedTravel(resolvedTravel, playerState)}` : ''}${turnNote ? `\n\n【系統說明】\n${turnNote}` : ''}`;
   // totalChars 與預算只計系統提示；估計 tokens 含使用者提示，反映整個請求的大小。
   recordAIContextReport({ ...report, sections: [...report.sections, dialogue.report], estimatedTokens: estimateTokens(systemPrompt + userPrompt), builtAt: Date.now(), userPrompt });
 

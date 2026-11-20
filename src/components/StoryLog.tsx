@@ -14,13 +14,16 @@ interface StoryLogProps {
   onToggleSidebar: () => void;
   combatActive: boolean;
   inputDisabled: boolean;
-  onTravel: (mapId: string) => void;
+  /** 選項列（O50），固定在輸入框上方、不隨訊息捲動。 */
+  optionBar: React.ReactNode;
+  /** 建議行動顯示在選項列的訊息；其他訊息的建議只作為紀錄、不能按。 */
+  activeMessageId?: string;
   /** 角色死亡時顯示讀檔訊息；未死亡時不傳。 */
   /** 死亡或時間線結束（O33）時的讀檔入口。 */
   deathActions?: { reason: 'death' | 'ending'; onLoadAutoSave: () => void; onOpenSaveManager: () => void };
 }
 
-export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAction, onOpenKeyModal, hasApiKey, selectedModel, isSidebarOpen, onToggleSidebar, combatActive, inputDisabled, onTravel, deathActions }) => {
+export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAction, onOpenKeyModal, hasApiKey, selectedModel, isSidebarOpen, onToggleSidebar, combatActive, inputDisabled, optionBar, activeMessageId, deathActions }) => {
   const [inputAction, setInputAction] = useState('');
 
   const handleSend = () => {
@@ -30,7 +33,7 @@ export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAct
   };
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', borderRight: '1px solid #333' }}>
+    <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', borderRight: '1px solid #333' }}>
       {/* 頂部 Header */}
       <div style={{ padding: '12px 20px', backgroundColor: '#252525', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
@@ -51,7 +54,7 @@ export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAct
       </div>
 
       {/* 對話紀錄區 */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px' }}>
         {messages.map((msg) => (
           <div key={msg.id} style={{ marginBottom: '16px', textAlign: msg.sender === 'user' ? 'right' : 'left' }}>
             <div
@@ -70,28 +73,15 @@ export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAct
 
             {msg.checkResult && <CheckResultCard result={msg.checkResult} />}
             {msg.checkResults?.map((result, index) => <CheckResultCard key={`${msg.id}-check-${index}`} result={result} />)}
-            {msg.travelOptions && msg.travelOptions.length > 0 && <div style={{ marginTop: '8px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              {msg.travelOptions.map((destination) => <button
-                key={destination.mapId}
-                disabled={loading || combatActive}
-                onClick={() => onTravel(destination.mapId)}
-                style={{ padding: '6px 12px', backgroundColor: '#303c30', color: '#dcedc8', border: '1px solid #546e45', borderRadius: '4px', cursor: 'pointer' }}
-              >前往 {destination.name}</button>)}
-            </div>}
-
-            {/* 建議快捷按鈕 */}
-            {msg.options && msg.options.length > 0 && (
+            {/* 舊訊息的選項只作為紀錄、不能按；最新訊息的選項顯示在選項列（O50）。 */}
+            {msg.id !== activeMessageId && ((msg.travelOptions?.length ?? 0) > 0 || (msg.options?.length ?? 0) > 0) && (
               <div style={{ marginTop: '8px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                {msg.options.map((opt, idx) => (
-                  <button
-                    key={idx}
-                    disabled={loading || combatActive || inputDisabled}
-                    onClick={() => onSendAction(opt)}
-                    style={{ padding: '6px 12px', backgroundColor: '#3e2723', color: '#ffcc80', border: '1px solid #8d6e63', borderRadius: '4px', cursor: 'pointer' }}
-                  >
-                    {opt}
-                  </button>
-                ))}
+                {(msg.travelOptions ?? []).map((destination) => <button key={destination.mapId} type="button" disabled
+                  style={{ padding: '4px 10px', backgroundColor: '#262626', color: '#888', border: '1px solid #444', borderRadius: '4px', cursor: 'not-allowed' }}
+                >前往 {destination.name}</button>)}
+                {(msg.options ?? []).map((opt, idx) => <button key={idx} type="button" disabled
+                  style={{ padding: '4px 10px', backgroundColor: '#262626', color: '#888', border: '1px solid #444', borderRadius: '4px', cursor: 'not-allowed' }}
+                >{opt}</button>)}
               </div>
             )}
           </div>
@@ -107,9 +97,11 @@ export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAct
         <button onClick={deathActions.onOpenSaveManager} style={{ padding: '8px 14px', backgroundColor: '#333', color: '#fff', border: '1px solid #666', borderRadius: '4px', cursor: 'pointer' }}>開啟存檔管理</button>
       </section>}
 
+      {optionBar}
+
       {/* 輸入框 */}
       <div style={{ padding: '16px', backgroundColor: '#252525', display: 'flex', gap: '10px' }}>
-        {combatActive && <span style={{ color: '#ffcc80', alignSelf: 'center', fontSize: '12px' }}>戰鬥中請使用右側攻擊按鈕，確保每次攻防都有擲骰結算。</span>}
+        {combatActive && <span style={{ color: '#ffcc80', alignSelf: 'center', fontSize: '12px' }}>戰鬥中請使用上方選項列的攻擊、技能或逃跑，確保每次攻防都有擲骰結算。</span>}
         <input
           type="text"
           value={inputAction}

@@ -18,21 +18,12 @@ interface PlayerHUDProps {
   /** 以新角色接續目前世界；死亡改為讀檔制後暫不提供入口，保留給 O42。 */
   onContinueWithNewCharacter?: () => void;
   storageWarning: boolean;
-  onTravel: (mapId: string) => void;
-  onAcceptQuest: (questId: string) => void;
-  onStartCombat: (unitId: string) => void;
-  onFleeCombat: () => void;
-  onAttack: () => void;
-  onUseSkill: (skillId: string) => void;
+  /** HUD 只保留背包的使用與裝備；其他動作都在選項列（O50）。 */
   onUseItem: (itemId: string) => void;
-  onBuyItem: (shopId: string, itemId: string) => void;
-  onSellItem: (shopId: string, itemId: string) => void;
   onEquipItem: (itemId: string) => void;
-  onUseService: (shopId: string, serviceId: string) => void;
-  onTurnInQuest: (questId: string) => void;
 }
 
-export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager, onContinueWithNewCharacter, storageWarning, onTravel, onAcceptQuest, onStartCombat, onFleeCombat, onAttack, onUseSkill, onUseItem, onBuyItem, onSellItem, onEquipItem, onUseService, onTurnInQuest }) => {
+export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager, onContinueWithNewCharacter, storageWarning, onUseItem, onEquipItem }) => {
   const growth = getLevelBenchmark(player.level);
   const { maxHp, maxMp } = getPlayerResourceCaps(player);
   const maxExp = growth?.requiredExp || 100;
@@ -148,9 +139,8 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
           const destination = getMapById(mapId);
           if (!destination) return null;
           const locked = !canPlayerEnterMap(player, destination);
-          const disabled = !!player.combat || !canPlayerAct(player) || locked;
           const requirement = destination.requiredQuestId ? getQuestById(destination.requiredQuestId) : undefined;
-          return <button key={mapId} disabled={disabled} title={locked ? `需先接取「${requirement?.title ?? destination.requiredQuestId}」` : undefined} onClick={() => onTravel(mapId)} style={{ display: 'block', margin: '4px 0', padding: '5px 8px', background: '#303c30', color: '#dcedc8', border: '1px solid #546e45', borderRadius: '4px', cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.5 : 1 }}>前往 {destination.name}{locked ? `（需接取${requirement?.title ?? '前置任務'}）` : ''}</button>;
+          return <div key={mapId} style={{ margin: '3px 0', fontSize: '12px', color: locked ? '#888' : '#dcedc8' }}>{destination.name}{locked ? `（需接取${requirement?.title ?? '前置任務'}）` : ''}</div>;
         })}
       </div>
 
@@ -164,40 +154,10 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
           return <div key={unit.id} style={{ marginBottom: '7px', fontSize: '12px' }}>
             <strong>{unit.name}{unit.title ? `・${unit.title}` : ''}</strong>{unit.factionId && <span style={{ color: '#9fa8da', marginLeft: '6px' }}>［{getFactionById(unit.factionId)?.name ?? unit.factionId}］</span>}
             <div style={{ color: '#aaa' }}>{describeUnitBuild(unit)} · 關係：{dispositionLabel} · HP {unitState?.currentHp ?? stats.hp}/{stats.hp} · ATK {stats.atk} · DEF {stats.def} · SPD {stats.spd}{unitState?.isDead ? ' · 已死亡' : ''}</div>
-            {!unitState?.isDead && disposition === 'hostile' && <button onClick={() => onStartCombat(unit.id)} disabled={!canPlayerAct(player) || !!player.combat} style={{ margin: '4px 0', padding: '4px 7px' }}>挑戰 {unit.name}</button>}
             {!unitState?.isDead && <div style={{ color: '#888' }}>持有：金幣 {unitState?.gold ?? 0} · {(unitState?.inventory ?? []).map((entry) => `${getItemById(entry.itemId)?.name ?? entry.itemId} ×${entry.quantity}`).join('、') || '無物品'}</div>}
             {(() => {
               const shop = getShopForUnit(unit.source);
-              if (!shop) return null;
-              if (unitState?.isDead) return null;
-              const unavailable = !canPlayerAct(player) || !!player.combat || disposition === 'hostile';
-              return <div style={{ marginTop: '5px', padding: '6px', background: '#29251d', borderRadius: '4px' }}>
-                <strong>🪙 {shop.name} · 金幣 {player.gold}</strong>
-                {shop.items.map((listing) => {
-                  const item = getItemById(listing.itemId);
-                  if (!item) return null;
-                  const price = listing.buyPrice ?? item.buyPrice;
-                  const stock = player.unitInstances[unit.id]?.inventory.find((entry) => entry.itemId === item.id)?.quantity ?? 0;
-                  return <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '4px', marginTop: '4px' }}>
-                    <span>{item.name} · {price} 金幣 · 庫存 {stock}</span>
-                    <button disabled={unavailable || player.gold < price || stock <= 0} onClick={() => onBuyItem(shop.id, item.id)}>購買</button>
-                  </div>;
-                })}
-                {(shop.services ?? []).map((service) => <div key={service.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '4px', marginTop: '5px' }}>
-                  <span title={service.description}>{service.name} · {service.price} 金幣</span>
-                  <button disabled={unavailable || player.gold < service.price || (service.kind === 'restore_resources' && player.hp >= maxHp && player.mp >= maxMp)} onClick={() => onUseService(shop.id, service.id)}>使用</button>
-                </div>)}
-                {player.inventory.filter((entry) => {
-                  const item = getItemById(entry.itemId);
-                  return item && item.type !== 'quest' && item.sellPrice > 0;
-                }).map((entry) => {
-                  const item = getItemById(entry.itemId)!;
-                  return <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '4px', marginTop: '4px' }}>
-                    <span>收購 {item.name} · {item.sellPrice} 金幣</span>
-                    <button disabled={unavailable} onClick={() => onSellItem(shop.id, item.id)}>出售</button>
-                  </div>;
-                })}
-              </div>;
+              return shop && !unitState?.isDead ? <div style={{ color: '#bfa76a' }}>🪙 經營：{shop.name}（可從選項列的「設施」打開）</div> : null;
             })()}
           </div>;
         })}
@@ -211,9 +171,7 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
           return <div>
             <div style={{ marginBottom: '6px' }}>{unit?.name || player.combat.targetUnitId} HP {getCombatTarget(player.combat)?.currentHp ?? 0}/{unit?.stats.hp}</div>
             <div style={{ color: '#aaa', fontSize: '11px', marginBottom: '8px' }}>第 {player.combat.round} 回合</div>
-            <button onClick={onAttack} disabled={player.isDead} style={{ marginRight: '6px', padding: '6px 10px', background: '#8e2424', color: 'white', border: '1px solid #b44', borderRadius: '4px', cursor: player.isDead ? 'not-allowed' : 'pointer' }}>{isPlayerUnconscious(player) ? '昏迷中（跳過回合）' : '攻擊'}</button>
-            {unlockedSkills.filter((skill) => skill.effect.kind === 'damage_multiplier').map((skill) => <button key={skill.id} onClick={() => onUseSkill(skill.id)} disabled={!canPlayerAct(player) || player.mp < skill.costMp} title={skill.description} style={{ marginRight: '6px', padding: '6px 10px', cursor: player.mp < skill.costMp || !canPlayerAct(player) ? 'not-allowed' : 'pointer' }}>{skill.name}（MP {skill.costMp}）</button>)}
-            <button onClick={onFleeCombat} disabled={!canPlayerAct(player)} style={{ padding: '6px 10px', cursor: canPlayerAct(player) ? 'pointer' : 'not-allowed' }}>脫離戰鬥</button>
+            <div style={{ color: '#ffcc80', fontSize: '11px' }}>{isPlayerUnconscious(player) ? '💫 昏迷中，' : ''}戰鬥動作在選項列：攻擊、技能、逃跑。</div>
           </div>;
         })() : (() => {
           const unit = player.encounteredUnitId ? getWorldUnitById(player.encounteredUnitId, player) : undefined;
@@ -223,11 +181,18 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
           return encountered && currentMap?.unitsPresent.includes(encountered.id)
             ? <div>
               <div style={{ color: '#ffcc80', fontSize: '12px', marginBottom: '5px' }}>已遭遇：{encountered.name}（{dispositionLabel}）</div>
-              {disposition === 'hostile' && <button onClick={() => onStartCombat(encountered.id)} disabled={!canPlayerAct(player)} style={{ display: 'block', margin: '4px 0', padding: '5px 8px', background: '#4a2525', color: '#ffcdd2', border: '1px solid #844', borderRadius: '4px', cursor: canPlayerAct(player) ? 'pointer' : 'not-allowed' }}>挑戰 {encountered.name}</button>}
             </div>
             : <div style={{ color: '#aaa', fontSize: '12px' }}>{currentMap?.isSafeZone ? '安全地區沒有敵人。' : '尚未遭遇敵人；探索或搜索周遭以觸發遭遇。'}</div>;
         })()}
-        {!player.combat && unlockedSkills.filter((skill) => skill.effect.kind === 'healing').map((skill) => <button key={skill.id} onClick={() => onUseSkill(skill.id)} disabled={!canPlayerAct(player) || player.mp < skill.costMp || player.hp >= maxHp} title={skill.description} style={{ display: 'block', marginTop: '5px', padding: '6px 10px' }}>{skill.name}（MP {skill.costMp}）</button>)}
+      </div>
+
+      <div>
+        <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #444' }}>✨ 技能</h4>
+        {unlockedSkills.map((skill) => <div key={skill.id} style={{ fontSize: '12px', marginBottom: '4px' }}>
+          <strong>{skill.name}</strong> <span style={{ color: '#aaa' }}>MP {skill.costMp}・{skill.effect.kind === 'healing' ? '戰鬥外' : '戰鬥中'}</span>
+          <div style={{ color: '#888', fontSize: '11px' }}>{skill.description}</div>
+        </div>)}
+        {!unlockedSkills.length && <div style={{ color: '#888', fontSize: '12px' }}>尚未習得主動技能。</div>}
       </div>
 
       <div>
@@ -283,13 +248,13 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
               })}
             </div>}
             {!status && (canAcceptQuest(player, quest)
-              ? <button onClick={() => onAcceptQuest(quest.id)} style={{ marginTop: '4px', padding: '4px 7px', cursor: 'pointer' }}>接取任務</button>
+              ? <div style={{ marginTop: '4px', color: '#a5d6a7' }}>可接取（選項列「任務」）</div>
               : player.unitInstances[quest.questGiverId]?.isDead
                 ? <div style={{ marginTop: '4px', color: '#888' }}>委託人已死亡，無法接取</div>
               : getWorldUnitDisposition(player, quest.questGiverId) === 'hostile'
                 ? <div style={{ marginTop: '4px', color: '#ef9a9a' }}>任務給予者目前敵對，無法接取</div>
                 : <div style={{ marginTop: '4px', color: '#888' }}>需在 {getMapById(quest.mapId)?.name ?? quest.mapId} 找到 {quest.questGiver}</div>)}
-            {status === 'in_progress' && canTurnInQuest(player, quest) && <button onClick={() => onTurnInQuest(quest.id)} style={{ marginTop: '4px', padding: '4px 7px' }}>向 {getQuestGiverName(player, quest)} 交付</button>}
+            {status === 'in_progress' && canTurnInQuest(player, quest) && <div style={{ marginTop: '4px', color: '#a5d6a7' }}>可向 {getQuestGiverName(player, quest)} 交付（選項列）</div>}
           </div>;
         })}
       </div>

@@ -34,7 +34,8 @@
     "residentKillGrantsExp": true,
     "routeTravel": {
       "maxSegmentsPerAction": 4
-    }
+    },
+    "waitOptionMinutes": [60, 120, 240, 480]
   },
   "succession": {
     "relatedLabel": "以前任冒險者的同鄉或親友身分出發（各勢力記得你們的關係，繼承一半的聲望變化）",

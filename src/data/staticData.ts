@@ -36,6 +36,7 @@ import type {
 } from '../types/game';
 import { computeExpReward, computeUnitAbilities, computeUnitStats, isValidSpeciesClassCombo, UNIT_STAT_KEYS } from '../utils/unitGrowth';
 import { applyWorldModifiers, parseModifierScope } from '../utils/worldModifiers';
+import { MAX_WAIT_MINUTES } from '../utils/gameTime';
 
 import rawItems from './items.json';
 import rawCharacterClasses from './character_classes.json';
@@ -697,6 +698,10 @@ export function validateFactionData(): string[] {
   if (typeof scenario.rules?.residentKillGrantsExp !== 'boolean') issues.push(`劇本 ${scenario.id}: rules.residentKillGrantsExp 須為布林值`);
   const maxSegments = scenario.rules?.routeTravel?.maxSegmentsPerAction;
   if (!Number.isInteger(maxSegments) || maxSegments < 1) issues.push(`劇本 ${scenario.id}: rules.routeTravel.maxSegmentsPerAction 須為正整數`);
+  const waitOptions = scenario.rules?.waitOptionMinutes;
+  if (!Array.isArray(waitOptions) || !waitOptions.length || !waitOptions.every((minutes) => Number.isInteger(minutes) && minutes > 0 && minutes <= MAX_WAIT_MINUTES)) {
+    issues.push(`劇本 ${scenario.id}: rules.waitOptionMinutes 須為 1～${MAX_WAIT_MINUTES} 的正整數陣列`);
+  }
   if (scenario.succession) {
     const ratio = scenario.succession.reputationInheritRatio;
     if (!scenario.succession.relatedLabel?.trim()) issues.push(`劇本 ${scenario.id}: succession.relatedLabel 不可為空`);
