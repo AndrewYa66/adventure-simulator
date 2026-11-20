@@ -338,6 +338,8 @@ export interface ScenarioStatic {
     residentKillGrantsExp: boolean;
     /** 多段移動（O44）：前往不相鄰地區時沿最短路徑逐段移動，單次行動最多走幾段（每段照常耗時）。 */
     routeTravel: { maxSegmentsPerAction: number };
+    /** 選項列「等待 ▸」提供的等待時長（分鐘，O50）；超過單次等待上限的值不會列出。可調。 */
+    waitOptionMinutes: number[];
   };
   /** 新角色接續：劇本允許新角色與前一位角色有關聯時，可部分繼承勢力聲望的變化量。 */
   succession?: {
@@ -897,6 +899,8 @@ export interface StoryMessage {
   checkResult?: ActionCheckResult;
   checkResults?: ActionCheckResult[];
   travelOptions?: { mapId: string; name: string }[];
+  /** 改變狀態的系統動作（接取、交付、等待、移動、戰鬥結束等）：之前訊息的建議行動不再可按（O50）。 */
+  invalidatesOptions?: boolean;
   timestamp: string;
 }
 

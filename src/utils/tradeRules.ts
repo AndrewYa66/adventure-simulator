@@ -6,7 +6,7 @@ import { canPlayerAct } from './playerStatus';
 export type TradeResult = { ok: true; player: PlayerState; quantity: number; totalPrice: number } |
   { ok: false; reason: string };
 
-function canTrade(player: PlayerState, shop: ShopStatic, currentMapId: string): boolean {
+export function canTrade(player: PlayerState, shop: ShopStatic, currentMapId: string): boolean {
   const unit = getWorldUnitById(shop.ownerUnitId);
   return canPlayerAct(player) && !player.combat && !!unit && !player.unitInstances[unit.id]?.isDead && player.unitInstances[unit.id]?.currentHp !== 0 && getWorldUnitDisposition(player, unit.id) !== 'hostile' && unit.source.shopId === shop.id &&
     unit.mapIds.includes(currentMapId) && (!unit.requiresEncounter || player.encounteredUnitId === unit.id);
