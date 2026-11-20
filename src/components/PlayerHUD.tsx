@@ -18,12 +18,14 @@ interface PlayerHUDProps {
   /** 以新角色接續目前世界；死亡改為讀檔制後暫不提供入口，保留給 O42。 */
   onContinueWithNewCharacter?: () => void;
   storageWarning: boolean;
+  /** AI 回合進行中（例如開戰敘事）：停用背包按鈕，避免動作順序顛倒。 */
+  busy?: boolean;
   /** HUD 只保留背包的使用與裝備；其他動作都在選項列（O50）。 */
   onUseItem: (itemId: string) => void;
   onEquipItem: (itemId: string) => void;
 }
 
-export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager, onContinueWithNewCharacter, storageWarning, onUseItem, onEquipItem }) => {
+export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager, onContinueWithNewCharacter, storageWarning, busy = false, onUseItem, onEquipItem }) => {
   const growth = getLevelBenchmark(player.level);
   const { maxHp, maxMp } = getPlayerResourceCaps(player);
   const maxExp = growth?.requiredExp || 100;
@@ -124,8 +126,8 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
             return (
               <li key={item.itemId} style={{ marginBottom: '4px' }}>
                 {staticItem?.name || item.itemId} x{item.quantity}
-                {staticItem?.type === 'consumable' && <button onClick={() => onUseItem(item.itemId)} disabled={!canPlayerAct(player) || (!!player.combat && !staticItem.usableInCombat)} style={{ marginLeft: '6px', padding: '2px 5px', cursor: !canPlayerAct(player) || (!!player.combat && !staticItem.usableInCombat) ? 'not-allowed' : 'pointer' }}>使用</button>}
-                {staticItem && ['weapon', 'armor', 'accessory'].includes(staticItem.type) && <button onClick={() => onEquipItem(item.itemId)} disabled={!canPlayerAct(player) || !!player.combat} style={{ marginLeft: '6px', padding: '2px 5px' }}>裝備</button>}
+                {staticItem?.type === 'consumable' && <button onClick={() => onUseItem(item.itemId)} disabled={busy || !canPlayerAct(player) || (!!player.combat && !staticItem.usableInCombat)} style={{ marginLeft: '6px', padding: '2px 5px', cursor: busy || !canPlayerAct(player) || (!!player.combat && !staticItem.usableInCombat) ? 'not-allowed' : 'pointer' }}>使用</button>}
+                {staticItem && ['weapon', 'armor', 'accessory'].includes(staticItem.type) && <button onClick={() => onEquipItem(item.itemId)} disabled={busy || !canPlayerAct(player) || !!player.combat} style={{ marginLeft: '6px', padding: '2px 5px' }}>裝備</button>}
                 {staticItem?.type === 'consumable' && <span style={{ display: 'block', color: '#888', fontSize: '11px' }}>{staticItem.description}</span>}
               </li>
             );

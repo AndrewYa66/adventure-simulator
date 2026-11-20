@@ -899,6 +899,8 @@ export interface StoryMessage {
   checkResult?: ActionCheckResult;
   checkResults?: ActionCheckResult[];
   travelOptions?: { mapId: string; name: string }[];
+  /** 改變狀態的系統動作（接取、交付、等待、移動、戰鬥結束等）：之前訊息的建議行動不再可按（O50）。 */
+  invalidatesOptions?: boolean;
   timestamp: string;
 }
 

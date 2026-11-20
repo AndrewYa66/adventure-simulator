@@ -518,15 +518,24 @@ export default function App() {
       ]);
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : '無法連線至 AI 服務';
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now().toString(),
-          sender: 'system',
-          text: `❌ 發生錯誤: ${errorMessage}`,
-          timestamp: new Date().toLocaleTimeString()
-        }
-      ]);
+      // 已由規則結算的移動（O44／O50）不因 AI 失敗而取消：照常套用移動與途中遭遇，只略過敘事。
+      if (resolvedTravel) {
+        updatePlayer(resolvedTravel.player);
+        setMessages((prev) => [...prev, {
+          id: `${Date.now()}-travel`, sender: 'system', invalidatesOptions: true, timestamp: new Date().toLocaleTimeString(),
+          text: `${describeRouteTravel(resolvedTravel, resolvedTravel.player)}\n⚠️ 敘事失敗，移動已完成：${errorMessage}`
+        }]);
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: Date.now().toString(),
+            sender: 'system',
+            text: `❌ 發生錯誤: ${errorMessage}`,
+            timestamp: new Date().toLocaleTimeString()
+          }
+        ]);
+      }
     } finally {
       setLoading(false);
     }
@@ -553,7 +562,7 @@ export default function App() {
     if (!apiKey) {
       updatePlayer(travel.player);
       setMessages((previous) => [...previous, createUserMessage(actionText), {
-        id: `${Date.now()}-travel`, sender: 'system', text: `${describeRouteTravel(travel, travel.player)}\n（尚未設定 AI，略過敘事。）`, timestamp: new Date().toLocaleTimeString()
+        id: `${Date.now()}-travel`, sender: 'system', text: `${describeRouteTravel(travel, travel.player)}\n（尚未設定 AI，略過敘事。）`, invalidatesOptions: true, timestamp: new Date().toLocaleTimeString()
       }]);
       return;
     }
@@ -578,6 +587,7 @@ export default function App() {
       id: Date.now().toString(),
       sender: 'system',
       text: `已接取任務「${quest.title}」：${quest.objective}`,
+      invalidatesOptions: true,
       timestamp: new Date().toLocaleTimeString()
     }]);
   };
@@ -591,7 +601,7 @@ export default function App() {
     updatePlayer(nextPlayer);
     const rewardRecord = nextPlayer.transactionHistory.find((record) => record.type === 'quest_reward' &&
       !player.transactionHistory.some((previous) => previous.id === record.id));
-    appendSystemMessage(rewardRecord?.description ?? `已向${getQuestGiverName(player, quest)}交付任務「${quest.title}」。`);
+    appendSystemMessage(rewardRecord?.description ?? `已向${getQuestGiverName(player, quest)}交付任務「${quest.title}」。`, undefined, true);
   };
 
   const handleBuyItem = (shopId: string, itemId: string) => {
@@ -630,7 +640,7 @@ export default function App() {
       return;
     }
     updatePlayer(result.player);
-    appendSystemMessage(`使用${service?.name ?? '服務'}，支付 ${result.totalPrice} 金幣，休息 ${formatDuration(ACTION_DURATIONS.rest)}後生命與魔力已恢復。`);
+    appendSystemMessage(`使用${service?.name ?? '服務'}，支付 ${result.totalPrice} 金幣，休息 ${formatDuration(ACTION_DURATIONS.rest)}後生命與魔力已恢復。`, undefined, true);
   };
 
   const handleEquipItem = (itemId: string) => {
@@ -643,12 +653,14 @@ export default function App() {
     appendSystemMessage(`已裝備${item.name}。`);
   };
 
-  const appendSystemMessage = (text: string, checkResults?: ActionCheckResult[]) => {
+  /** invalidatesOptions：改變狀態的系統動作，使之前 AI 的建議行動失效（O50）。 */
+  const appendSystemMessage = (text: string, checkResults?: ActionCheckResult[], invalidatesOptions = false) => {
     setMessages((previous) => [...previous, {
       id: `${Date.now()}-${Math.random()}`,
       sender: 'system',
       text,
       checkResults,
+      ...(invalidatesOptions ? { invalidatesOptions: true } : {}),
       timestamp: new Date().toLocaleTimeString()
     }]);
   };
@@ -708,7 +720,7 @@ export default function App() {
       : `⏳ 你原地等待了 ${formatDuration(minutes)}，現在是 ${formatGameTime(waitNext.gameTimeMinutes)}。等待不會恢復生命與魔力。${typed?.hasFollowUp ? '\n等待之後的行動請另外輸入。' : ''}`;
     updatePlayer(waitNext);
     setMessages((previous) => [...previous, ...(typed ? [createUserMessage(typed.actionText)] : []),
-      { id: `${Date.now()}-wait`, sender: 'system', text, timestamp: new Date().toLocaleTimeString() }]);
+      { id: `${Date.now()}-wait`, sender: 'system', text, invalidatesOptions: true, timestamp: new Date().toLocaleTimeString() }]);
   };
 
   const handleFleeCombat = () => {
@@ -718,7 +730,7 @@ export default function App() {
     delete outOfCombat.combat;
     delete outOfCombat.encounteredUnitId;
     updatePlayer(advanceGameTime(outOfCombat, 'combatRound'));
-    appendSystemMessage(`你與${combatUnit?.name ?? '敵人'}拉開距離，戰鬥結束。`);
+    appendSystemMessage(`你與${combatUnit?.name ?? '敵人'}拉開距離，戰鬥結束。`, undefined, true);
   };
 
   const handleCombatAction = (skill?: SkillStatic, sourcePlayer: PlayerState = player) => {
@@ -795,7 +807,7 @@ export default function App() {
       ].filter(Boolean);
       const levelText = nextPlayer.level > looted.player.level ? ` 📈 升至 Lv.${nextPlayer.level}！` : '';
       const questText = completedQuests.map((quest) => `任務「${findQuest(sourcePlayer, quest.questId)?.title ?? quest.questId}」完成，需求道具已交付並領取獎勵。`).join('\n');
-      appendSystemMessage(`${unit.isBoss ? '🏆' : '⚔️'} ${attackText}\n${unit.name}已被擊倒！${gains.length ? `獲得 ${gains.join('、')}。` : '沒有獲得任何東西。'}${expGain > 0 ? '' : '（不會獲得經驗）'}${levelText}${questText ? `\n${questText}` : ''}`, checks);
+      appendSystemMessage(`${unit.isBoss ? '🏆' : '⚔️'} ${attackText}\n${unit.name}已被擊倒！${gains.length ? `獲得 ${gains.join('、')}。` : '沒有獲得任何東西。'}${expGain > 0 ? '' : '（不會獲得經驗）'}${levelText}${questText ? `\n${questText}` : ''}`, checks, true);
       return;
     }
 
@@ -1032,7 +1044,7 @@ export default function App() {
   let activeMessage: StoryMessage | undefined;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (message.sender === 'user') break;
+    if (message.sender === 'user' || message.invalidatesOptions) break;
     if (message.options?.length || message.travelOptions?.length) { activeMessage = message; break; }
   }
   const optionSet = buildSystemOptions(player);
@@ -1059,7 +1071,7 @@ export default function App() {
       />
       {isSidebarOpen && isNarrow && <div aria-hidden="true" onClick={() => setIsSidebarOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 20 }} />}
       {isSidebarOpen && <div style={isNarrow ? { position: 'fixed', top: 0, right: 0, bottom: 0, maxWidth: '85vw', zIndex: 21, display: 'flex' } : { display: 'flex', flexShrink: 0 }}>
-        <PlayerHUD player={player} onOpenSaveManager={() => setIsSaveManagerOpen(true)} storageWarning={storageWarning || autosaveFailed} onUseItem={handleUseItem} onEquipItem={handleEquipItem} />
+        <PlayerHUD player={player} onOpenSaveManager={() => setIsSaveManagerOpen(true)} storageWarning={storageWarning || autosaveFailed} busy={loading} onUseItem={handleUseItem} onEquipItem={handleEquipItem} />
       </div>}
       {isKeyModalOpen && <ApiKeyModal
         isOpen={true}
