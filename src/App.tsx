@@ -363,6 +363,8 @@ export default function App() {
     setMessages((prev) => [...prev, createUserMessage(actionText)]);
     setLoading(true);
     const turnPlayer = resolvedTravel?.player ?? player;
+    // 本回合結果已套用後才發生的錯誤，不再以已結算的移動覆蓋狀態。
+    let applied = false;
 
     try {
       const aiResponse = await sendPlayerAction(modelSettings, apiKey, turnPlayer, actionText, messages, characterHistory, resolvedTravel);
@@ -479,6 +481,7 @@ export default function App() {
       updatePlayer(nextPlayer, nextPlayer.isDead && !player.isDead
         ? { [player.unitId]: { cause: isSelfDamageIntent(actionText) ? 'self_inflicted' : 'misadventure', note: checkResult?.reason } }
         : undefined);
+      applied = true;
 
       const previousMap = getMapById(turnPlayer.currentMapId);
       const nextMap = getMapById(nextPlayer.currentMapId);
@@ -519,7 +522,7 @@ export default function App() {
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : '無法連線至 AI 服務';
       // 已由規則結算的移動（O44／O50）不因 AI 失敗而取消：照常套用移動與途中遭遇，只略過敘事。
-      if (resolvedTravel) {
+      if (resolvedTravel && !applied) {
         updatePlayer(resolvedTravel.player);
         setMessages((prev) => [...prev, {
           id: `${Date.now()}-travel`, sender: 'system', invalidatesOptions: true, timestamp: new Date().toLocaleTimeString(),
