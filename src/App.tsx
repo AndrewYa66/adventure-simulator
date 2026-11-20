@@ -161,6 +161,9 @@ function loadInitialState() {
   return { worldId: undefined, player: createInitialPlayer(), messages: [createOpeningMessage('1', scenario.opening.introText)], characterHistory: [] };
 }
 
+/** 窄螢幕：側欄改為抽屜（O50）。 */
+const NARROW_QUERY = '(max-width: 767px)';
+
 function downloadJson(fileName: string, data: unknown) {
   const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
   const link = document.createElement('a');
@@ -179,7 +182,15 @@ export default function App() {
   });
   const apiKey = apiKeys[modelSettings.provider];
   const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  // 窄螢幕（手機）時側欄預設收起，展開時以抽屜覆蓋在故事上方，點遮罩收起（O50 選項列需要完整寬度）。
+  const [isNarrow, setIsNarrow] = useState(() => typeof window !== 'undefined' && window.matchMedia(NARROW_QUERY).matches);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() => typeof window === 'undefined' || !window.matchMedia(NARROW_QUERY).matches);
+  useEffect(() => {
+    const query = window.matchMedia(NARROW_QUERY);
+    const onChange = () => setIsNarrow(query.matches);
+    query.addEventListener('change', onChange);
+    return () => query.removeEventListener('change', onChange);
+  }, []);
   const [storageWarning, setStorageWarning] = useState(false);
   const [player, setPlayer] = useState<PlayerState>(initialSession.player);
   const [activeWorldId, setActiveWorldId] = useState<string | undefined>(initialSession.worldId);
@@ -1046,7 +1057,10 @@ export default function App() {
         deathActions={player.isDead || isTimelineEnded(player)
           ? { reason: player.isDead ? 'death' : 'ending', onLoadAutoSave: handleLoadAutoSave, onOpenSaveManager: () => setIsSaveManagerOpen(true) } : undefined}
       />
-      {isSidebarOpen && <PlayerHUD player={player} onOpenSaveManager={() => setIsSaveManagerOpen(true)} storageWarning={storageWarning || autosaveFailed} onUseItem={handleUseItem} onEquipItem={handleEquipItem} />}
+      {isSidebarOpen && isNarrow && <div aria-hidden="true" onClick={() => setIsSidebarOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 20 }} />}
+      {isSidebarOpen && <div style={isNarrow ? { position: 'fixed', top: 0, right: 0, bottom: 0, maxWidth: '85vw', zIndex: 21, display: 'flex' } : { display: 'flex', flexShrink: 0 }}>
+        <PlayerHUD player={player} onOpenSaveManager={() => setIsSaveManagerOpen(true)} storageWarning={storageWarning || autosaveFailed} onUseItem={handleUseItem} onEquipItem={handleEquipItem} />
+      </div>}
       {isKeyModalOpen && <ApiKeyModal
         isOpen={true}
         currentSettings={modelSettings}
