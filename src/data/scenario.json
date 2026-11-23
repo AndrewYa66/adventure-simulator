@@ -40,5 +40,9 @@
   "succession": {
     "relatedLabel": "以前任冒險者的同鄉或親友身分出發（各勢力記得你們的關係，繼承一半的聲望變化）",
     "reputationInheritRatio": 0.5
-  }
+  },
+  "news": {
+    "noticePrefix": "🗞️ 告示板上的新消息與往來旅人的傳言："
+  },
+  "worldDescription": "中世紀奇幻世界"
 }

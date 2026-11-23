@@ -8,6 +8,7 @@ import { canPlayerAct, isPlayerUnconscious } from '../utils/playerStatus';
 import { getCombatTarget } from '../utils/combatState';
 import { formatGameTime } from '../utils/gameTime';
 import { describeStoryletGiver, getActDeadline, getEndingEpilogue, resolveStoryletGiver } from '../utils/storylets';
+import { getPlayerKnownEvents } from '../utils/worldEvents';
 
 const RELATION_LABELS = { war: '交戰', hostile: '敵對', tense: '緊張', neutral: '中立', friendly: '友好', alliance: '同盟' } as const;
 
@@ -27,6 +28,8 @@ interface PlayerHUDProps {
 
 export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager, onContinueWithNewCharacter, storageWarning, busy = false, onUseItem, onEquipItem }) => {
   const growth = getLevelBenchmark(player.level);
+  // 世界紀錄只列玩家角色知道的事件（O34 第 2 階段）。
+  const knownEvents = getPlayerKnownEvents(player);
   const { maxHp, maxMp } = getPlayerResourceCaps(player);
   const maxExp = growth?.requiredExp || 100;
   const unlockedSkills = getUnlockedSkills(player.classId, player.level);
@@ -290,9 +293,9 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
       </details>
 
       <details>
-        <summary style={{ cursor: 'pointer', fontWeight: 'bold' }}>🌍 世界紀錄（{player.world.events.length} 件）</summary>
-        {player.world.events.length === 0 && <div style={{ color: '#888', fontSize: '12px', marginTop: '4px' }}>這個世界還沒有發生重大事件。</div>}
-        {player.world.events.slice(-8).reverse().map((event) => <div key={event.id} style={{ color: '#bbb', fontSize: '12px', marginTop: '6px' }}>
+        <summary style={{ cursor: 'pointer', fontWeight: 'bold' }}>🌍 世界紀錄（{knownEvents.length} 件）</summary>
+        {knownEvents.length === 0 && <div style={{ color: '#888', fontSize: '12px', marginTop: '4px' }}>你還沒有聽說這個世界發生的重大事件。</div>}
+        {knownEvents.slice(-8).reverse().map((event) => <div key={event.id} style={{ color: '#bbb', fontSize: '12px', marginTop: '6px' }}>
           <div style={{ color: '#888' }}>{formatGameTime(event.gameTimeMinutes)} · {getMapById(event.mapId)?.name ?? event.mapId}</div>
           {event.summary}
         </div>)}

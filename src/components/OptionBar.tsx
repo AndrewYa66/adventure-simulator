@@ -8,6 +8,8 @@ interface OptionBarProps {
   optionSet: SystemOptionSet;
   /** AI 回合進行中：全部停用。 */
   busy: boolean;
+  /** 停用時顯示的說明（O34 第 2 階段：「各方正在盤算…」）。 */
+  busyNote?: string;
   /** 最新訊息的建議行動（AI 的 suggestedActions），排在系統選項之後。 */
   suggestions: string[];
   /** 最新訊息的候選目的地（移動意圖不明確時）。 */
@@ -35,7 +37,7 @@ const chip = (variant: 'system' | 'group' | 'open' | 'suggestion' | 'combat', di
  * 選項列（O50 第一階段）：固定在輸入框上方、不隨訊息捲動。
  * 收合時最多兩行（系統選項一行、建議行動一行，各自橫向捲動）；點分組才展開該組。
  */
-export const OptionBar: React.FC<OptionBarProps> = ({ player, optionSet, busy, suggestions, travelChoices, onAction, onSuggestion, onTravel }) => {
+export const OptionBar: React.FC<OptionBarProps> = ({ player, optionSet, busy, busyNote, suggestions, travelChoices, onAction, onSuggestion, onTravel }) => {
   const [panel, setPanel] = useState<Panel | null>(null);
   // 換地區或進出戰鬥時收合面板；面板內容每次依目前狀態重算。
   const panelKey = `${player.currentMapId}|${player.combat ? 'combat' : optionSet.mode}`;
@@ -91,6 +93,7 @@ export const OptionBar: React.FC<OptionBarProps> = ({ player, optionSet, busy, s
       </div>}
 
       <div style={rowStyle} data-testid="option-row-system">
+        {busyNote && <span data-testid="option-busy-note" style={{ color: '#ffcc80', fontSize: '13px', alignSelf: 'center', whiteSpace: 'nowrap' }}>⚖️ {busyNote}</span>}
         {blocked && <span style={{ color: '#888', fontSize: '13px', alignSelf: 'center', whiteSpace: 'nowrap' }}>{player.isDead ? '角色已死亡，無法行動。' : '目前無法行動。'}</span>}
         {optionSet.immediate.map((option) => renderOption(option, combat ? 'combat' : 'system'))}
         {travelChoices.map((destination) => <button key={`choice-${destination.mapId}`} type="button" disabled={disabledAll || combat}

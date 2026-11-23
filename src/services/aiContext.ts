@@ -73,6 +73,14 @@ export function recordAIContextReport(report: AIContextReport) {
   for (const listener of reportListeners) listener();
 }
 
+// 送出的 AI 請求次數（敘事、移動修正、角色決策；不含連線重試），供每回合呼叫上限判斷（O34 第 2 階段）。
+let aiCallCount = 0;
+export const noteAICall = () => { aiCallCount += 1; };
+export const getAICallCount = () => aiCallCount;
+
+/** 本回合已用的呼叫次數加上一次是否仍在每回合上限內。 */
+export const canMakeAnotherCall = (usedThisTurn: number) => usedThisTurn + 1 <= aiContextConfig.maxCallsPerTurn;
+
 interface Section {
   id: AIContextSectionId;
   /** 固定內容（不截斷）。 */

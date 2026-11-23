@@ -1,5 +1,5 @@
 // AI 實際呼叫的意圖測試：以真實模型驗證結構化欄位（服務、任務、移動、關係、遭遇、世界事件）是否只在玩家明確要求時出現，
-// 支線委託提議、對話記憶、劇情片段選擇（O31），並計算每個情境實際送出的 API 請求數（含移動修正請求），可同時比較多個模型。
+// 支線委託提議、對話記憶、劇情片段選擇（O31）、重要角色批次決策（O34 第 2 階段，角色決策格式第 1 版），並計算每個情境實際送出的 API 請求數（含移動修正請求），可同時比較多個模型。
 // 金鑰讀自專案根目錄的 ai-test.local.json（已列入 .gitignore，不會被提交，也不會打包進網站）：
 //   { "provider": "gemini", "model": "gemini-3.8-flash", "apiKey": "..." }
 // 執行：npm run test:ai                                       （使用設定檔中的模型）
@@ -47,6 +47,7 @@ const { module: generated } = await runnerImport('/src/utils/generatedQuests.ts'
 const { module: story } = await runnerImport('/src/utils/storylets.ts');
 const { module: route } = await runnerImport('/src/utils/travelRoute.ts');
 const { module: travelIntent } = await runnerImport('/src/utils/travelIntent.ts');
+const { module: agentAI } = await runnerImport('/src/services/agentDecisionService.ts');
 
 const base = init.createInitialPlayer('測試員', data.scenario.defaultPlayer.classId, data.scenario.defaultPlayer.alignment, true);
 const startMap = data.getMapById(base.currentMapId);
@@ -114,6 +115,23 @@ const postedOnce = firstGiver ? generated.postQuestProposals(base, [{ templateId
 const secondGiver = firstOption ? data.getWorldUnitById(firstOption.givers[1].giverId) : merchant;
 
 const none = (value) => value === undefined || value === null || (Array.isArray(value) && value.length === 0);
+
+// 重要角色決策情境（O34 第 2 階段）：玩家接下村長的劇本任務（村長才會發布支線委託），在村裡跨過午夜；角色決策請求每個情境 1 次。
+const chiefQuests = data.questsDatabase.filter((quest) => quest.questGiverId === 'NPC-001').map((quest) => ({ questId: quest.id, status: 'in_progress', progress: { defeatedUnits: {} } }));
+const agentBase = { ...base, activeQuests: chiefQuests };
+const DAY_MINUTES = 1440;
+const crossMidnight = (state) => ({ ...state, gameTimeMinutes: (Math.floor(state.gameTimeMinutes / DAY_MINUTES) + 1) * DAY_MINUTES + 60 });
+const withEvent = (state, event) => world.appendEvent(state, { gameTimeMinutes: state.gameTimeMinutes, witnessUnitIds: [], cause: '測試', ...event }).state;
+const agentBatchFor = (before, after) => world.finalizeWorldWithAgentBatch(before, after, {}, { deferAgentsToAI: true });
+const agentNormal = agentBatchFor(agentBase, crossMidnight(agentBase));
+// 只知道部分事件：哥布林斥候目擊的陷阱只有灰燼部族知道，村長的上下文不會出現；村長的動機不應提到陷阱。
+const secretBefore = withEvent(agentBase, { type: 'scenario_event', mapId: 'MAP-002', summary: '哥布林斥候在綠林古道埋下了捕獸陷阱。', knownBy: 'witnesses', witnessUnitIds: ['MON-001'] });
+const agentSecret = agentBatchFor(secretBefore, crossMidnight(secretBefore));
+// 需選委託：村民在村口被哥布林斥候襲擊（村長親眼目擊），村長的其他行動在冷卻中，只剩維持現狀與委託。
+const attackedBefore = withEvent({ ...agentBase, world: { ...agentBase.world, agents: { 'NPC-001': { actionDays: { change_faction_relation: 1 } } } } },
+  { type: 'scenario_event', mapId: 'MAP-001', summary: '哥布林斥候趁夜在橡木村村口襲擊了兩名村民，村民受了傷，人心惶惶。', knownBy: 'region', witnessUnitIds: ['NPC-001', 'NPC-002'] });
+const agentQuest = agentBatchFor(attackedBefore, crossMidnight(attackedBefore));
+const agentOutcomesOk = (resolution) => resolution.report.result === 'ai' && resolution.outcomes.every((outcome) => outcome.source === 'ai');
 const accepted = (response) => response.stateChanges?.questAcceptances ?? [];
 
 const scenarios = [
@@ -189,6 +207,14 @@ const scenarios = [
       action: `${storyGiver.name}，你剛說牠們以前不會靠這麼近，「以前」是什麼意思？你以前和哥布林的首領有過什麼來往嗎？請老實告訴我。`,
       check: (r) => none(r.storyletProposals) && !/格羅姆|裂牙/.test(r.storyText), expect: '不提酋長名字、不重複開始片段' }
   ] : []),
+  ...(agentNormal.agentBatch ? [{ group: '角色決策', name: '一般跨日（村長與酋長）', agent: agentNormal,
+    check: (resolution) => agentOutcomesOk(resolution), expect: '每位角色都選了合法候選且有動機' }] : []),
+  ...(agentSecret.agentBatch ? [{ group: '角色決策', name: '角色只知道部分事件', agent: agentSecret,
+    check: (resolution) => agentOutcomesOk(resolution) && !resolution.state.world.events.some((event) => event.agent?.unitId === 'NPC-001' && /陷阱/.test(event.agent.intent)),
+    expect: '回應有效、村長的動機不提未知的陷阱' }] : []),
+  ...(agentQuest.agentBatch ? [{ group: '角色決策', name: '村民遇襲後需選委託', agent: agentQuest,
+    check: (resolution) => agentOutcomesOk(resolution) && resolution.state.world.events.some((event) => event.agent?.unitId === 'NPC-001' && event.agent.action === 'post_quest'),
+    expect: '村長選擇發布委託' }] : []),
   ...(proposableEvent ? [
     { group: '世界事件', name: '促成可提議事件', player: base,
       action: `我嚴肅地向${victimNpc.name}警告：古道上的哥布林越來越多，最近有人遇襲，請村民務必結伴出入、夜裡緊閉門戶。`,
@@ -209,6 +235,28 @@ for (const model of models) {
   for (const [index, scenario] of selected.entries()) {
     if ((index > 0 || summaries.length > 0) && delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
     requestCount = 0;
+    if (scenario.agent) {
+      // 角色決策（O34 第 2 階段）：與遊戲相同的請求組裝、呼叫、解析與套用。
+      const request = agentAI.buildAgentBatchRequest(scenario.agent.state, scenario.agent.agentBatch);
+      let resolution;
+      try {
+        const text = await agentAI.requestAgentDecisionText({ provider: config.provider, model }, config.apiKey, request, 30000);
+        resolution = agentAI.resolveAgentBatch(scenario.agent.state, request, text);
+      } catch (error) {
+        errors += 1;
+        totalCalls += requestCount;
+        console.log(`⚠️ [${scenario.group}] ${scenario.name}：呼叫失敗（${error instanceof Error ? error.message.slice(0, 120) : error}）`);
+        continue;
+      }
+      totalCalls += requestCount;
+      const ok = scenario.check(resolution);
+      if (ok) passed += 1;
+      console.log(`${ok ? '✅' : '❌'} [${scenario.group}] ${scenario.name}（預期：${scenario.expect}；請求 ${requestCount} 次、${request.systemPrompt.length + request.userPrompt.length} 字元）`);
+      for (const outcome of resolution.report.outcomes) console.log(`   ${outcome.name}：${outcome.source === 'ai' ? 'AI' : `規則（${outcome.reason}）`}`);
+      for (const event of resolution.state.world.events.filter((entry) => entry.agent && entry.cause.includes('AI'))) console.log(`   事件：${event.summary}｜動機：${event.agent.intent}`);
+      if (!ok) console.log(`   回應：${resolution.report.responseText ?? resolution.report.reason}`);
+      continue;
+    }
     let response;
     try {
       response = await ai.sendPlayerAction({ provider: config.provider, model }, config.apiKey, scenario.player, scenario.action, scenario.messages ?? [], scenario.history ?? [], scenario.travel);

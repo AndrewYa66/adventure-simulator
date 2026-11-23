@@ -6,6 +6,8 @@ import { scenario } from '../data/staticData';
 interface StoryLogProps {
   messages: StoryMessage[];
   loading: boolean;
+  /** 等待中的說明（例如角色決策時的「各方正在盤算…」）；未提供時顯示主持人構思中的文字。 */
+  busyText?: string;
   onSendAction: (actionText: string) => void;
   onOpenKeyModal: () => void;
   hasApiKey: boolean;
@@ -23,7 +25,7 @@ interface StoryLogProps {
   deathActions?: { reason: 'death' | 'ending'; onLoadAutoSave: () => void; onOpenSaveManager: () => void };
 }
 
-export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAction, onOpenKeyModal, hasApiKey, selectedModel, isSidebarOpen, onToggleSidebar, combatActive, inputDisabled, optionBar, activeMessageId, deathActions }) => {
+export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, busyText, onSendAction, onOpenKeyModal, hasApiKey, selectedModel, isSidebarOpen, onToggleSidebar, combatActive, inputDisabled, optionBar, activeMessageId, deathActions }) => {
   const [inputAction, setInputAction] = useState('');
 
   const handleSend = () => {
@@ -86,7 +88,7 @@ export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, onSendAct
             )}
           </div>
         ))}
-        {loading && <div style={{ color: '#888' }}>🎲 GM 正在擲骰子與構思劇情...</div>}
+        {loading && <div data-testid="story-busy" style={{ color: '#888' }}>{busyText ?? '🎲 GM 正在擲骰子與構思劇情...'}</div>}
       </div>
 
       {deathActions && <section role="alert" aria-label={deathActions.reason === 'death' ? '角色死亡' : '時間線結束'} style={{ padding: '14px 16px', backgroundColor: deathActions.reason === 'death' ? '#3a1c1c' : '#2a2438', borderTop: `1px solid ${deathActions.reason === 'death' ? '#8e2424' : '#6a5a9a'}`, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px' }}>

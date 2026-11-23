@@ -1,9 +1,11 @@
 import React, { useSyncExternalStore } from 'react';
 import { getLastAIContextReport, subscribeAIContextReport } from '../services/aiContext';
+import { getLastAgentDecisionReport, subscribeAgentDecisionReport } from '../services/agentDecisionService';
 
 /** 開發模式專用：檢視上一次送給 AI 的上下文（各區段大小、截斷情況與完整提示）。 */
 export const AIContextDebugPanel: React.FC = () => {
   const report = useSyncExternalStore(subscribeAIContextReport, getLastAIContextReport);
+  const agentReport = useSyncExternalStore(subscribeAgentDecisionReport, getLastAgentDecisionReport);
   return (
     <details data-testid="ai-context-debug" style={{ fontSize: '12px', border: '1px dashed #666', borderRadius: '4px', padding: '6px' }}>
       <summary style={{ cursor: 'pointer' }}>🛠️ AI 上下文（開發模式）</summary>
@@ -30,6 +32,19 @@ export const AIContextDebugPanel: React.FC = () => {
           </pre>
         </details>
       </>}
+      <details data-testid="agent-decision-debug" style={{ marginTop: '6px' }}>
+        <summary style={{ cursor: 'pointer' }}>上一次角色決策請求（O34）</summary>
+        {!agentReport ? <p style={{ color: '#bbb', margin: '6px 0 0' }}>尚未發生角色決策。</p> : <>
+          <p style={{ margin: '6px 0', color: '#bbb' }}>
+            {new Date(agentReport.builtAt).toLocaleTimeString()}｜{agentReport.result === 'pending' ? '進行中' : agentReport.result === 'ai' ? 'AI' : '規則後備'}
+            {agentReport.reason ? `（${agentReport.reason}）` : ''}｜{agentReport.agentCount} 位角色｜{agentReport.totalChars.toLocaleString()} 字元｜約 {agentReport.estimatedTokens.toLocaleString()} tokens
+          </p>
+          {agentReport.outcomes.map((outcome) => <div key={outcome.name} style={{ color: '#bbb' }}>{outcome.name}：{outcome.source === 'ai' ? 'AI' : `規則${outcome.reason ? `（${outcome.reason}）` : ''}`}</div>)}
+          {agentReport.userPrompt && <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '320px', overflow: 'auto', fontSize: '11px', background: '#111', padding: '6px' }}>
+            {agentReport.systemPrompt}{'\n\n'}{agentReport.userPrompt}{agentReport.responseText ? `\n\n【回應】\n${agentReport.responseText}` : ''}
+          </pre>}
+        </>}
+      </details>
     </details>
   );
 };

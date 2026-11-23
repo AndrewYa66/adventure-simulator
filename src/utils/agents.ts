@@ -1,9 +1,12 @@
 import type { AgentCondition, AgentDecision, AgentFallbackRule, AgentRuntimeState, PlayerState, WorldRuntimeState } from '../types/game';
 import {
   agentRules,
+  eventsDatabase,
   FACTION_RELATION_STATUSES,
+  factionsDatabase,
   getEventById,
   getFactionById,
+  getItemById,
   getFactionRelation,
   getMapById,
   getQuestTemplateById,
@@ -11,6 +14,7 @@ import {
   getUnitDisplayName,
   getUnitTemplateById,
   getWorldUnitById,
+  questTemplatesDatabase,
   unitTemplatesDatabase
 } from '../data/staticData';
 import { applyFactionRelationChanges, matchesFactionConditions, RELATION_NAMES } from './factions';
@@ -171,6 +175,8 @@ export function applyAgentDecision(state: PlayerState, decision: AgentDecision, 
   const name = getUnitDisplayName(unitId);
   const agent = { unitId, action: decision.action, intent: decision.intent };
   const cause = `重要角色決策（${name}${decision.source === 'ai' ? '，AI' : '，規則'}）`;
+  // 決策發生在決策日的午夜（行動跨過的那一刻），不是行動結束時；玩家旅途中的午夜決策因此不算在場。
+  const atMinutes = Math.min(state.gameTimeMinutes, (day - 1) * 24 * 60);
   const params = decision.params;
   let next = withActionDay(state, unitId, decision, day);
   if (decision.action === 'post_quest') {
@@ -182,12 +188,12 @@ export function applyAgentDecision(state: PlayerState, decision: AgentDecision, 
     if (!quest) return state;
     const summary = `${name}發布了委託「${quest.title}」。`;
     return appendEvent(posting.state, {
-      type: 'agent_action', gameTimeMinutes: next.gameTimeMinutes, ...agentWitnesses(next, unitId), summary, detail: `${summary}用意：${decision.intent}`,
+      type: 'agent_action', gameTimeMinutes: atMinutes, ...agentWitnesses(next, unitId), summary, detail: `${summary}用意：${decision.intent}`,
       knownBy: 'region', cause, agent, changes: { questIds: [quest.id], unitIds: [unitId] }
     }).state;
   }
   if (decision.action === 'trigger_event') {
-    const result = applyScenarioEvent(next, getEventById(params.eventId!)!, cause, { atMapId: getAgentHomeMapId(unitId), agent });
+    const result = applyScenarioEvent(next, getEventById(params.eventId!)!, cause, { atMapId: getAgentHomeMapId(unitId), agent, atMinutes });
     return result === next ? state : result;
   }
   if (decision.action === 'change_faction_relation') {
@@ -196,7 +202,7 @@ export function applyAgentDecision(state: PlayerState, decision: AgentDecision, 
     next = { ...next, world: applyFactionRelationChanges(next.world, [{ factionIds: [leaderOf, params.factionId!], status }]) };
     const summary = `${getFactionById(leaderOf)?.name ?? leaderOf}與${getFactionById(params.factionId!)?.name ?? params.factionId}的關係${params.direction === 'worse' ? '惡化' : '改善'}為「${RELATION_NAMES[status]}」。`;
     return appendEvent(next, {
-      type: 'agent_action', gameTimeMinutes: next.gameTimeMinutes, ...agentWitnesses(next, unitId), summary,
+      type: 'agent_action', gameTimeMinutes: atMinutes, ...agentWitnesses(next, unitId), summary,
       detail: `${summary}這是${name}的決定，用意：${decision.intent}`,
       knownBy: 'faction', knownByFactions: [leaderOf, params.factionId!], cause, agent, changes: { factionIds: [leaderOf, params.factionId!], unitIds: [unitId] }
     }).state;
@@ -267,15 +273,157 @@ function resolveAgentSuccessions(state: PlayerState): PlayerState {
 
 /**
  * 每日決策：先處理死亡角色的接手；行動跨過遊戲日時，每個新的一天每位重要角色決策一次。
- * 跨多日時逐日補算，最多補算最近 maxCatchUpDays 天。第 1 階段每天都使用規則後備。
+ * 跨多日時逐日補算，最多補算最近 maxCatchUpDays 天，一律使用規則後備。
+ * deferToAI（O34 第 2 階段）時，最後一天先挑出交給 AI 的角色（selectAgentsForAI）並跳過他們，回傳於 batch，
+ * 由呼叫端在 AI 回應後以 applyAgentBatch 套用；其餘角色照規則決策。批次為空時沒有 batch。
  */
-export function settleAgents(previous: PlayerState, state: PlayerState): PlayerState {
+export function settleAgents(previous: PlayerState, state: PlayerState, deferToAI = false): { state: PlayerState; batch?: AgentBatch } {
   let next = resolveAgentSuccessions(state);
   const fromDay = getGameDay(previous.gameTimeMinutes);
   const toDay = getGameDay(next.gameTimeMinutes);
-  if (toDay <= fromDay) return next;
+  if (toDay <= fromDay) return { state: next };
+  let batch: AgentBatch | undefined;
   for (let day = Math.max(fromDay + 1, toDay - agentRules.maxCatchUpDays + 1); day <= toDay; day += 1) {
-    for (const unitId of getActiveAgentIds(next)) next = applyAgentDecision(next, decideByRule(next, unitId, day), day);
+    const deferred = deferToAI && day === toDay ? selectAgentsForAI(next, day) : [];
+    if (deferred.length) batch = { day, unitIds: deferred };
+    for (const unitId of getActiveAgentIds(next)) {
+      if (!deferred.includes(unitId)) next = applyAgentDecision(next, decideByRule(next, unitId, day), day);
+    }
   }
-  return next;
+  return { state: next, ...(batch ? { batch } : {}) };
+}
+
+// ---------------------------------------------------------------------------
+// AI 批次決策（O34 第 2 階段）：規則列出合法候選、挑選交給 AI 的角色，AI 只選候選編號。
+// ---------------------------------------------------------------------------
+
+/** 一個已通過驗證的候選行動；id 為角色內的編號（C1、C2…），label 是給 AI 看的說明。 */
+export interface AgentCandidate {
+  id: string;
+  label: string;
+  decision: AgentDecision;
+}
+
+const CANDIDATE_CHECK_INTENT = '（候選）';
+
+/** 候選行動給 AI 看的說明。 */
+function describeCandidate(state: PlayerState, unitId: string, decision: AgentDecision): string {
+  const params = decision.params;
+  if (decision.action === 'post_quest') {
+    const template = getQuestTemplateById(params.templateId!);
+    const target = params.itemId ? getItemById(params.itemId)?.name ?? params.itemId : getUnitDisplayName(params.targetUnitId!);
+    return `發布${template?.name ?? '委託'}：${target}（數量 ${params.quantity}，報酬由規則決定）`;
+  }
+  if (decision.action === 'trigger_event') {
+    const event = getEventById(params.eventId!);
+    return `採取行動「${event?.title ?? params.eventId}」：${event?.summary ?? ''}`;
+  }
+  if (decision.action === 'change_faction_relation') {
+    const leaderOf = getEffectiveAgentProfile(state.world, unitId)?.leaderOf ?? '';
+    const next = stepRelation(getFactionRelation(state.world, leaderOf, params.factionId!).status, params.direction!);
+    return `讓${getFactionById(leaderOf)?.name ?? leaderOf}與${getFactionById(params.factionId!)?.name ?? params.factionId}的關係${params.direction === 'worse' ? '惡化' : '改善'}為「${next ? RELATION_NAMES[next] : ''}」`;
+  }
+  return '維持現狀';
+}
+
+const decisionKey = (decision: AgentDecision) => JSON.stringify([decision.action, decision.params]);
+
+/**
+ * 角色今天的合法候選：維持現狀一律列第一，其次是規則後備的選擇，再來是可觸發的 agent 事件、可發布的委託（數量取範本下限）、
+ * 勢力關係的一階變化（只限領袖）。每個候選都先通過 validateAgentDecision，去除重複，最多 maxCandidatesPerAgent 個（含維持現狀）。
+ */
+export function listAgentCandidates(state: PlayerState, unitId: string, day: number): AgentCandidate[] {
+  const profile = getEffectiveAgentProfile(state.world, unitId);
+  if (!profile || !getActiveAgentIds(state).includes(unitId)) return [];
+  const base = { unitId, intent: CANDIDATE_CHECK_INTENT, source: 'ai' as const };
+  const identity = getAgentIdentityIds(state.world, unitId);
+  const ruleChoice = decideByRule(state, unitId, day);
+  const proposals: AgentDecision[] = [
+    { ...base, action: 'idle', params: {} },
+    ...(ruleChoice.action !== 'idle' ? [{ ...ruleChoice, ...base }] : []),
+    ...eventsDatabase.filter((event) => event.trigger === 'agent' && (event.agentUnitIds ?? []).some((id) => identity.includes(id)))
+      .map((event): AgentDecision => ({ ...base, action: 'trigger_event', params: { eventId: event.id } })),
+    ...questTemplatesDatabase.flatMap((template) => getQuestTargetOptions(state, template.id, unitId, { requirePresence: false })
+      .map((target): AgentDecision => ({ ...base, action: 'post_quest', params: { templateId: template.id, targetUnitId: target.targetUnitId, itemId: target.itemId ?? null, quantity: template.quantity.min } }))),
+    // 勢力關係：目前非中立的勢力排前面（候選有上限，避免被遠方無關勢力占滿），其餘依資料順序。
+    ...(profile.leaderOf ? factionsDatabase.filter((faction) => faction.id !== profile.leaderOf)
+      .map((faction, order) => ({ faction, order, neutral: getFactionRelation(state.world, profile.leaderOf!, faction.id).status === 'neutral' }))
+      .sort((a, b) => Number(a.neutral) - Number(b.neutral) || a.order - b.order)
+      .flatMap(({ faction }) => (['worse', 'better'] as const)
+        .map((direction): AgentDecision => ({ ...base, action: 'change_faction_relation', params: { factionId: faction.id, direction } }))) : [])
+  ];
+  const seen = new Set<string>();
+  const valid = proposals.filter((decision) => {
+    const key = decisionKey(decision);
+    if (seen.has(key) || !validateAgentDecision(state, decision, day).ok) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, agentRules.ai.maxCandidatesPerAgent);
+  return valid.map((decision, index) => ({ id: `C${index + 1}`, label: describeCandidate(state, unitId, decision), decision }));
+}
+
+/**
+ * 角色與近期事件相關：上次決策日（前一天）之後的事件中，角色親眼目擊，或事件牽涉其本人或其勢力。
+ * 角色自己的決策所產生的事件不算（2026-11-20 確認）。
+ */
+export function isAgentRelatedToRecentEvents(state: PlayerState, unitId: string, day: number): boolean {
+  const factionId = getUnitTemplateById(unitId)?.factionId;
+  return state.world.events.some((event) => getGameDay(event.gameTimeMinutes) >= day - 1 && event.agent?.unitId !== unitId &&
+    (event.witnessUnitIds.includes(unitId) || (event.changes?.unitIds ?? []).includes(unitId) ||
+      (!!factionId && (event.changes?.factionIds ?? []).includes(factionId))));
+}
+
+/** 交給 AI 的優先級：0 在玩家所在地、1 與近期事件相關、2 勢力領袖、3 其他。 */
+export function getAgentAIPriority(state: PlayerState, unitId: string, day: number): number {
+  if (getAgentHomeMapId(unitId) === state.currentMapId) return 0;
+  if (isAgentRelatedToRecentEvents(state, unitId, day)) return 1;
+  if (getEffectiveAgentProfile(state.world, unitId)?.leaderOf) return 2;
+  return 3;
+}
+
+/**
+ * 挑選今天交給 AI 決策的角色：只考慮除了維持現狀還有其他合法候選的角色，依優先級排序（同級依資料順序），最多 maxAgentsPerBatch 位。
+ */
+export function selectAgentsForAI(state: PlayerState, day: number): string[] {
+  return getActiveAgentIds(state)
+    .filter((unitId) => listAgentCandidates(state, unitId, day).length > 1)
+    .map((unitId, order) => ({ unitId, order, priority: getAgentAIPriority(state, unitId, day) }))
+    .sort((a, b) => a.priority - b.priority || a.order - b.order)
+    .slice(0, agentRules.ai.maxAgentsPerBatch)
+    .map((entry) => entry.unitId);
+}
+
+/** 交給 AI 的一批角色：決策日與角色（優先順序）。 */
+export interface AgentBatch {
+  day: number;
+  unitIds: string[];
+}
+
+/** 一位角色的最終決策來源與（改用規則時的）原因。 */
+export interface AgentBatchOutcome {
+  unitId: string;
+  source: 'ai' | 'rule';
+  reason?: string;
+}
+
+/**
+ * 套用一批角色的決策：AI 的選擇（已換回 action／params）再驗證一次，通過才套用（source 'ai'）；
+ * 沒有選擇、或驗證失敗的角色改用規則後備。依批次順序逐一套用，後面的角色看到前面角色的結果。
+ */
+export function applyAgentBatch(state: PlayerState, batch: AgentBatch, choices: Record<string, AgentDecision | undefined> = {}, fallbackReason = '沒有 AI 回應'):
+  { state: PlayerState; outcomes: AgentBatchOutcome[] } {
+  let next = state;
+  const outcomes: AgentBatchOutcome[] = [];
+  for (const unitId of batch.unitIds) {
+    const choice = choices[unitId];
+    const check = choice ? validateAgentDecision(next, choice, batch.day) : undefined;
+    if (choice && check?.ok) {
+      next = applyAgentDecision(next, { ...choice, source: 'ai' }, batch.day);
+      outcomes.push({ unitId, source: 'ai' });
+      continue;
+    }
+    next = applyAgentDecision(next, decideByRule(next, unitId, batch.day), batch.day);
+    outcomes.push({ unitId, source: 'rule', reason: check && !check.ok ? check.reason : fallbackReason });
+  }
+  return { state: next, outcomes };
 }

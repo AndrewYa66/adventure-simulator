@@ -250,6 +250,10 @@ export interface AgentRulesStatic {
   maxCatchUpDays: number;
   /** 各行動的顯示名稱與冷卻（遊戲日）：同一角色兩次同種行動至少相隔的天數。 */
   actions: Record<AgentActionType, { cooldownDays: number; label: string }>;
+  /**
+   * AI 批次決策（O34 第 2 階段），全部可調：每批角色數、每人候選數、每人已知事件數、整個請求字元上限、動機字數上限、逾時毫秒。
+   */
+  ai: { maxAgentsPerBatch: number; maxCandidatesPerAgent: number; maxKnownEventsPerAgent: number; maxRequestChars: number; maxIntentChars: number; timeoutMs: number };
 }
 
 /** 共用查詢層回傳的正規化單位視圖；stats/expReward 依種族、職階、等級計算，source 保留完整樣板。 */
@@ -348,6 +352,10 @@ export interface ScenarioStatic {
     /** 繼承比例 0–1：新聲望 = 初始值 + 比例 ×（前角色聲望 − 初始值）。 */
     reputationInheritRatio: number;
   };
+  /** 得知消息（O34 第 2 階段）：抵達地區時得知當地事件的提示開頭文字，寫手可改成報童等口吻。 */
+  news: { noticePrefix: string };
+  /** 世界的一句話描述，用於重要角色決策的系統提示（例如「中世紀奇幻世界」）。 */
+  worldDescription: string;
 }
 
 // ---------- 勢力（factions.json）----------
@@ -682,6 +690,8 @@ export interface AIContextConfigStatic {
   dialogue: { maxTurns: number; maxChars: number; maxCharsPerMessage: number; includeSystemMessages: boolean };
   /** 人物記憶（memoryNotes）：每次回應最多幾則、每則字數上限、每個人物保留幾則（超出捨棄最舊）。 */
   memory: { maxNotesPerResponse: number; maxNoteChars: number; maxNotesPerUnit: number };
+  /** 抵達時得知消息的提示（O34 第 2 階段）：一則提示最多列出幾件事件（例行事件不列）。 */
+  news: { maxNoticeEvents: number };
 }
 
 export interface QuestTemplateDataStatic {
@@ -818,6 +828,8 @@ export interface WorldRuntimeState {
   story: StoryState;
   /** 重要角色的冷卻與接手狀態（O34）；只保存有紀錄的角色。 */
   agents: Record<string, AgentRuntimeState>;
+  /** 玩家已知的事件 ID（O34 第 2 階段）：HUD 世界紀錄只列這些事件；事件壓縮進編年史時一併移除。 */
+  playerKnownEventIds: string[];
 }
 
 /** 人物記得的一件事（由 AI 的 memoryNotes 經前端驗證後寫入）。 */

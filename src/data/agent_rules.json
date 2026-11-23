@@ -1,5 +1,13 @@
 {
   "maxCatchUpDays": 7,
+  "ai": {
+    "maxAgentsPerBatch": 5,
+    "maxCandidatesPerAgent": 6,
+    "maxKnownEventsPerAgent": 8,
+    "maxRequestChars": 8000,
+    "maxIntentChars": 40,
+    "timeoutMs": 20000
+  },
   "actions": {
     "idle": { "label": "維持現狀", "cooldownDays": 0 },
     "post_quest": { "label": "發布委託", "cooldownDays": 2 },
