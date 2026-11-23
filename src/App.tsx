@@ -296,11 +296,18 @@ export default function App() {
         if (sessionGenRef.current === token.gen) setAgentThinking(false);
         return;
       }
-      if (failure) console.info('角色決策改用規則後備：', failure);
-      const resolution = resolveAgentBatch(current, request, text, failure);
-      commitWorldUpdate(current, finalizeWorld(current, resolution.state));
-      recordAgentDecisionReport(resolution.report);
-      setAgentThinking(false);
+      try {
+        if (failure) console.info('角色決策改用規則後備：', failure);
+        const resolution = resolveAgentBatch(current, request, text, failure);
+        commitWorldUpdate(current, finalizeWorld(current, resolution.state));
+        recordAgentDecisionReport(resolution.report);
+      } catch (error) {
+        // 套用時的非預期錯誤：不改動狀態，但一定恢復操作，避免選項列卡在盤算中。
+        console.error('角色決策套用失敗：', error);
+        recordAgentDecisionReport({ ...createPendingReport(request), result: 'rule', reason: '套用失敗，本日未套用' });
+      } finally {
+        setAgentThinking(false);
+      }
     })();
   }
 
