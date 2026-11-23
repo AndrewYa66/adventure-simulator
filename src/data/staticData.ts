@@ -941,6 +941,7 @@ export function validateAgentData(): string[] {
   if (!Number.isInteger(aiContextConfig.maxCallsPerTurn) || aiContextConfig.maxCallsPerTurn < 1) issues.push('ai_context maxCallsPerTurn 須為正整數');
   if (!Number.isInteger(aiContextConfig.news?.maxNoticeEvents) || aiContextConfig.news.maxNoticeEvents < 0) issues.push('ai_context news.maxNoticeEvents 須為 0 以上的整數');
   if (!scenario.news?.noticePrefix?.trim()) issues.push(`劇本 ${scenario.id}: news.noticePrefix 不可為空`);
+  if (!scenario.worldDescription?.trim()) issues.push(`劇本 ${scenario.id}: worldDescription 不可為空`);
   for (const action of AGENT_ACTION_TYPES) {
     const rule = agentRules.actions?.[action];
     if (!rule || !rule.label?.trim() || !Number.isInteger(rule.cooldownDays) || rule.cooldownDays < 0) issues.push(`重要角色規則 actions.${action} 須有名稱與 0 以上的整數冷卻`);

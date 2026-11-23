@@ -278,6 +278,8 @@ function resolveEventMapId(event: EventStatic, atMapId: string): string {
 export interface ScenarioEventOptions {
   atMapId?: string;
   agent?: NonNullable<WorldEvent['agent']>;
+  /** 事件記錄的發生時間（重要角色的決策記在決策日的午夜）；預設為目前時間。 */
+  atMinutes?: number;
 }
 
 /** 套用靜態事件：設定/清除旗標、建立世界修正、改變聲望與勢力關係，並寫入事件紀錄。條件不成立時不改動狀態。 */
@@ -304,7 +306,7 @@ export function applyScenarioEvent(state: PlayerState, event: EventStatic, cause
   );
   const withEffects: PlayerState = applyReputationChanges({ ...state, storyFlags, world }, reputationChanges);
   return appendEvent(withEffects, {
-    type: 'scenario_event', gameTimeMinutes: state.gameTimeMinutes, mapId, summary: event.summary, knownBy: event.knownBy,
+    type: 'scenario_event', gameTimeMinutes: options.atMinutes ?? state.gameTimeMinutes, mapId, summary: event.summary, knownBy: event.knownBy,
     ...(event.knownByFactions?.length ? { knownByFactions: event.knownByFactions } : {}),
     witnessUnitIds: eventMap ? getResidentUnitIds(eventMap).filter((unitId) => isUnitAlive(state, unitId)) : [], cause, eventId: event.id,
     ...(options.agent ? { agent: options.agent, detail: `${event.summary}${getUnitDisplayName(options.agent.unitId)}這麼做的用意：${options.agent.intent}` } : {}),
@@ -500,9 +502,23 @@ function isPlayerRelatedEvent(state: PlayerState, event: WorldEvent): boolean {
     (event.changes?.questIds ?? []).some((questId) => state.activeQuests.some((entry) => entry.questId === questId));
 }
 
-/** 玩家在事件發生時就會得知：玩家就在事件地區、全世界周知、或與玩家本身有關。 */
-export const isKnownToPlayerOnOccurrence = (state: PlayerState, event: WorldEvent) =>
-  event.mapId === state.currentMapId || event.knownBy === 'world' || isPlayerRelatedEvent(state, event);
+/** 玩家的位置與時間（行動前或行動後）。 */
+export type PlayerPosition = Pick<PlayerState, 'currentMapId' | 'gameTimeMinutes'>;
+
+/**
+ * 事件發生時玩家是否在事件地區。行動沒有移動時：事件在所在地區即在場。
+ * 行動中有移動時（含多段移動跨過午夜）：只有在出發前（不晚於出發時間）發生在出發地、或抵達後（不早於抵達時間）發生在目的地的事件才算在場；
+ * 途中與途經地區的事件不算（途經各段的時間沒有記錄，視為不在場）。重要角色的決策記在決策日的午夜，因此旅途中的午夜決策不算在場。
+ */
+export function wasPlayerPresent(before: PlayerPosition, after: PlayerPosition, event: WorldEvent): boolean {
+  if (before.currentMapId === after.currentMapId) return event.mapId === after.currentMapId;
+  return (event.mapId === after.currentMapId && event.gameTimeMinutes >= after.gameTimeMinutes) ||
+    (event.mapId === before.currentMapId && event.gameTimeMinutes <= before.gameTimeMinutes);
+}
+
+/** 玩家在事件發生時就會得知：事件發生時玩家在事件地區、全世界周知、或與玩家本身有關。 */
+export const isKnownToPlayerOnOccurrence = (before: PlayerPosition, state: PlayerState, event: WorldEvent) =>
+  wasPlayerPresent(before, state, event) || event.knownBy === 'world' || isPlayerRelatedEvent(state, event);
 
 /** 抵達某地區時得知的事件：該地區發生、傳播範圍為地區或勢力的事件（只有目擊者知道的事件不會得知）。 */
 export const isLearnedOnArrival = (event: WorldEvent, mapId: string) =>
@@ -510,15 +526,16 @@ export const isLearnedOnArrival = (event: WorldEvent, mapId: string) =>
 
 /**
  * 更新玩家已知事件（O34 第 2 階段）：本次行動的新事件依「發生時得知」判定；行動後所在地區改變時，
- * 另得知抵達地區先前發生的地區／勢力事件。新事件以行動前的事件序號區分。
+ * 另得知抵達地區先前（含旅途中）發生的地區／勢力事件。新事件以行動前的事件序號區分。
+ * positionBefore 是判定移動用的行動前位置，預設為 previous（AI 批次決策在行動之後才套用時，傳入行動前的位置）。
  */
-function updatePlayerKnownEvents(previous: PlayerState, state: PlayerState): PlayerState {
+function updatePlayerKnownEvents(previous: PlayerState, state: PlayerState, positionBefore: PlayerPosition = previous): PlayerState {
   const known = new Set(state.world.playerKnownEventIds);
   const firstNewSeq = previous.world.nextEventSeq;
-  const arrived = state.currentMapId !== previous.currentMapId;
-  const learned = state.world.events.filter((event) => !known.has(event.id) && (getEventSeq(event) >= firstNewSeq
-    ? isKnownToPlayerOnOccurrence(state, event)
-    : arrived && isLearnedOnArrival(event, state.currentMapId)));
+  const arrived = state.currentMapId !== positionBefore.currentMapId;
+  const learned = state.world.events.filter((event) => !known.has(event.id) && (
+    (getEventSeq(event) >= firstNewSeq && isKnownToPlayerOnOccurrence(positionBefore, state, event)) ||
+    (arrived && isLearnedOnArrival(event, state.currentMapId))));
   if (!learned.length) return state;
   return { ...state, world: { ...state.world, playerKnownEventIds: [...state.world.playerKnownEventIds, ...learned.map((event) => event.id)] } };
 }
@@ -541,7 +558,7 @@ export function finalizeWorld(previous: PlayerState, next: PlayerState, hints: R
  * 同 finalizeWorld；deferAgentsToAI 時，跨日最後一天挑出的角色先不決策，回傳 agentBatch 交給 AI（O34 第 2 階段）。
  */
 export function finalizeWorldWithAgentBatch(previous: PlayerState, next: PlayerState, hints: Record<string, DeathHint> = {},
-  options: { deferAgentsToAI?: boolean } = {}): { state: PlayerState; agentBatch?: AgentBatch } {
+  options: { deferAgentsToAI?: boolean; positionBefore?: PlayerPosition } = {}): { state: PlayerState; agentBatch?: AgentBatch } {
   let state = next;
   const firstNewEventSeq = state.world.nextEventSeq;
   for (const template of unitTemplatesDatabase()) {
@@ -566,7 +583,7 @@ export function finalizeWorldWithAgentBatch(previous: PlayerState, next: PlayerS
     if (state === before) break;
   }
   state = pruneGeneratedQuests(expireGeneratedQuests(state));
-  state = updatePlayerKnownEvents(previous, state);
+  state = updatePlayerKnownEvents(previous, state, options.positionBefore);
   const modifiers = state.world.modifiers.filter((modifier) => isModifierActive(modifier, state.gameTimeMinutes));
   const world = compressEvents(modifiers.length === state.world.modifiers.length ? state.world : { ...state.world, modifiers });
   return { state: world === state.world ? state : { ...state, world }, ...(agents.batch ? { agentBatch: agents.batch } : {}) };

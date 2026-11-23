@@ -354,6 +354,8 @@ export interface ScenarioStatic {
   };
   /** 得知消息（O34 第 2 階段）：抵達地區時得知當地事件的提示開頭文字，寫手可改成報童等口吻。 */
   news: { noticePrefix: string };
+  /** 世界的一句話描述，用於重要角色決策的系統提示（例如「中世紀奇幻世界」）。 */
+  worldDescription: string;
 }
 
 // ---------- 勢力（factions.json）----------

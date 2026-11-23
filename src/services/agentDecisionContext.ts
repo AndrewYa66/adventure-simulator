@@ -1,5 +1,5 @@
 import type { AgentDecision, PlayerState } from '../types/game';
-import { agentRules, factionsDatabase, getFactionById, getFactionRelation, getMapById, getUnitDisplayName, getUnitTemplateById, getWorldUnitById } from '../data/staticData';
+import { agentRules, scenario, factionsDatabase, getFactionById, getFactionRelation, getMapById, getUnitDisplayName, getUnitTemplateById, getWorldUnitById } from '../data/staticData';
 import { RELATION_NAMES } from '../utils/factions';
 import { formatGameTime } from '../utils/gameTime';
 import { getEffectiveAgentProfile, listAgentCandidates, type AgentBatch, type AgentCandidate } from '../utils/agents';
@@ -32,7 +32,7 @@ export interface AgentBatchRequest {
   responseSchema: Record<string, unknown>;
 }
 
-const SYSTEM_PROMPT = `你是中世紀奇幻世界的「重要角色決策者」。世界剛進入新的一天，以下每位角色要決定今天做什麼。
+const SYSTEM_PROMPT = `你是${scenario.worldDescription}的「重要角色決策者」。世界剛進入新的一天，以下每位角色要決定今天做什麼。
 規則：
 1. 每位角色只能從他自己的「候選行動」中選一個，以候選編號（例如 C2）回答；不可自創行動或使用其他角色的編號。
 2. 依角色的盤算、個性、所在勢力的立場、對玩家的記憶，以及他「已知的事件」做判斷。角色只知道列出的事件；不可依據未列出的事情決策。
@@ -153,7 +153,8 @@ export function parseAgentDecisionResponse(text: string, request: AgentBatchRequ
     if (choices[unitId]) continue;
     const candidate = isRecord(entry) ? agent.candidates.find((option) => option.id === entry.candidateId) : undefined;
     if (!candidate) { rejected.push({ unitId, reason: '候選編號不在清單中' }); continue; }
-    const intent = isRecord(entry) && typeof entry.intent === 'string' ? entry.intent.replace(/\s+/g, ' ').trim().slice(0, agentRules.ai.maxIntentChars) : '';
+    // 以字元（code point）截斷，避免把 emoji 或罕用字切成一半。
+    const intent = isRecord(entry) && typeof entry.intent === 'string' ? Array.from(entry.intent.replace(/\s+/g, ' ').trim()).slice(0, agentRules.ai.maxIntentChars).join('') : '';
     if (!intent) { rejected.push({ unitId, reason: '缺少動機' }); continue; }
     choices[unitId] = { ...candidate.decision, intent, source: 'ai' };
   }

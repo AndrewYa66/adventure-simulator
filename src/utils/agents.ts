@@ -175,6 +175,8 @@ export function applyAgentDecision(state: PlayerState, decision: AgentDecision, 
   const name = getUnitDisplayName(unitId);
   const agent = { unitId, action: decision.action, intent: decision.intent };
   const cause = `重要角色決策（${name}${decision.source === 'ai' ? '，AI' : '，規則'}）`;
+  // 決策發生在決策日的午夜（行動跨過的那一刻），不是行動結束時；玩家旅途中的午夜決策因此不算在場。
+  const atMinutes = Math.min(state.gameTimeMinutes, (day - 1) * 24 * 60);
   const params = decision.params;
   let next = withActionDay(state, unitId, decision, day);
   if (decision.action === 'post_quest') {
@@ -186,12 +188,12 @@ export function applyAgentDecision(state: PlayerState, decision: AgentDecision, 
     if (!quest) return state;
     const summary = `${name}發布了委託「${quest.title}」。`;
     return appendEvent(posting.state, {
-      type: 'agent_action', gameTimeMinutes: next.gameTimeMinutes, ...agentWitnesses(next, unitId), summary, detail: `${summary}用意：${decision.intent}`,
+      type: 'agent_action', gameTimeMinutes: atMinutes, ...agentWitnesses(next, unitId), summary, detail: `${summary}用意：${decision.intent}`,
       knownBy: 'region', cause, agent, changes: { questIds: [quest.id], unitIds: [unitId] }
     }).state;
   }
   if (decision.action === 'trigger_event') {
-    const result = applyScenarioEvent(next, getEventById(params.eventId!)!, cause, { atMapId: getAgentHomeMapId(unitId), agent });
+    const result = applyScenarioEvent(next, getEventById(params.eventId!)!, cause, { atMapId: getAgentHomeMapId(unitId), agent, atMinutes });
     return result === next ? state : result;
   }
   if (decision.action === 'change_faction_relation') {
@@ -200,7 +202,7 @@ export function applyAgentDecision(state: PlayerState, decision: AgentDecision, 
     next = { ...next, world: applyFactionRelationChanges(next.world, [{ factionIds: [leaderOf, params.factionId!], status }]) };
     const summary = `${getFactionById(leaderOf)?.name ?? leaderOf}與${getFactionById(params.factionId!)?.name ?? params.factionId}的關係${params.direction === 'worse' ? '惡化' : '改善'}為「${RELATION_NAMES[status]}」。`;
     return appendEvent(next, {
-      type: 'agent_action', gameTimeMinutes: next.gameTimeMinutes, ...agentWitnesses(next, unitId), summary,
+      type: 'agent_action', gameTimeMinutes: atMinutes, ...agentWitnesses(next, unitId), summary,
       detail: `${summary}這是${name}的決定，用意：${decision.intent}`,
       knownBy: 'faction', knownByFactions: [leaderOf, params.factionId!], cause, agent, changes: { factionIds: [leaderOf, params.factionId!], unitIds: [unitId] }
     }).state;

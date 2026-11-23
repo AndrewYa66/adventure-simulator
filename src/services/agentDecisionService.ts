@@ -62,10 +62,16 @@ export async function requestAgentDecisionText(settings: AIModelSettings, apiKey
     const response = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body), signal: controller.signal });
     if (response.status === 429) throw new Error('AI 額度用完或請求太頻繁（HTTP 429）');
     if (!response.ok) throw new Error(`AI 服務回應 HTTP ${response.status}`);
-    return extractResponseText(await response.json() as unknown, settings.provider);
+    let data: unknown;
+    try {
+      data = await response.json();
+    } catch (error) {
+      throw new Error('回應不是 JSON', { cause: error });
+    }
+    return extractResponseText(data, settings.provider);
   } catch (error) {
     if (controller.signal.aborted) throw new Error(`逾時（${Math.round(timeoutMs / 1000)} 秒）`, { cause: error });
-    if (error instanceof Error && /HTTP \d+/.test(error.message)) throw error;
+    if (error instanceof Error && (/HTTP \d+/.test(error.message) || error.message === '回應不是 JSON')) throw error;
     throw new Error('無法連線至 AI 服務', { cause: error });
   } finally {
     clearTimeout(timer);

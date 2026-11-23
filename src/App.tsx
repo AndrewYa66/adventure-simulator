@@ -31,7 +31,7 @@ import { ACTION_DURATIONS, advanceGameTime, formatDuration, formatGameTime, getG
 import { grantUnitExp } from './utils/unitProgress';
 import { createCombat, getCombatTarget, setEnemyHp } from './utils/combatState';
 import { getPlayerWorldUnit } from './utils/worldUnits';
-import { applyEventProposals, finalizeWorld, finalizeWorldWithAgentBatch, getEventSeq, getPlayerKnownEvents, type DeathHint } from './utils/worldEvents';
+import { applyEventProposals, finalizeWorldWithAgentBatch, getEventSeq, getPlayerKnownEvents, isKnownToPlayerOnOccurrence, type DeathHint, type PlayerPosition } from './utils/worldEvents';
 import { createSuccessorReputation, describeReputationChanges } from './utils/factions';
 import { rollWaitInterruption } from './utils/waitRules';
 import type { CharacterAlignment } from './types/game';
@@ -231,15 +231,15 @@ export default function App() {
       : nextPlayer.isDead ? '角色已死亡' : !canMakeAnotherCall(usedThisTurn) ? '已達每回合呼叫上限' : undefined;
     const { state: finalized, agentBatch } = finalizeWorldWithAgentBatch(player, nextPlayer, deathHints, { deferAgentsToAI: !skipReason });
     commitWorldUpdate(player, finalized);
-    if (agentBatch) startAgentBatch(finalized, agentBatch);
+    if (agentBatch) startAgentBatch(finalized, agentBatch, { currentMapId: player.currentMapId, gameTimeMinutes: player.gameTimeMinutes });
     else if (skipReason && getGameDay(finalized.gameTimeMinutes) > getGameDay(player.gameTimeMinutes)) recordRuleOnlyAgentDecision(skipReason);
   };
 
   /**
    * 套用已結算的狀態並附上訊息：主線進度、本次行動中玩家當下得知的新事件（🌍 世界變化），
-   * 以及抵達地區時得知的先前事件（得知消息，最多 news.maxNoticeEvents 件、不含例行事件）。
+   * 以及抵達地區時得知的事件（得知消息，最多 news.maxNoticeEvents 件、不含例行事件）。positionBefore 為行動前的位置（判定移動用）。
    */
-  function commitWorldUpdate(before: PlayerState, finalized: PlayerState) {
+  function commitWorldUpdate(before: PlayerState, finalized: PlayerState, positionBefore: PlayerPosition = before) {
     setPlayer(finalized);
     playerRef.current = finalized;
     // 劇情片段完成與推進幕另以主線訊息呈現，不重複列在世界變化中。
@@ -247,14 +247,16 @@ export default function App() {
     if (storyNotice) setTimeout(() => appendSystemMessage(storyNotice), 0);
     const knownBefore = new Set(before.world.playerKnownEventIds);
     const learned = getPlayerKnownEvents(finalized).filter((event) => !knownBefore.has(event.id));
-    const worldChanges = learned.filter((event) => getEventSeq(event) >= before.world.nextEventSeq && event.type !== 'story_progress');
+    const knownOnOccurrence = (event: typeof learned[number]) => getEventSeq(event) >= before.world.nextEventSeq && isKnownToPlayerOnOccurrence(positionBefore, finalized, event);
+    const worldChanges = learned.filter((event) => knownOnOccurrence(event) && event.type !== 'story_progress');
     if (worldChanges.length) {
       // 劇情事件附帶的聲望變化另外列出（玩家行動造成的聲望事件已寫在描述中）。
       const describe = (event: typeof worldChanges[number]) => event.type === 'scenario_event' && event.reputationChanges?.length
         ? `${event.summary}（聲望變化：${describeReputationChanges(before, event.reputationChanges)}）` : event.summary;
       setTimeout(() => appendSystemMessage(`🌍 世界變化：\n${worldChanges.map((event) => `・${describe(event)}`).join('\n')}`), 0);
     }
-    const news = learned.filter((event) => getEventSeq(event) < before.world.nextEventSeq && !aiContextConfig.chronicle.routineEventTypes.includes(event.type))
+    // 抵達時得知（含旅途中目的地在午夜發生的事）。
+    const news = learned.filter((event) => !knownOnOccurrence(event) && !aiContextConfig.chronicle.routineEventTypes.includes(event.type))
       .slice(-aiContextConfig.news.maxNoticeEvents);
     if (news.length) {
       setTimeout(() => appendSystemMessage(`${scenario.news.noticePrefix}\n${news.map((event) => `・${formatGameTime(event.gameTimeMinutes)}｜${event.summary}`).join('\n')}`), 0);
@@ -270,12 +272,14 @@ export default function App() {
    * 角色決策批次（O34 第 2 階段）：本回合敘事已顯示後送出請求，期間暫停操作；結果回來時若已讀檔、換世界或時間改變則丟棄。
    * 沒有可送的角色或時間線已結束時，立即以規則套用。
    */
-  function startAgentBatch(base: PlayerState, batch: AgentBatch) {
+  function startAgentBatch(base: PlayerState, batch: AgentBatch, positionBefore: PlayerPosition) {
+    // 套用時沿用行動前的位置判定玩家是否在場（例如旅途中跨午夜，目的地的決策不算在場）。
+    const finalizeBatch = (current: PlayerState, decided: PlayerState) => finalizeWorldWithAgentBatch(current, decided, {}, { positionBefore }).state;
     const request = buildAgentBatchRequest(base, batch);
     const ruleReason = isTimelineEnded(base) ? '時間線已結束' : !request.agents.length ? '只剩維持現狀的角色' : undefined;
     if (ruleReason) {
       const resolution = resolveAgentBatch(base, request, undefined, ruleReason);
-      commitWorldUpdate(base, finalizeWorld(base, resolution.state));
+      commitWorldUpdate(base, finalizeBatch(base, resolution.state), positionBefore);
       recordAgentDecisionReport(resolution.report);
       return;
     }
@@ -299,7 +303,7 @@ export default function App() {
       try {
         if (failure) console.info('角色決策改用規則後備：', failure);
         const resolution = resolveAgentBatch(current, request, text, failure);
-        commitWorldUpdate(current, finalizeWorld(current, resolution.state));
+        commitWorldUpdate(current, finalizeBatch(current, resolution.state), positionBefore);
         recordAgentDecisionReport(resolution.report);
       } catch (error) {
         // 套用時的非預期錯誤：不改動狀態，但一定恢復操作，避免選項列卡在盤算中。
@@ -975,6 +979,8 @@ export default function App() {
   };
 
   const handleSendAction = async (actionText: string) => {
+    // 角色決策進行中（O34 第 2 階段）不接受新行動；UI 已停用，這裡再擋一次，避免日後新入口繞過。
+    if (agentThinking) return;
     const isQuestion = /(?:如何|怎麼|能否|可不可以|是否|請問|教我|詢問|不要|不想|無法|不能)/u.test(actionText);
     const useVerb = /(?:使用|喝|飲用|服用|吃下|吃|use|consume)/iu.test(actionText);
     const requestedItemMatches = useVerb && !isQuestion
@@ -1115,7 +1121,7 @@ export default function App() {
 
   /** 選項列的系統選項（O50）：一律呼叫與打字相同的執行函式。打開商店、告示板只在選項列內展開，不改變狀態。 */
   const runSystemAction = (action: SystemAction) => {
-    if (loading) return;
+    if (loading || agentThinking) return;
     switch (action.kind) {
       case 'travel': executeTravel(action.mapId); break;
       case 'talk': executeTalk(action.unitId); break;
