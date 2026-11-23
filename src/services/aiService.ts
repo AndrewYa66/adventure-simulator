@@ -11,6 +11,11 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const FORMAT_FALLBACK = '模型回應格式不完整，請重新描述行動再試一次。';
 
+/** 格式失敗但仍取得敘事時，附上「本回合未生效」的系統說明。 */
+const withFormatFailureNotice = (narrative: string): string => narrative === FORMAT_FALLBACK
+  ? narrative
+  : `${narrative}\n\n⚠️ 系統說明：AI 回應格式不完整，本回合只顯示敘事，沒有套用任何檢定或狀態變更。請重新描述行動再試一次。`;
+
 export function extractResponseText(data: unknown, provider: AIModelSettings['provider']): string {
   if (!isRecord(data)) return '';
   if (provider === 'openai') {
@@ -107,7 +112,14 @@ function readUnsupportedFormatVersion(text: string): string | undefined {
 function parseAIResponse(raw: unknown): AIResponsePayload | null {
   const version = isRecord(raw) ? readFormatVersion(raw) : null;
   if (!isRecord(raw) || version === null) return null;
-  const value = version < 3 ? upgradeLegacyUnitFields(raw) : raw;
+  const upgraded = version < 3 ? upgradeLegacyUnitFields(raw) : raw;
+  // 模型常以空物件 {} 表示「沒有檢定」（2026-11-23 實測）：視為 null，其餘欄位照常驗證與套用，不丟棄整個回應。
+  const isEmptyRecord = (field: unknown) => isRecord(field) && Object.keys(field).length === 0;
+  const value: Record<string, unknown> = {
+    ...upgraded,
+    ...(isEmptyRecord(upgraded.checkRequest) ? { checkRequest: null } : {}),
+    ...(isEmptyRecord(upgraded.checkOutcomes) ? { checkOutcomes: null } : {})
+  };
   if (typeof value.storyText !== 'string' || !Array.isArray(value.suggestedActions) ||
       !value.suggestedActions.every((action) => typeof action === 'string')) return null;
 
@@ -406,7 +418,10 @@ export async function sendPlayerAction(
     // 版本號不支援的回應安全拒絕：不顯示其敘事、不套用任何變更，也不重試。
     const unsupportedVersion = readUnsupportedFormatVersion(rawText);
     return {
-      storyText: unsupportedVersion !== undefined ? `AI 回應的格式版本（${unsupportedVersion}）不受支援，本回合未套用任何變更，請重新描述行動再試一次。` : getReadableNarrative(rawText),
+      // 格式不完整時仍顯示可讀的敘事，但明確告知本回合沒有生效，避免玩家誤以為行動已套用。
+      storyText: unsupportedVersion !== undefined
+        ? `AI 回應的格式版本（${unsupportedVersion}）不受支援，本回合未套用任何變更，請重新描述行動再試一次。`
+        : withFormatFailureNotice(getReadableNarrative(rawText)),
       suggestedActions: ['重新描述行動', '觀察周圍環境']
     };
   } catch (err: unknown) {
