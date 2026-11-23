@@ -154,7 +154,7 @@ sendPlayerAction(
 
 ## 劇本設定
 
-`src/data/scenario.json` 集中存放劇本專屬內容：規則開關 `rules`（`residentKillGrantsExp`：擊倒地區居民是否給經驗；`routeTravel.maxSegmentsPerAction`；`waitOptionMinutes`：選項列「等待」提供的時長（分鐘，1～480，可調，O50））、新角色接續設定 `succession`（`relatedLabel` 選項文字、`reputationInheritRatio` 聲望繼承比例，可省略）、得知消息的開頭文字 `news.noticePrefix`（O34 第 2 階段，必填，寫手可改成報童等口吻）、主持人定位 `gmRole`、起始地圖/金幣/遊戲時間 `start`、預設角色 `defaultPlayer`（名稱、種族、職階、陣營）、開場文字 `opening`（`introText`、`resetText`、可用 `{name}`/`{className}` 的 `newCharacterText`、`suggestedActions`）、輸入框提示 `inputPlaceholder`，以及不屬於世界觀、玩家不可憑空取出的物品詞彙 `anachronisticItemTerms`。`src/` 程式碼（不含 `src/data/`）不出現具體內容 ID 或名稱，替換劇本資料即可更換開場與起始地點。
+`src/data/scenario.json` 集中存放劇本專屬內容：規則開關 `rules`（`residentKillGrantsExp`：擊倒地區居民是否給經驗；`routeTravel.maxSegmentsPerAction`；`waitOptionMinutes`：選項列「等待」提供的時長（分鐘，1～480，可調，O50））、新角色接續設定 `succession`（`relatedLabel` 選項文字、`reputationInheritRatio` 聲望繼承比例，可省略）、得知消息的開頭文字 `news.noticePrefix`（O34 第 2 階段，必填，寫手可改成報童等口吻）、世界的一句話描述 `worldDescription`（重要角色決策的系統提示使用，必填）、主持人定位 `gmRole`、起始地圖/金幣/遊戲時間 `start`、預設角色 `defaultPlayer`（名稱、種族、職階、陣營）、開場文字 `opening`（`introText`、`resetText`、可用 `{name}`/`{className}` 的 `newCharacterText`、`suggestedActions`）、輸入框提示 `inputPlaceholder`，以及不屬於世界觀、玩家不可憑空取出的物品詞彙 `anachronisticItemTerms`。`src/` 程式碼（不含 `src/data/`）不出現具體內容 ID 或名稱，替換劇本資料即可更換開場與起始地點。
 
 新手章節任務為 `QST-001` 清理綠林古道，完成後解鎖 `QST-002` 討伐哥布林酋長；`MAP-003` 哥布林巢穴需先接取 QST-002 才能進入，UI 和對話移動共用地圖解鎖驗證。`MON-003` 格羅姆・裂牙每第三回合使用「裂地重擊」，玩家進行敏捷 DC 14 檢定；失敗時受到 `floor(敵方 ATK × 1.5) - floor(玩家 DEF / 4)` 傷害，存活時昏迷一回合並跳過下一個行動。一般敵方反擊依防禦 DC 擲骰。HP 降至 0 即死亡，昏迷只由獨立狀態效果表示。
 
@@ -186,7 +186,7 @@ sendPlayerAction(
 
 ## 重要角色決策（O34）
 
-設有 `agent` 的單位是重要角色，每個遊戲日決策一次，只能從合法行動中選擇；前端驗證後套用，影響世界的結果以事件寫入紀錄（`src/utils/agents.ts`）。第 1 階段一律使用規則後備；第 2 階段起跨日的最後一天可交給 AI 批次決策（見下方「AI 批次決策」），沿用同一套驗證與套用。規格書 `docs/specs/O34-2.md`。
+設有 `agent` 的單位是重要角色，每個遊戲日決策一次，只能從合法行動中選擇；前端驗證後套用，影響世界的結果以事件寫入紀錄（`src/utils/agents.ts`）；決策事件的 `gameTimeMinutes` 為決策日的午夜（第 D 天 00:00）。第 1 階段一律使用規則後備；第 2 階段起跨日的最後一天可交給 AI 批次決策（見下方「AI 批次決策」），沿用同一套驗證與套用。規格書 `docs/specs/O34-2.md`。
 
 - **角色設定**（`units.json` 的 `agent`）：`{ goals: string[], traits: string[], leaderOf?, successors?, ruleFallback: [{ action, intent, when?, templateId?, quantity?, eventId?, factionId?, direction?, until? }] }`。`goals` 是盤算（內心動機），`traits` 是個性；`leaderOf` 為自己所屬勢力時才能改變勢力關係；`successors` 是死亡後優先接手的居民。`ruleFallback` 依序嘗試，第一條條件成立且通過驗證的規則就是當天的行動；最後一條必須是沒有條件的 `idle`。
 - **合法行動**（`AgentActionType`，名稱與冷卻在 `src/data/agent_rules.json` 的 `actions`）：
@@ -213,8 +213,8 @@ sendPlayerAction(
 ### 玩家已知事件與世界紀錄（O34 第 2 階段）
 
 - **`world.playerKnownEventIds: string[]`**（存檔版本 15）：玩家角色知道的事件 ID，依得知順序；HUD「🌍 世界紀錄」只列這些事件（件數也只算已知的，顯示最近 8 件）。讀檔時只保留仍在事件紀錄中的 ID；事件壓縮進編年史時同步移除。清單屬於世界層。
-- **一定得知**（`isKnownToPlayerOnOccurrence`，在 `finalizeWorld` 結尾判定本次行動的新事件）：事件地區是行動後玩家所在地區、`knownBy: "world"`，或與玩家本身有關（`reputation_change`、玩家死亡、`activeQuests` 中的委託的 `quest_failed`／`quest_transferred`）。
-- **抵達時得知**（`isLearnedOnArrival`）：行動後所在地區改變時，得知該地區先前發生、`knownBy` 為 `region` 或 `faction` 的事件；`witnesses` 事件不得知。多段移動只以最後抵達的地區判定。
+- **一定得知**（`isKnownToPlayerOnOccurrence(行動前位置, 行動後狀態, 事件)`，在 `finalizeWorld` 結尾判定本次行動的新事件）：事件發生時玩家在事件地區（`wasPlayerPresent`：行動沒有移動時為所在地區；有移動時只有不晚於出發時間在出發地、或不早於抵達時間在目的地的事件，途中與途經地區不算）、`knownBy: "world"`，或與玩家本身有關（`reputation_change`、玩家死亡、`activeQuests` 中的委託的 `quest_failed`／`quest_transferred`）。重要角色的決策事件記在決策日的午夜，因此旅途中跨過午夜時，目的地角色的決策不算在場。AI 批次在行動後才套用時，`finalizeWorldWithAgentBatch` 的 `positionBefore` 傳入行動前的位置。
+- **抵達時得知**（`isLearnedOnArrival`）：行動後所在地區改變時，得知該地區先前（含本次旅途中）發生、`knownBy` 為 `region` 或 `faction` 的事件；`witnesses` 事件不得知。多段移動只以最後抵達的地區判定。
 - **訊息**：「🌍 世界變化」列出本次行動中玩家當下得知的新事件（不含 `story_progress`）；抵達時得知的先前事件以一則系統訊息列出最近 `ai_context.json` 的 `news.maxNoticeEvents`（3）件，排除 `chronicle.routineEventTypes`，開頭文字為 `scenario.json` 的 `news.noticePrefix`（預設「🗞️ 告示板上的新消息與往來旅人的傳言：」），其餘只進 HUD。經 NPC 對話得知（O40）與實際的告示板／報童設施（O32）延後。
 - **卡死偵測**：`agent` 事件仍可能觸發的條件是列出的角色存活或潛伏，或其盤算沿接手鏈交到存活者手上。
 - **世界狀態** `world.agents`：`{ [unitId]: { actionDays: { [action]: 遊戲日 }, inheritedFrom?: string[], succeededBy?: string } }`（`succeededBy` 為空字串代表無人接手）。
