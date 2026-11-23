@@ -68,7 +68,7 @@
 - 應修 1 已修：重要角色的決策記在決策日的午夜；有移動的行動依出發／抵達時間判定在場，旅途中目的地的事件改為抵達時得知（`witnesses` 不得知），AI 批次套用沿用行動前位置。
 - 建議 1～4 已修（執行函式擋住盤算中的新行動、「回應不是 JSON」、動機以字元截斷、`scenario.json` 的 `worldDescription`）。
 - 建議 5 與上方 pre-mortem「等待中重新整理少決策一天」：接受，已寫進 CLAUDE.md「已知問題與待辦觀察」。
-- 遠方勢力關係、OpenAI 未實測：待 Andrew 決定，程式未動。
+- 遠方勢力關係、OpenAI 未實測：Andrew 決定（2026-11-23）照 review 建議，先維持、實玩觀察；OpenAI 角色決策路徑以「未測」合併。程式未動。
 - 重跑：build、lint、validate:data、內容 ID 搜尋通過；規則腳本 54/54；test:sim 與修正前相同；Playwright 38/38；test:ai 未跑（回應格式與提示內容未變）。本輪真實 AI 呼叫 0 次。
 
 ## 待 review 注意
