@@ -35,8 +35,8 @@ sendPlayerAction(
 ## AI 上下文組裝與回應格式版本（O39）
 
 - **區段**：系統提示由具名區段組成，依序為 `player`（玩家狀態、背包、裝備）、`legacy`（歷代角色）、`location`（所在與相鄰地區）、`npcs`、`factions`、`story`（主線，O31）、`quests`、`encounters`（戰鬥、遭遇候選、服務）、`items`（靜態物品清單）、`flags`、`worldEvents`、`chronicle`、`modifiers`、`proposableEvents`、`rules`（主持規則與 JSON 範例）。設定條目與角色卡區段待 O36 加入。
-- **token 預算** `src/data/ai_context.json`：`totalBudgetChars`（整體字元上限，目前 20,000）、`maxCallsPerTurn`（每回合呼叫上限，目前 2：敘事 1 次 + 移動修正 1 次；設為 1 即不送修正請求）、`legacy.maxCharacters`／`maxDeedsPerCharacter`（5／5）、`worldEvents.maxEvents`（12）、`chronicle.maxLines`（送給 AI 的編年史行數，10；編年史壓縮設定見「世界事件、世界修正與世界規則」），以及可截斷區段的 `trimmableSections: { legacy, worldEvents, modifiers, chronicle }` 各自的 `priority`（數字越小越重要）與 `maxChars`。只有這四個歷史類區段可截斷；候選清單（地區、任務、遭遇、物品、可提議事件）與規則不截斷，避免 AI 看不到合法選項。截斷時先套用各區段上限，整體仍超出時從優先順序最低的區段繼續省略；列表從最舊的項目開始省略並在標籤註明省略筆數，歷代角色先省略各角色較舊的事蹟（每位保留最新一件，標示 `omittedDeeds`），最後才省略最早的角色。token 數以「中日韓文字 1 字 1 token、其他 4 字元 1 token」估算。2026-10-06 實測一般狀態約 13,200 字元（約 6,500 tokens）。
-- **組裝報告**：每次呼叫記錄 `AIContextReport`（總字元、估計 tokens、預算、是否超出、各區段字元／上限／省略數、完整系統提示與使用者提示）。開發模式（`import.meta.env.DEV`）在 HUD 顯示「AI 上下文」面板；模型設定頁顯示每回合呼叫上限與上一次請求的估計大小。正式版不顯示面板。
+- **token 預算** `src/data/ai_context.json`：`totalBudgetChars`（整體字元上限，目前 20,000）、`maxCallsPerTurn`（每回合呼叫上限，目前 3：敘事 1 次 + 移動修正 0～1 次 + 重要角色決策 0～1 次（只在跨日時，O34 第 2 階段）；設為 1 即不送修正請求，設為 2 時有修正就不送角色決策）、`legacy.maxCharacters`／`maxDeedsPerCharacter`（5／5）、`worldEvents.maxEvents`（12）、`chronicle.maxLines`（送給 AI 的編年史行數，10；編年史壓縮設定見「世界事件、世界修正與世界規則」），以及可截斷區段的 `trimmableSections: { legacy, worldEvents, modifiers, chronicle }` 各自的 `priority`（數字越小越重要）與 `maxChars`。只有這四個歷史類區段可截斷；候選清單（地區、任務、遭遇、物品、可提議事件）與規則不截斷，避免 AI 看不到合法選項。截斷時先套用各區段上限，整體仍超出時從優先順序最低的區段繼續省略；列表從最舊的項目開始省略並在標籤註明省略筆數，歷代角色先省略各角色較舊的事蹟（每位保留最新一件，標示 `omittedDeeds`），最後才省略最早的角色。token 數以「中日韓文字 1 字 1 token、其他 4 字元 1 token」估算。2026-10-06 實測一般狀態約 13,200 字元（約 6,500 tokens）。
+- **組裝報告**：每次呼叫記錄 `AIContextReport`（總字元、估計 tokens、預算、是否超出、各區段字元／上限／省略數、完整系統提示與使用者提示）。開發模式（`import.meta.env.DEV`）在 HUD 顯示「AI 上下文」面板；模型設定頁顯示每回合呼叫上限（「每回合最多呼叫 AI 3 次：敘事 1 次、移動修正 0～1 次、角色決策 0～1 次（只在跨日時）」）、上一次敘事請求與上一次角色決策請求的估計 tokens（不換算金額）、「上次角色決策：AI／規則後備（原因）」，以及「重要角色決策使用 AI」開關（O34 第 2 階段）。開發模式的面板另有「上一次角色決策請求」（結果、各角色來源、完整提示與回應）。正式版不顯示面板。
 - **歷代角色區段**：每位歷代角色（最多 5 位）提供 `generation`（代數）、名稱、種族職階等級、陣營、結束時間地點、`death`（死亡事件）與 `deeds`（事蹟）。事蹟為該角色任內（事件的 `characterSeq` 等於其代數）殺害 NPC 或頭目的死亡事件、未由殺害衍生的聲望事件（攻擊成員、完成委託）、以及 AI 提議並由玩家行動促成的劇本事件；一般魔物擊殺不列入。殺害造成的聲望事件以 `consequence` 附在死亡事件上，不重複列出。每件事蹟（與死亡事件）附上在場 NPC 的認知層級 `presentKnowledge`（見「世界事件、世界修正與世界規則」的認知層級），已列在此區段的事件不在世界事件區段重複；主持規則要求親眼目擊者被問到時明確說出前任冒險者做了什麼，傳聞者以聽說的口吻提到，公開消息者只知道結果。已壓縮進編年史的事件不再列為事蹟。
 - **近期對話與人物記憶（O39 第二版）**：
   - 近期對話視窗（`buildDialogueHistory`）：設定在 `ai_context.json` 的 `dialogue`。取最近 `maxTurns` 輪（目前 8；一輪從玩家訊息開始，未取滿時連同開場敘事），`includeSystemMessages` 為 `false` 時排除系統訊息（戰鬥結算、道具使用等結果已反映在系統提示的狀態中）；每則超過 `maxCharsPerMessage`（400）時保留開頭並加上「…」，整段超過 `maxChars`（4,000）時從最舊的訊息捨棄。以「玩家:」「GM:」標示發言者放在使用者提示的【近期劇情回顧】；組裝報告另列 `dialogue` 區段（字元、上限、省略的較舊訊息數），不計入系統提示的 `totalBudgetChars`，但估計 tokens 包含使用者提示。
@@ -154,7 +154,7 @@ sendPlayerAction(
 
 ## 劇本設定
 
-`src/data/scenario.json` 集中存放劇本專屬內容：規則開關 `rules`（`residentKillGrantsExp`：擊倒地區居民是否給經驗；`routeTravel.maxSegmentsPerAction`；`waitOptionMinutes`：選項列「等待」提供的時長（分鐘，1～480，可調，O50））、新角色接續設定 `succession`（`relatedLabel` 選項文字、`reputationInheritRatio` 聲望繼承比例，可省略）、主持人定位 `gmRole`、起始地圖/金幣/遊戲時間 `start`、預設角色 `defaultPlayer`（名稱、種族、職階、陣營）、開場文字 `opening`（`introText`、`resetText`、可用 `{name}`/`{className}` 的 `newCharacterText`、`suggestedActions`）、輸入框提示 `inputPlaceholder`，以及不屬於世界觀、玩家不可憑空取出的物品詞彙 `anachronisticItemTerms`。`src/` 程式碼（不含 `src/data/`）不出現具體內容 ID 或名稱，替換劇本資料即可更換開場與起始地點。
+`src/data/scenario.json` 集中存放劇本專屬內容：規則開關 `rules`（`residentKillGrantsExp`：擊倒地區居民是否給經驗；`routeTravel.maxSegmentsPerAction`；`waitOptionMinutes`：選項列「等待」提供的時長（分鐘，1～480，可調，O50））、新角色接續設定 `succession`（`relatedLabel` 選項文字、`reputationInheritRatio` 聲望繼承比例，可省略）、得知消息的開頭文字 `news.noticePrefix`（O34 第 2 階段，必填，寫手可改成報童等口吻）、主持人定位 `gmRole`、起始地圖/金幣/遊戲時間 `start`、預設角色 `defaultPlayer`（名稱、種族、職階、陣營）、開場文字 `opening`（`introText`、`resetText`、可用 `{name}`/`{className}` 的 `newCharacterText`、`suggestedActions`）、輸入框提示 `inputPlaceholder`，以及不屬於世界觀、玩家不可憑空取出的物品詞彙 `anachronisticItemTerms`。`src/` 程式碼（不含 `src/data/`）不出現具體內容 ID 或名稱，替換劇本資料即可更換開場與起始地點。
 
 新手章節任務為 `QST-001` 清理綠林古道，完成後解鎖 `QST-002` 討伐哥布林酋長；`MAP-003` 哥布林巢穴需先接取 QST-002 才能進入，UI 和對話移動共用地圖解鎖驗證。`MON-003` 格羅姆・裂牙每第三回合使用「裂地重擊」，玩家進行敏捷 DC 14 檢定；失敗時受到 `floor(敵方 ATK × 1.5) - floor(玩家 DEF / 4)` 傷害，存活時昏迷一回合並跳過下一個行動。一般敵方反擊依防禦 DC 擲骰。HP 降至 0 即死亡，昏迷只由獨立狀態效果表示。
 
@@ -186,7 +186,7 @@ sendPlayerAction(
 
 ## 重要角色決策（O34）
 
-設有 `agent` 的單位是重要角色，每個遊戲日決策一次，只能從合法行動中選擇；前端驗證後套用，影響世界的結果以事件寫入紀錄（`src/utils/agents.ts`）。第 1 階段一律使用規則後備，不呼叫 AI；第 2 階段的 AI 批次決策沿用同一套驗證與套用。
+設有 `agent` 的單位是重要角色，每個遊戲日決策一次，只能從合法行動中選擇；前端驗證後套用，影響世界的結果以事件寫入紀錄（`src/utils/agents.ts`）。第 1 階段一律使用規則後備；第 2 階段起跨日的最後一天可交給 AI 批次決策（見下方「AI 批次決策」），沿用同一套驗證與套用。規格書 `docs/specs/O34-2.md`。
 
 - **角色設定**（`units.json` 的 `agent`）：`{ goals: string[], traits: string[], leaderOf?, successors?, ruleFallback: [{ action, intent, when?, templateId?, quantity?, eventId?, factionId?, direction?, until? }] }`。`goals` 是盤算（內心動機），`traits` 是個性；`leaderOf` 為自己所屬勢力時才能改變勢力關係；`successors` 是死亡後優先接手的居民。`ruleFallback` 依序嘗試，第一條條件成立且通過驗證的規則就是當天的行動；最後一條必須是沒有條件的 `idle`。
 - **合法行動**（`AgentActionType`，名稱與冷卻在 `src/data/agent_rules.json` 的 `actions`）：
@@ -196,9 +196,26 @@ sendPlayerAction(
   - `change_faction_relation` 改變勢力關係（冷卻 7 日）：只限勢力領袖，每次往 `direction`（`worse`／`better`）移動一階；規則後備到達 `until` 後不再移動。寫入 `agent_action` 事件（兩個勢力得知）。
   冷卻以遊戲日計：上次執行在第 D 天時，第 D + cooldownDays 天起才能再執行。
 - **條件** `when`：`flags`、`excludesFlags`、聲望與勢力關係條件（同事件），以及 `knownDeaths`（角色知道這些單位已死亡）與 `knownEvents`（角色知道這些劇本事件已發生）。已知與否依「認知層級」判定（`getKnownEventsForUnit`、`getEventKnowledgeLevel`），不是全知；已壓縮進編年史的舊事件視為眾所周知。
-- **決策時機**：`finalizeWorld` 中，行動跨過遊戲日時，每個新的一天每位存活、未潛伏的重要角色決策一次；跨多日時逐日補算，最多補算最近 `maxCatchUpDays`（7）天。同一天內的行動不決策。
+- **決策時機**：`finalizeWorld` 中，行動跨過遊戲日時，每個新的一天每位存活、未潛伏的重要角色決策一次；跨多日時逐日補算，最多補算最近 `maxCatchUpDays`（7）天。同一天內的行動不決策。`finalizeWorldWithAgentBatch(之前, 之後, 死因提示, { deferAgentsToAI })` 在 `deferAgentsToAI` 時，最後一天先挑出交給 AI 的角色並跳過他們，回傳 `agentBatch: { day, unitIds }`；其餘角色與之前的天數照規則決策。`finalizeWorld` 不延後（模擬與規則腳本一律規則後備）。
+- **AI 批次決策（O34 第 2 階段）**：
+  - 挑選（`selectAgentsForAI`）：只考慮除了維持現狀還有其他合法候選的角色，依序為①居所在玩家所在地 ②與近期事件相關（前一天起的事件中親眼目擊，或 `changes.unitIds`／`changes.factionIds` 牽涉本人或其勢力；角色自己的決策所產生的事件不算）③勢力領袖 ④其他，同級依資料順序，最多 `ai.maxAgentsPerBatch`（5）位。批次為空時不呼叫。
+  - 候選（`listAgentCandidates`）：維持現狀（C1）、規則後備的選擇、可觸發的 `agent` 事件、可發布的委託（每個範本與目標一個，數量取範本下限、報酬由規則決定）、勢力關係的一階變化（只限領袖，目前非中立的勢力排前面），全部先通過 `validateAgentDecision`、去除重複，最多 `ai.maxCandidatesPerAgent`（6）個，編號 C1、C2…。
+  - 請求（`src/services/agentDecisionContext.ts` 的 `buildAgentBatchRequest`）：獨立的系統提示，每位角色一行 JSON：`unitId`、名稱、稱號、所在地、盤算、個性、領袖身分、勢力立場（自身勢力與非中立勢力的關係）、對玩家的人物記憶（目前角色代數的 `memoryNotes`）、最近 `ai.maxKnownEventsPerAgent`（8）件已知事件（`getKnownEventsForUnit`，附認知層級與該層級能說的內容）、候選清單。整個請求（系統提示＋使用者提示）超過 `ai.maxRequestChars`（8,000）字元時先逐步減少每人事件數，仍超出才從優先順序最低的角色省略（改用規則）。
+  - 回應（角色決策格式第 1 版，與主持人回應格式各自獨立）：`{ "agentFormatVersion": 1, "decisions": [{ "unitId": "NPC-001", "candidateId": "C2", "intent": "一句話動機" }] }`。Gemini 以 JSON Schema 的 enum 限制 `unitId` 與 `candidateId`；OpenAI 用 `json_object`，由前端驗證。`parseAgentDecisionResponse`：不是 JSON、版本不符或沒有 `decisions` 陣列時整批無效；未知角色、編號不在該角色的候選中、缺動機只影響該角色；動機去除多餘空白後截斷為 `ai.maxIntentChars`（40）字；同一角色重複時取第一個。
+  - 套用（`applyAgentBatch`）：依批次順序逐一套用，AI 的選擇換回候選的 `action`／`params` 後再驗證一次，通過才以 `source: "ai"` 套用（事件 `cause` 為「重要角色決策（名稱，AI）」、動機寫入 `detail`），其餘角色改用規則後備。
+  - 呼叫（`src/services/agentDecisionService.ts`）：與主持人相同的服務與模型，只送一次、不重試，逾時 `ai.timeoutMs`（20 秒）。連線失敗、HTTP 錯誤（含 429）、逾時、整份格式錯誤 → 整批改用規則，不在故事中顯示。
+  - 流程（`App.tsx`）：行動跨日時先照常顯示本回合敘事，之後背景送出請求；期間選項列、輸入與 HUD 操作停用並顯示「⚖️ 各方正在盤算…」，存檔管理仍可使用。結果回來時若已讀檔、開新世界、建立角色（讀檔世代改變）、世界 ID 或遊戲時間不同，整批丟棄。角色 AI 關閉、沒有金鑰、玩家死亡、本回合已用滿 `maxCallsPerTurn` 時不延後，全部照規則決策；時間線已結束或候選只剩維持現狀時立即以規則套用。
+  - 報告：`recordAgentDecisionReport` 記錄上一次角色決策（結果 `ai`／`rule`／`pending`、原因、角色數、字元與估計 tokens、完整提示、回應前 2,000 字、各角色來源），供設定頁與開發模式的除錯面板顯示。
+  - 設定 `src/data/agent_rules.json` 的 `ai`：`{ maxAgentsPerBatch: 5, maxCandidatesPerAgent: 6, maxKnownEventsPerAgent: 8, maxRequestChars: 8000, maxIntentChars: 40, timeoutMs: 20000 }`，全部可調，`validate:data` 驗證為正整數（事件數可為 0，候選至少 2）。
 - **死亡與繼承**：重要角色死亡即停止決策；盤算依序交給 `successors` 中存活的居民，其次是同勢力、同職階的存活居民（與委託接手相同），寫入 `agent_action`（`action: "succession"`）事件。接手者的身分包含已故角色（可觸發列出已故角色的事件），盤算加上「承接」標記、規則後備併入，領袖身分只在同勢力時接手；接手鏈可延續。沒有人選時記為無人接手。
-- **主持人 AI**：在場重要角色附上 `agenda: { goals, traits }`，主持規則要求只透過言行流露、不直接說破，也不可替角色做出世界事件以外的重大行動。角色在玩家所在地以外的決策不顯示為世界變化訊息，之後透過傳聞與現場結果得知。
+- **主持人 AI**：在場重要角色附上 `agenda: { goals, traits }`，主持規則要求只透過言行流露、不直接說破，也不可替角色做出世界事件以外的重大行動。角色在玩家所在地以外的決策不顯示為世界變化訊息，之後透過抵達時的得知消息、傳聞與現場結果得知（見「玩家已知事件與世界紀錄」）。
+
+### 玩家已知事件與世界紀錄（O34 第 2 階段）
+
+- **`world.playerKnownEventIds: string[]`**（存檔版本 15）：玩家角色知道的事件 ID，依得知順序；HUD「🌍 世界紀錄」只列這些事件（件數也只算已知的，顯示最近 8 件）。讀檔時只保留仍在事件紀錄中的 ID；事件壓縮進編年史時同步移除。清單屬於世界層。
+- **一定得知**（`isKnownToPlayerOnOccurrence`，在 `finalizeWorld` 結尾判定本次行動的新事件）：事件地區是行動後玩家所在地區、`knownBy: "world"`，或與玩家本身有關（`reputation_change`、玩家死亡、`activeQuests` 中的委託的 `quest_failed`／`quest_transferred`）。
+- **抵達時得知**（`isLearnedOnArrival`）：行動後所在地區改變時，得知該地區先前發生、`knownBy` 為 `region` 或 `faction` 的事件；`witnesses` 事件不得知。多段移動只以最後抵達的地區判定。
+- **訊息**：「🌍 世界變化」列出本次行動中玩家當下得知的新事件（不含 `story_progress`）；抵達時得知的先前事件以一則系統訊息列出最近 `ai_context.json` 的 `news.maxNoticeEvents`（3）件，排除 `chronicle.routineEventTypes`，開頭文字為 `scenario.json` 的 `news.noticePrefix`（預設「🗞️ 告示板上的新消息與往來旅人的傳言：」），其餘只進 HUD。經 NPC 對話得知（O40）與實際的告示板／報童設施（O32）延後。
 - **卡死偵測**：`agent` 事件仍可能觸發的條件是列出的角色存活或潛伏，或其盤算沿接手鏈交到存活者手上。
 - **世界狀態** `world.agents`：`{ [unitId]: { actionDays: { [action]: 遊戲日 }, inheritedFrom?: string[], succeededBy?: string } }`（`succeededBy` 為空字串代表無人接手）。
 - `npm run validate:data` 驗證決策規則數值、角色的盤算與個性、規則後備的行動與參照（範本、事件須為 `agent` 且列出該角色、領袖才可改變勢力關係）、接手人選，以及 `agent` 事件的 `agentUnitIds` 都是重要角色且有規則後備會觸發。
@@ -342,7 +359,7 @@ sendPlayerAction(
 
 | Key | 保存方式 | 用途 |
 | --- | --- | --- |
-| `TRPG_AI_MODEL_SETTINGS` | `localStorage` | 選定的服務與模型 ID。 |
+| `TRPG_AI_MODEL_SETTINGS` | `localStorage` | 選定的服務與模型 ID，以及 `agentDecisionsEnabled`（重要角色決策使用 AI，O34 第 2 階段；沒有此欄位視為開啟）。不寫入存檔。 |
 | `TRPG_GEMINI_KEY` | `localStorage` | Gemini API Key，沿用舊版設定。 |
 | OpenAI API Key | 僅目前分頁的 React 記憶體 | 不寫入 `localStorage`；重新載入後須重新輸入。 |
 | `TRPG_SAVE_INDEX` | `localStorage` | 存檔索引 `{ schemaVersion, activeWorldId, worlds: [{ id, name, scenarioId, createdAt, updatedAt }] }`。 |
@@ -350,13 +367,13 @@ sendPlayerAction(
 
 ## 存檔架構（世界與角色兩層）
 
-- **兩層存檔**：每個存檔欄位分為 `world`（世界存檔：`gameTimeMinutes`、`unitInstances`、`storyFlags`、世界狀態 `world`（事件紀錄、編年史、世界修正、已觸發事件、地區結算、勢力間關係、生成委託、人物記憶 `unitMemories`、主線進度 `story`、重要角色 `agents`）與歷代角色紀錄 `characterHistory`）與 `character`（角色存檔：其餘玩家欄位，包含能力、背包、金幣、任務、戰鬥、單位對此角色的關係覆寫、各勢力聲望等）。哪些欄位屬於世界層由 `types/game.ts` 的 `WORLD_STATE_KEYS` 定義。執行期仍合併為 `PlayerState`，只在存讀檔時拆分與合併（`utils/saveStorage.ts`）。
+- **兩層存檔**：每個存檔欄位分為 `world`（世界存檔：`gameTimeMinutes`、`unitInstances`、`storyFlags`、世界狀態 `world`（事件紀錄、編年史、世界修正、已觸發事件、地區結算、勢力間關係、生成委託、人物記憶 `unitMemories`、主線進度 `story`、重要角色 `agents`、玩家已知事件 `playerKnownEventIds`）與歷代角色紀錄 `characterHistory`）與 `character`（角色存檔：其餘玩家欄位，包含能力、背包、金幣、任務、戰鬥、單位對此角色的關係覆寫、各勢力聲望等）。哪些欄位屬於世界層由 `types/game.ts` 的 `WORLD_STATE_KEYS` 定義。執行期仍合併為 `PlayerState`，只在存讀檔時拆分與合併（`utils/saveStorage.ts`）。
 - **存檔欄位**：每個世界一個自動存檔（狀態變更且非 AI 回合進行中時覆寫；戰鬥中與玩家死亡後不覆寫，因此停在致命行動或該場戰鬥開始之前）與 3 個手動存檔（死亡狀態與戰鬥中不能存檔）。每個世界只有一條時間線：讀取手動存檔即取代目前進度，之後的自動存檔從該時間點繼續。可有多個世界，存檔索引記錄目前世界；切換世界即讀取該世界的自動存檔。
 - **新角色接續（停用，保留給 O42）**：死亡改為讀檔制後，「以新角色接續這個世界」入口與角色建立的「與前任冒險者有關聯」選項不再提供，以下程式保留供 O42 非同步多人使用。原設計為角色死亡後可在同一世界建立新角色。世界層欄位保留，玩家狀態的 `characterSeq` 記錄角色代數（第一位為 1，接續的新角色加一）；前一位角色以 `characterHistory`（代數、名稱、種族、職階、等級、結束時間與地區、死亡事件 ID 與公開描述、攜帶物快照）記錄並提供給 AI 作為傳聞素材（最多 5 位，附上其事蹟，見「AI 上下文組裝與回應格式版本」）；新角色不繼承等級、背包、任務與單位關係；勢力聲望重置為初始值，或依劇本設定部分繼承（見「勢力聲望與勢力間關係」）。死亡遺物（O26）尚未實作，攜帶物快照留待之後使用。
 - **匯出／匯入**：存檔管理可將一個世界的所有欄位匯出為 JSON（`format: "adventure-simulator-world"`）。匯入時驗證格式、版本、劇本與每個欄位內容，任何欄位無效即整份拒絕；一律以新世界 ID 匯入，不覆蓋任何現有存檔，寫入中途失敗會移除已寫入的欄位。
 - **容量管理**：存檔管理顯示本遊戲在 localStorage 的估計用量（以約 5 MB 上限計），達 80% 時警示；寫入失敗（例如容量不足）時 HUD 提示匯出備份，其他欄位不受影響。事件紀錄超過 200 件即壓縮成編年史，且存檔只保存有差異的單位實例；目前容量足夠，暫不改用 IndexedDB。
 
-存檔帶有 `schemaVersion`（`saveStorage.ts` 的 `SAVE_SCHEMA_VERSION`，目前為 14）。開發階段每次變更存檔格式就將版本加一；版本不符、缺少欄位或格式無效的存檔直接捨棄，不提供舊格式遷移；舊版單一快照（`TRPG_GAME_SESSION`、`TRPG_PLAYER_STATE`）在啟動時移除。正式上線後才開始為舊版本撰寫遷移。
+存檔帶有 `schemaVersion`（`saveStorage.ts` 的 `SAVE_SCHEMA_VERSION`，目前為 15；第 15 版加入 `world.playerKnownEventIds`）。開發階段每次變更存檔格式就將版本加一；版本不符、缺少欄位或格式無效的存檔直接捨棄，不提供舊格式遷移；舊版單一快照（`TRPG_GAME_SESSION`、`TRPG_PLAYER_STATE`）在啟動時移除。正式上線後才開始為舊版本撰寫遷移。
 
 ## 金鑰安全限制
 
