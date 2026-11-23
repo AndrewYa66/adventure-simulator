@@ -441,8 +441,26 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
         required: ['destinationMapId'],
         additionalProperties: false
       },
-      checkRequest: { type: ['object', 'null'] },
-      checkOutcomes: { type: ['object', 'null'] },
+      // 列出欄位與 required，避免模型以空物件 {} 表示「沒有檢定」（沒有檢定時應為 null）。
+      checkRequest: {
+        type: ['object', 'null'],
+        properties: {
+          stat: { type: 'string', enum: ['atk', 'def', 'spd', 'str', 'dex', 'con', 'int', 'wis', 'cha'] },
+          dc: { type: 'integer', minimum: 5, maximum: 25 },
+          reason: { type: 'string' }
+        },
+        required: ['stat', 'dc', 'reason'],
+        additionalProperties: false
+      },
+      checkOutcomes: {
+        type: ['object', 'null'],
+        properties: {
+          successText: { type: 'string' },
+          failureText: { type: 'string' }
+        },
+        required: ['successText', 'failureText'],
+        additionalProperties: false
+      },
       stateChanges: {
         type: ['object', 'null'],
         properties: {
