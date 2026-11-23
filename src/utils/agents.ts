@@ -343,8 +343,12 @@ export function listAgentCandidates(state: PlayerState, unitId: string, day: num
       .map((event): AgentDecision => ({ ...base, action: 'trigger_event', params: { eventId: event.id } })),
     ...questTemplatesDatabase.flatMap((template) => getQuestTargetOptions(state, template.id, unitId, { requirePresence: false })
       .map((target): AgentDecision => ({ ...base, action: 'post_quest', params: { templateId: template.id, targetUnitId: target.targetUnitId, itemId: target.itemId ?? null, quantity: template.quantity.min } }))),
-    ...(profile.leaderOf ? factionsDatabase.filter((faction) => faction.id !== profile.leaderOf).flatMap((faction) => (['worse', 'better'] as const)
-      .map((direction): AgentDecision => ({ ...base, action: 'change_faction_relation', params: { factionId: faction.id, direction } }))) : [])
+    // 勢力關係：目前非中立的勢力排前面（候選有上限，避免被遠方無關勢力占滿），其餘依資料順序。
+    ...(profile.leaderOf ? factionsDatabase.filter((faction) => faction.id !== profile.leaderOf)
+      .map((faction, order) => ({ faction, order, neutral: getFactionRelation(state.world, profile.leaderOf!, faction.id).status === 'neutral' }))
+      .sort((a, b) => Number(a.neutral) - Number(b.neutral) || a.order - b.order)
+      .flatMap(({ faction }) => (['worse', 'better'] as const)
+        .map((direction): AgentDecision => ({ ...base, action: 'change_faction_relation', params: { factionId: faction.id, direction } }))) : [])
   ];
   const seen = new Set<string>();
   const valid = proposals.filter((decision) => {
