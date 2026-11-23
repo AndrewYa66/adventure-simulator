@@ -1,10 +1,10 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ActionCheckResult, CharacterHistoryEntry, SaveSlotId, SkillStatic, PlayerState, StoryMessage, WorldUnitStatic } from './types/game';
 import { AUTO_SLOT_ID, clearLegacySaves, continueWorldWithCharacter, createHistoryEntry, createWorld, deleteSlot, deleteWorld, exportWorld, getLastWriteFailed, importWorld, loadSaveIndex, readSlot, setActiveWorld, subscribeSaveStatus, writeSlot, type LoadedSlot } from './utils/saveStorage';
 import { SaveManager } from './components/SaveManager';
 import { applyStateChanges } from './utils/applyStateChanges';
 import { applyMemoryNotes, getMemoryEligibleUnitIds } from './utils/unitMemory';
-import { canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getShopById, getUnlockedSkills, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, scenario } from './data/staticData';
+import { aiContextConfig, canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getShopById, getUnlockedSkills, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, scenario } from './data/staticData';
 import { getPlayerStatBreakdown, resolveActionCheck } from './utils/gameChecks';
 import { getClaimedArrivalMapIds, resolveExplicitTravelIntent, storyClaimsPlayerMoved, type TravelIntentResolution } from './utils/travelIntent';
 import { buildSystemOptions, getCombatStartBlock, type SystemAction } from './utils/systemOptions';
@@ -16,7 +16,10 @@ import { postQuestProposals } from './utils/generatedQuests';
 import { describeStoryProgress, startStorylets } from './utils/storylets';
 import { canPlayerAct, isPlayerUnconscious, isTimelineEnded } from './utils/playerStatus';
 import type { AIProvider } from './services/aiModels';
-import { loadAIModelSettings, saveAIModelSettings, type AIModelSettings } from './services/aiModels';
+import { isAgentAIEnabled, loadAIModelSettings, saveAIModelSettings, type AIModelSettings } from './services/aiModels';
+import { canMakeAnotherCall, getAICallCount } from './services/aiContext';
+import { buildAgentBatchRequest, createPendingReport, recordAgentDecisionReport, requestAgentDecisionText, resolveAgentBatch } from './services/agentDecisionService';
+import type { AgentBatch } from './utils/agents';
 import { PlayerHUD } from './components/PlayerHUD';
 import { StoryLog } from './components/StoryLog';
 import { ApiKeyModal } from './components/ApiKeyModal';
@@ -24,11 +27,11 @@ import { CharacterSetup } from './components/CharacterSetup';
 import { createInitialPlayer } from './utils/playerInit';
 import { isSelfDamageIntent, parseExplicitSelfDamage, parseWaitIntent, unsupportedInventoryItemRequested } from './utils/playerActionIntent';
 import { buyItem, getAvailableServices, purchaseService, sellItem } from './utils/tradeRules';
-import { ACTION_DURATIONS, advanceGameTime, formatDuration, formatGameTime, isValidWaitMinutes, MAX_WAIT_MINUTES, waitGameTime } from './utils/gameTime';
+import { ACTION_DURATIONS, advanceGameTime, formatDuration, formatGameTime, getGameDay, isValidWaitMinutes, MAX_WAIT_MINUTES, waitGameTime } from './utils/gameTime';
 import { grantUnitExp } from './utils/unitProgress';
 import { createCombat, getCombatTarget, setEnemyHp } from './utils/combatState';
 import { getPlayerWorldUnit } from './utils/worldUnits';
-import { applyEventProposals, finalizeWorld, type DeathHint } from './utils/worldEvents';
+import { applyEventProposals, finalizeWorld, finalizeWorldWithAgentBatch, getEventSeq, getPlayerKnownEvents, type DeathHint } from './utils/worldEvents';
 import { createSuccessorReputation, describeReputationChanges } from './utils/factions';
 import { rollWaitInterruption } from './utils/waitRules';
 import type { CharacterAlignment } from './types/game';
@@ -202,29 +205,104 @@ export default function App() {
 
   const [messages, setMessages] = useState<StoryMessage[]>(initialSession.messages);
   const [loading, setLoading] = useState(false);
+  // 重要角色 AI 批次決策進行中（O34 第 2 階段）：選項列與輸入顯示「各方正在盤算…」並停用。
+  const [agentThinking, setAgentThinking] = useState(false);
+  // 非同步流程（角色決策回應）需要的最新狀態；讀檔、開新世界、建立角色時讀檔世代加一，用來丟棄過期結果。
+  const playerRef = useRef(player);
+  const activeWorldIdRef = useRef(activeWorldId);
+  const sessionGenRef = useRef(0);
+  // AI 回合開始時的呼叫計數；回合外為 null（每回合呼叫上限用）。
+  const turnCallBaseRef = useRef<number | null>(null);
+  useEffect(() => { playerRef.current = player; }, [player]);
+  useEffect(() => { activeWorldIdRef.current = activeWorldId; }, [activeWorldId]);
+  /** 讀檔、開新世界、建立角色：進行中的角色決策結果作廢。 */
+  const startNewSession = () => {
+    sessionGenRef.current += 1;
+    setAgentThinking(false);
+  };
 
   /**
    * 行動造成的狀態變更一律經此套用：先執行世界規則（死亡紀錄、地區結算、自動事件），
    * 新寫入的世界事件以系統訊息附在本次行動結果之後。讀檔與換角色不是行動，直接 setPlayer。
    */
   const updatePlayer = (nextPlayer: PlayerState, deathHints?: Record<string, DeathHint>) => {
-    const finalized = finalizeWorld(player, nextPlayer, deathHints);
+    const usedThisTurn = turnCallBaseRef.current === null ? 0 : getAICallCount() - turnCallBaseRef.current;
+    const skipReason = !isAgentAIEnabled(modelSettings) ? '設定已關閉角色 AI' : !apiKey.trim() ? '尚未設定 API Key'
+      : nextPlayer.isDead ? '角色已死亡' : !canMakeAnotherCall(usedThisTurn) ? '已達每回合呼叫上限' : undefined;
+    const { state: finalized, agentBatch } = finalizeWorldWithAgentBatch(player, nextPlayer, deathHints, { deferAgentsToAI: !skipReason });
+    commitWorldUpdate(player, finalized);
+    if (agentBatch) startAgentBatch(finalized, agentBatch);
+    else if (skipReason && getGameDay(finalized.gameTimeMinutes) > getGameDay(player.gameTimeMinutes)) recordRuleOnlyAgentDecision(skipReason);
+  };
+
+  /**
+   * 套用已結算的狀態並附上訊息：主線進度、本次行動中玩家當下得知的新事件（🌍 世界變化），
+   * 以及抵達地區時得知的先前事件（得知消息，最多 news.maxNoticeEvents 件、不含例行事件）。
+   */
+  function commitWorldUpdate(before: PlayerState, finalized: PlayerState) {
     setPlayer(finalized);
-    const knownIds = new Set(player.world.events.map((event) => event.id));
-    const newEvents = finalized.world.events.filter((event) => !knownIds.has(event.id));
+    playerRef.current = finalized;
     // 劇情片段完成與推進幕另以主線訊息呈現，不重複列在世界變化中。
-    const storyNotice = describeStoryProgress(player, finalized);
+    const storyNotice = describeStoryProgress(before, finalized);
     if (storyNotice) setTimeout(() => appendSystemMessage(storyNotice), 0);
-    // 重要角色在別處的決策（O34）不直接告訴玩家，之後經由傳聞與現場結果得知。
-    const worldChanges = newEvents.filter((event) => event.type !== 'story_progress' &&
-      (!event.agent || event.mapId === finalized.currentMapId || event.knownBy === 'world'));
+    const knownBefore = new Set(before.world.playerKnownEventIds);
+    const learned = getPlayerKnownEvents(finalized).filter((event) => !knownBefore.has(event.id));
+    const worldChanges = learned.filter((event) => getEventSeq(event) >= before.world.nextEventSeq && event.type !== 'story_progress');
     if (worldChanges.length) {
       // 劇情事件附帶的聲望變化另外列出（玩家行動造成的聲望事件已寫在描述中）。
-      const describe = (event: typeof newEvents[number]) => event.type === 'scenario_event' && event.reputationChanges?.length
-        ? `${event.summary}（聲望變化：${describeReputationChanges(player, event.reputationChanges)}）` : event.summary;
+      const describe = (event: typeof worldChanges[number]) => event.type === 'scenario_event' && event.reputationChanges?.length
+        ? `${event.summary}（聲望變化：${describeReputationChanges(before, event.reputationChanges)}）` : event.summary;
       setTimeout(() => appendSystemMessage(`🌍 世界變化：\n${worldChanges.map((event) => `・${describe(event)}`).join('\n')}`), 0);
     }
-  };
+    const news = learned.filter((event) => getEventSeq(event) < before.world.nextEventSeq && !aiContextConfig.chronicle.routineEventTypes.includes(event.type))
+      .slice(-aiContextConfig.news.maxNoticeEvents);
+    if (news.length) {
+      setTimeout(() => appendSystemMessage(`${scenario.news.noticePrefix}\n${news.map((event) => `・${formatGameTime(event.gameTimeMinutes)}｜${event.summary}`).join('\n')}`), 0);
+    }
+  }
+
+  /** 沒有送出角色決策請求、整批依規則時的設定頁說明。 */
+  function recordRuleOnlyAgentDecision(reason: string) {
+    recordAgentDecisionReport({ builtAt: Date.now(), result: 'rule', reason, agentCount: 0, estimatedTokens: 0, totalChars: 0, systemPrompt: '', userPrompt: '', outcomes: [] });
+  }
+
+  /**
+   * 角色決策批次（O34 第 2 階段）：本回合敘事已顯示後送出請求，期間暫停操作；結果回來時若已讀檔、換世界或時間改變則丟棄。
+   * 沒有可送的角色或時間線已結束時，立即以規則套用。
+   */
+  function startAgentBatch(base: PlayerState, batch: AgentBatch) {
+    const request = buildAgentBatchRequest(base, batch);
+    const ruleReason = isTimelineEnded(base) ? '時間線已結束' : !request.agents.length ? '只剩維持現狀的角色' : undefined;
+    if (ruleReason) {
+      const resolution = resolveAgentBatch(base, request, undefined, ruleReason);
+      commitWorldUpdate(base, finalizeWorld(base, resolution.state));
+      recordAgentDecisionReport(resolution.report);
+      return;
+    }
+    const token = { gen: sessionGenRef.current, worldId: activeWorldIdRef.current, time: base.gameTimeMinutes };
+    recordAgentDecisionReport(createPendingReport(request));
+    setAgentThinking(true);
+    void (async () => {
+      let text: string | undefined;
+      let failure: string | undefined;
+      try {
+        text = await requestAgentDecisionText(modelSettings, apiKey, request);
+      } catch (error) {
+        failure = error instanceof Error ? error.message : '無法連線至 AI 服務';
+      }
+      const current = playerRef.current;
+      if (sessionGenRef.current !== token.gen || activeWorldIdRef.current !== token.worldId || current.gameTimeMinutes !== token.time) {
+        recordAgentDecisionReport({ ...createPendingReport(request), result: 'rule', reason: '結果回來前已讀檔或換世界，結果已丟棄' });
+        if (sessionGenRef.current === token.gen) setAgentThinking(false);
+        return;
+      }
+      if (failure) console.info('角色決策改用規則後備：', failure);
+      const resolution = resolveAgentBatch(current, request, text, failure);
+      commitWorldUpdate(current, finalizeWorld(current, resolution.state));
+      recordAgentDecisionReport(resolution.report);
+      setAgentThinking(false);
+    })();
+  }
 
   // 自動存檔：每次狀態變更（且非 AI 回合進行中）覆寫目前世界的自動存檔欄位。
   // 死亡與戰鬥中不寫入：自動存檔停在致命行動或該場戰鬥開始之前，死亡後讀檔不會落入無法脫身的戰鬥。
@@ -248,6 +326,7 @@ export default function App() {
 
   /** 建立新世界：目前世界保留在存檔中，角色建立後才寫入新世界。 */
   const handleNewWorld = () => {
+    startNewSession();
     setIsSaveManagerOpen(false);
     setActiveWorld(undefined);
     setActiveWorldId(undefined);
@@ -260,6 +339,7 @@ export default function App() {
   // 接續分支（setupMode 'continue'）目前沒有入口：死亡改為讀檔制，接續系統保留給 O42 非同步多人。
   const handleCreateCharacter = (name: string, classId: string, alignment: CharacterAlignment, relatedToPrevious = false) => {
     const created = createInitialPlayer(name, classId, alignment, true);
+    startNewSession();
     // 新角色對各勢力的聲望預設重置；劇本允許且玩家選擇與前角色有關聯時，部分繼承前角色的聲望變化。
     const inheritRatio = setupMode === 'continue' && relatedToPrevious ? scenario.succession?.reputationInheritRatio ?? 0 : 0;
     const newCharacter = inheritRatio > 0 ? { ...created, factionReputation: createSuccessorReputation(player, inheritRatio) } : created;
@@ -300,6 +380,7 @@ export default function App() {
   const handleLoadSlot = (worldId: string, slotId: SaveSlotId) => {
     const slot = readSlot(worldId, slotId);
     if (!slot) return '存檔無效或已損壞，未讀取。';
+    startNewSession();
     setActiveWorld(worldId);
     setActiveWorldId(worldId);
     setCharacterHistory(slot.characterHistory);
@@ -362,6 +443,7 @@ export default function App() {
   const runAiTurn = async (actionText: string, textTravelIntent: TravelIntentResolution, resolvedTravel?: RouteTravelResult) => {
     setMessages((prev) => [...prev, createUserMessage(actionText)]);
     setLoading(true);
+    turnCallBaseRef.current = getAICallCount();
     const turnPlayer = resolvedTravel?.player ?? player;
     // 本回合結果已套用後才發生的錯誤，不再以已結算的移動覆蓋狀態。
     let applied = false;
@@ -540,6 +622,7 @@ export default function App() {
         ]);
       }
     } finally {
+      turnCallBaseRef.current = null;
       setLoading(false);
     }
   };
@@ -1056,7 +1139,8 @@ export default function App() {
     <div style={{ display: 'flex', height: '100vh', backgroundColor: '#1a1a1a', color: '#eaeaea', fontFamily: 'sans-serif' }}>
       <StoryLog
         messages={messages}
-        loading={loading}
+        loading={loading || agentThinking}
+        busyText={agentThinking && !loading ? '⚖️ 各方正在盤算…' : undefined}
         onSendAction={handleSendAction}
         onOpenKeyModal={() => setIsKeyModalOpen(true)}
         hasApiKey={!!apiKey}
@@ -1066,7 +1150,7 @@ export default function App() {
         combatActive={!!player.combat}
         inputDisabled={player.isDead || isPlayerUnconscious(player) || isTimelineEnded(player)}
         activeMessageId={activeMessage?.id}
-        optionBar={<OptionBar player={player} optionSet={optionSet} busy={loading}
+        optionBar={<OptionBar player={player} optionSet={optionSet} busy={loading || agentThinking} busyNote={agentThinking ? '各方正在盤算…' : undefined}
           suggestions={activeMessage?.options ?? []} travelChoices={activeMessage?.travelOptions ?? []}
           onAction={runSystemAction} onSuggestion={handleSendAction} onTravel={(mapId) => runSystemAction({ kind: 'travel', mapId })} />}
         deathActions={player.isDead || isTimelineEnded(player)
@@ -1074,7 +1158,7 @@ export default function App() {
       />
       {isSidebarOpen && isNarrow && <div aria-hidden="true" onClick={() => setIsSidebarOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 20 }} />}
       {isSidebarOpen && <div style={isNarrow ? { position: 'fixed', top: 0, right: 0, bottom: 0, maxWidth: '85vw', zIndex: 21, display: 'flex' } : { display: 'flex', flexShrink: 0 }}>
-        <PlayerHUD player={player} onOpenSaveManager={() => setIsSaveManagerOpen(true)} storageWarning={storageWarning || autosaveFailed} busy={loading} onUseItem={handleUseItem} onEquipItem={handleEquipItem} />
+        <PlayerHUD player={player} onOpenSaveManager={() => setIsSaveManagerOpen(true)} storageWarning={storageWarning || autosaveFailed} busy={loading || agentThinking} onUseItem={handleUseItem} onEquipItem={handleEquipItem} />
       </div>}
       {isKeyModalOpen && <ApiKeyModal
         isOpen={true}

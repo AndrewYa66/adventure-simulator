@@ -1,6 +1,7 @@
 import React, { useState, useSyncExternalStore } from 'react';
 import type { AIModelSettings, AIProvider } from '../services/aiModels';
-import { AI_PROVIDERS, getModels } from '../services/aiModels';
+import { AI_PROVIDERS, getModels, isAgentAIEnabled } from '../services/aiModels';
+import { getLastAgentDecisionReport, subscribeAgentDecisionReport } from '../services/agentDecisionService';
 import { getLastAIContextReport, subscribeAIContextReport } from '../services/aiContext';
 import { aiContextConfig } from '../data/staticData';
 
@@ -16,8 +17,10 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, currentSetting
   const [provider, setProvider] = useState<AIProvider>(currentSettings.provider);
   const [model, setModel] = useState(currentSettings.model);
   const [keys, setKeys] = useState(currentKeys);
+  const [agentAI, setAgentAI] = useState(isAgentAIEnabled(currentSettings));
 
   const lastContext = useSyncExternalStore(subscribeAIContextReport, getLastAIContextReport);
+  const lastAgent = useSyncExternalStore(subscribeAgentDecisionReport, getLastAgentDecisionReport);
   if (!isOpen) return null;
 
   const models = getModels(provider);
@@ -27,7 +30,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, currentSetting
   };
 
   const handleSave = () => {
-    onSave({ provider, model }, keys);
+    onSave({ provider, model, agentDecisionsEnabled: agentAI }, keys);
     onClose();
   };
 
@@ -62,9 +65,18 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, currentSetting
             ? 'OpenAI API Key 只保留在目前分頁記憶體中，不寫入存檔；呼叫仍由瀏覽器直接送出。'
             : 'Gemini API Key 會保存在此瀏覽器，方便下次使用。'}
         </p>
-        <p data-testid="ai-usage-estimate" style={{ color: '#bbb', fontSize: '12px', lineHeight: 1.5, margin: '-10px 0 18px' }}>
-          每回合最多呼叫 AI {aiContextConfig.maxCallsPerTurn} 次（敘事 1 次，必要時再送 1 次修正）。
-          {lastContext ? ` 上一次請求約 ${lastContext.estimatedTokens.toLocaleString()} tokens（${lastContext.totalChars.toLocaleString()} 字元）。` : ''}
+        <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', margin: '-6px 0 12px', fontSize: '13px', cursor: 'pointer' }}>
+          <input type="checkbox" data-testid="agent-ai-toggle" checked={agentAI} onChange={(event) => setAgentAI(event.target.checked)} style={{ marginTop: '2px' }} />
+          <span>重要角色決策使用 AI（關閉時依規則行動）</span>
+        </label>
+        <p data-testid="ai-usage-estimate" style={{ color: '#bbb', fontSize: '12px', lineHeight: 1.5, margin: '0 0 10px' }}>
+          每回合最多呼叫 AI {aiContextConfig.maxCallsPerTurn} 次：敘事 1 次、移動修正 0～1 次、角色決策 0～1 次（只在跨日時）。
+          {` 上一次敘事請求${lastContext ? `約 ${lastContext.estimatedTokens.toLocaleString()} tokens（${lastContext.totalChars.toLocaleString()} 字元）` : '：尚未送出'}；`}
+          {`上一次角色決策請求${lastAgent?.totalChars ? `約 ${lastAgent.estimatedTokens.toLocaleString()} tokens（${lastAgent.totalChars.toLocaleString()} 字元）` : '：尚未送出'}。`}
+        </p>
+        <p data-testid="agent-decision-result" style={{ color: '#bbb', fontSize: '12px', lineHeight: 1.5, margin: '0 0 18px' }}>
+          上次角色決策：{!lastAgent ? '尚未發生' : lastAgent.result === 'pending' ? '進行中'
+            : lastAgent.result === 'ai' ? `AI${lastAgent.reason ? `（${lastAgent.reason}）` : ''}` : `規則後備（${lastAgent.reason ?? '原因不明'}）`}
         </p>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
