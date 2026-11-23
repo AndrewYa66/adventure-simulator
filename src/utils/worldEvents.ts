@@ -543,7 +543,15 @@ function updatePlayerKnownEvents(previous: PlayerState, state: PlayerState, posi
 /** HUD 世界紀錄：玩家已知的事件（依發生順序）。 */
 export function getPlayerKnownEvents(state: Pick<PlayerState, 'world'>): WorldEvent[] {
   const known = new Set(state.world.playerKnownEventIds);
-  return state.world.events.filter((event) => known.has(event.id));
+  return sortEventsByTime(state.world.events.filter((event) => known.has(event.id)));
+}
+
+/**
+ * 依發生時間排序（同時間再依事件序號），不改動 world.events 的儲存順序。
+ * 重要角色的決策記在決策日的午夜，寫入順序可能晚於同一行動中較晚發生的事件；取「最近 N 件」前先排序。
+ */
+export function sortEventsByTime<T extends Pick<WorldEvent, 'id' | 'gameTimeMinutes'>>(events: readonly T[]): T[] {
+  return [...events].sort((a, b) => a.gameTimeMinutes - b.gameTimeMinutes || getEventSeq(a) - getEventSeq(b));
 }
 
 /**
@@ -702,7 +710,8 @@ export function getEventKnowledgeLevel(state: PlayerState, event: WorldEvent, un
  * 已壓縮進編年史的事件不在紀錄中，以「傳說」看待。
  */
 export function getKnownEventsForUnit(state: PlayerState, unitId: string): { event: WorldEvent; level: EventKnowledgeLevel; knows: string }[] {
-  return state.world.events.flatMap((event) => {
+  // 依發生時間排序，角色決策上下文取最近 N 件時不會出現時間倒序。
+  return sortEventsByTime(state.world.events).flatMap((event) => {
     const level = getEventKnowledgeLevel(state, event, unitId);
     return level ? [{ event, level, knows: describeKnowledge(event, level) }] : [];
   });

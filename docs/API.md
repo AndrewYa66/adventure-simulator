@@ -212,7 +212,7 @@ sendPlayerAction(
 
 ### 玩家已知事件與世界紀錄（O34 第 2 階段）
 
-- **`world.playerKnownEventIds: string[]`**（存檔版本 15）：玩家角色知道的事件 ID，依得知順序；HUD「🌍 世界紀錄」只列這些事件（件數也只算已知的，顯示最近 8 件）。讀檔時只保留仍在事件紀錄中的 ID；事件壓縮進編年史時同步移除。清單屬於世界層。
+- **`world.playerKnownEventIds: string[]`**（存檔版本 15）：玩家角色知道的事件 ID，依得知順序；HUD「🌍 世界紀錄」只列這些事件（件數也只算已知的，依發生時間排序後顯示最近 8 件；`sortEventsByTime` 依 `gameTimeMinutes`、同時間再依序號，不改 `world.events` 的儲存順序，角色決策上下文的已知事件同樣先排序）。讀檔時只保留仍在事件紀錄中的 ID；事件壓縮進編年史時同步移除。清單屬於世界層。
 - **一定得知**（`isKnownToPlayerOnOccurrence(行動前位置, 行動後狀態, 事件)`，在 `finalizeWorld` 結尾判定本次行動的新事件）：事件發生時玩家在事件地區（`wasPlayerPresent`：行動沒有移動時為所在地區；有移動時只有不晚於出發時間在出發地、或不早於抵達時間在目的地的事件，途中與途經地區不算）、`knownBy: "world"`，或與玩家本身有關（`reputation_change`、玩家死亡、`activeQuests` 中的委託的 `quest_failed`／`quest_transferred`）。重要角色的決策事件記在決策日的午夜，因此旅途中跨過午夜時，目的地角色的決策不算在場。AI 批次在行動後才套用時，`finalizeWorldWithAgentBatch` 的 `positionBefore` 傳入行動前的位置。
 - **抵達時得知**（`isLearnedOnArrival`）：行動後所在地區改變時，得知該地區先前（含本次旅途中）發生、`knownBy` 為 `region` 或 `faction` 的事件；`witnesses` 事件不得知。多段移動只以最後抵達的地區判定。
 - **訊息**：「🌍 世界變化」列出本次行動中玩家當下得知的新事件（不含 `story_progress`）；抵達時得知的先前事件以一則系統訊息列出最近 `ai_context.json` 的 `news.maxNoticeEvents`（3）件，排除 `chronicle.routineEventTypes`，開頭文字為 `scenario.json` 的 `news.noticePrefix`（預設「🗞️ 告示板上的新消息與往來旅人的傳言：」），其餘只進 HUD。經 NPC 對話得知（O40）與實際的告示板／報童設施（O32）延後。
