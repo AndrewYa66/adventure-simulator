@@ -933,6 +933,14 @@ export function validateStoryData(): string[] {
 export function validateAgentData(): string[] {
   const issues: string[] = [];
   if (!Number.isInteger(agentRules.maxCatchUpDays) || agentRules.maxCatchUpDays < 1) issues.push('重要角色規則 maxCatchUpDays 須為正整數');
+  for (const key of ['maxAgentsPerBatch', 'maxCandidatesPerAgent', 'maxRequestChars', 'maxIntentChars', 'timeoutMs'] as const) {
+    if (!Number.isInteger(agentRules.ai?.[key]) || agentRules.ai[key] < 1) issues.push(`重要角色規則 ai.${key} 須為正整數`);
+  }
+  if (!Number.isInteger(agentRules.ai?.maxKnownEventsPerAgent) || agentRules.ai.maxKnownEventsPerAgent < 0) issues.push('重要角色規則 ai.maxKnownEventsPerAgent 須為 0 以上的整數');
+  if ((agentRules.ai?.maxCandidatesPerAgent ?? 0) < 2) issues.push('重要角色規則 ai.maxCandidatesPerAgent 至少為 2（維持現狀與另一個行動）');
+  if (!Number.isInteger(aiContextConfig.maxCallsPerTurn) || aiContextConfig.maxCallsPerTurn < 1) issues.push('ai_context maxCallsPerTurn 須為正整數');
+  if (!Number.isInteger(aiContextConfig.news?.maxNoticeEvents) || aiContextConfig.news.maxNoticeEvents < 0) issues.push('ai_context news.maxNoticeEvents 須為 0 以上的整數');
+  if (!scenario.news?.noticePrefix?.trim()) issues.push(`劇本 ${scenario.id}: news.noticePrefix 不可為空`);
   for (const action of AGENT_ACTION_TYPES) {
     const rule = agentRules.actions?.[action];
     if (!rule || !rule.label?.trim() || !Number.isInteger(rule.cooldownDays) || rule.cooldownDays < 0) issues.push(`重要角色規則 actions.${action} 須有名稱與 0 以上的整數冷卻`);

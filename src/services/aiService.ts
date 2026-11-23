@@ -4,14 +4,14 @@ import { getItemById, getMapById, getWorldUnitById } from '../data/staticData';
 import { formatDuration } from '../utils/gameTime';
 import { getClaimedArrivalMapIds, resolveExplicitTravelIntent } from '../utils/travelIntent';
 import type { RouteTravelResult } from '../utils/travelRoute';
-import { buildAIContext, buildDialogueHistory, estimateTokens, recordAIContextReport, SUPPORTED_AI_RESPONSE_FORMAT_VERSIONS } from './aiContext';
+import { buildAIContext, buildDialogueHistory, estimateTokens, noteAICall, recordAIContextReport, SUPPORTED_AI_RESPONSE_FORMAT_VERSIONS } from './aiContext';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const FORMAT_FALLBACK = '模型回應格式不完整，請重新描述行動再試一次。';
 
-function extractResponseText(data: unknown, provider: AIModelSettings['provider']): string {
+export function extractResponseText(data: unknown, provider: AIModelSettings['provider']): string {
   if (!isRecord(data)) return '';
   if (provider === 'openai') {
     if (typeof data.output_text === 'string') return data.output_text;
@@ -354,6 +354,7 @@ export async function sendPlayerAction(
     ? { 'Content-Type': 'application/json', Authorization: `Bearer ${cleanApiKey}` }
     : { 'Content-Type': 'application/json', 'x-goog-api-key': cleanApiKey };
   const requestModelText = async (input: string) => {
+    noteAICall();
     const response = await fetchWithRetry(endpoint, {
       method: 'POST',
       headers,
@@ -379,7 +380,7 @@ export async function sendPlayerAction(
     const rawText = await requestModelText(userPrompt);
     let parsed = parseResponseText(rawText);
     if (parsed) {
-      // 每回合呼叫上限：主持人敘事 1 次，額度足夠時才送移動修正請求。
+      // 每回合呼叫上限：主持人敘事 1 次，額度足夠時才送移動修正請求（角色決策另計，見 App）。
       const repairPrompt = resolvedTravel
         ? getResolvedTravelRepairPrompt(parsed, resolvedTravel, playerState, userPrompt)
         : getTravelRepairPrompt(parsed, availableDestinationIds, actionText, playerState, userPrompt);

@@ -105,7 +105,8 @@ function normalizeWorldState(value: unknown): WorldRuntimeState | null {
       !Number.isSafeInteger(value.nextEventSeq) || (value.nextEventSeq as number) < 1 ||
       !Array.isArray(value.modifiers) || !value.modifiers.every(isWorldModifier) || !isStringArray(value.firedEventIds) || !isRecord(value.regions) ||
       !isRecord(value.factionRelations) || !Array.isArray(value.generatedQuests) ||
-      !Number.isSafeInteger(value.nextGeneratedQuestSeq) || (value.nextGeneratedQuestSeq as number) < 1 || !isRecord(value.unitMemories) || !isRecord(value.agents)) return null;
+      !Number.isSafeInteger(value.nextGeneratedQuestSeq) || (value.nextGeneratedQuestSeq as number) < 1 || !isRecord(value.unitMemories) || !isRecord(value.agents) ||
+      !isStringArray(value.playerKnownEventIds)) return null;
   const story = normalizeStoryState(value.story);
   if (!story) return null;
   const generatedQuests: GeneratedQuest[] = [];
@@ -165,7 +166,12 @@ function normalizeWorldState(value: unknown): WorldRuntimeState | null {
     nextGeneratedQuestSeq: value.nextGeneratedQuestSeq as number,
     unitMemories,
     story,
-    agents
+    agents,
+    // 玩家已知事件（O34 第 2 階段）：只保留仍在事件紀錄中的 ID。
+    playerKnownEventIds: (() => {
+      const eventIds = new Set((value.events as WorldEvent[]).map((event) => event.id));
+      return [...new Set(value.playerKnownEventIds as string[])].filter((eventId) => eventIds.has(eventId));
+    })()
   };
 }
 

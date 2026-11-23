@@ -9,7 +9,12 @@ export interface AIModelOption {
 export interface AIModelSettings {
   provider: AIProvider;
   model: string;
+  /** 重要角色決策使用 AI（O34 第 2 階段）；關閉時依規則行動。預設開啟，存於瀏覽器、不寫入存檔。 */
+  agentDecisionsEnabled?: boolean;
 }
+
+/** 角色 AI 開關；舊設定沒有此欄位時視為開啟。 */
+export const isAgentAIEnabled = (settings: AIModelSettings) => settings.agentDecisionsEnabled !== false;
 
 export const AI_PROVIDERS: { id: AIProvider; label: string }[] = [
   { id: 'gemini', label: 'Google Gemini' },
@@ -36,7 +41,7 @@ export function getModels(provider: AIProvider): AIModelOption[] {
 }
 
 export function defaultModelSettings(): AIModelSettings {
-  return { provider: 'gemini', model: DEFAULT_GEMINI_MODEL };
+  return { provider: 'gemini', model: DEFAULT_GEMINI_MODEL, agentDecisionsEnabled: true };
 }
 
 export function loadAIModelSettings(): AIModelSettings {
@@ -48,7 +53,7 @@ export function loadAIModelSettings(): AIModelSettings {
         typeof saved.model !== 'string' || !getModels(saved.provider).some((model) => model.id === saved.model)) {
       return defaultModelSettings();
     }
-    return { provider: saved.provider, model: saved.model };
+    return { provider: saved.provider, model: saved.model, agentDecisionsEnabled: saved.agentDecisionsEnabled !== false };
   } catch {
     return defaultModelSettings();
   }

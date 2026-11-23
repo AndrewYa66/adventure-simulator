@@ -30,7 +30,7 @@ import { formatGameTime, getGameDay } from './gameTime';
 import { isModifierActive } from './worldModifiers';
 import { findQuest, getActiveQuestGiverId, isGeneratedQuest } from './questRules';
 import { closeGeneratedQuest, expireGeneratedQuests, pruneGeneratedQuests } from './generatedQuests';
-import { settleAgents } from './agents';
+import { settleAgents, type AgentBatch } from './agents';
 import {
   applyFactionRelationChanges,
   applyReputationChanges,
@@ -51,7 +51,7 @@ import {
 const MINUTES_PER_DAY = 24 * 60;
 
 export function createWorldState(startMinutes: number): WorldRuntimeState {
-  return { events: [], chronicle: [], nextEventSeq: 1, modifiers: [], firedEventIds: [], regions: {}, factionRelations: {}, generatedQuests: [], nextGeneratedQuestSeq: 1, unitMemories: {}, story: createStoryState(startMinutes), agents: {} };
+  return { events: [], chronicle: [], nextEventSeq: 1, modifiers: [], firedEventIds: [], regions: {}, factionRelations: {}, generatedQuests: [], nextGeneratedQuestSeq: 1, unitMemories: {}, story: createStoryState(startMinutes), agents: {}, playerKnownEventIds: [] };
 }
 
 export interface DeathHint {
@@ -484,14 +484,64 @@ function compressEvents(world: WorldRuntimeState): WorldRuntimeState {
   if (world.events.length <= maxEvents) return world;
   const overflowCount = world.events.length - maxEvents + compressBatch;
   const lines = summarizeEventsForChronicle(world.events.slice(0, overflowCount));
-  return { ...world, events: world.events.slice(overflowCount), chronicle: [...world.chronicle, ...lines].slice(-maxStoredLines) };
+  const events = world.events.slice(overflowCount);
+  // 已壓縮的事件不再出現在 HUD 世界紀錄，玩家已知清單同步移除（O34 第 2 階段）。
+  const remaining = new Set(events.map((event) => event.id));
+  return { ...world, events, chronicle: [...world.chronicle, ...lines].slice(-maxStoredLines), playerKnownEventIds: world.playerKnownEventIds.filter((eventId) => remaining.has(eventId)) };
+}
+
+/** 事件序號（WE-00012 → 12）。 */
+export const getEventSeq = (event: Pick<WorldEvent, 'id'>) => Number(event.id.slice(3));
+
+/** 與玩家本身有關的事件（O34 第 2 階段）：玩家的聲望變化、玩家接取的委託失敗或轉手、玩家角色的死亡。 */
+function isPlayerRelatedEvent(state: PlayerState, event: WorldEvent): boolean {
+  if (event.type === 'reputation_change' || event.death?.victimUnitId === PLAYER_UNIT_ID) return true;
+  return (event.type === 'quest_failed' || event.type === 'quest_transferred') &&
+    (event.changes?.questIds ?? []).some((questId) => state.activeQuests.some((entry) => entry.questId === questId));
+}
+
+/** 玩家在事件發生時就會得知：玩家就在事件地區、全世界周知、或與玩家本身有關。 */
+export const isKnownToPlayerOnOccurrence = (state: PlayerState, event: WorldEvent) =>
+  event.mapId === state.currentMapId || event.knownBy === 'world' || isPlayerRelatedEvent(state, event);
+
+/** 抵達某地區時得知的事件：該地區發生、傳播範圍為地區或勢力的事件（只有目擊者知道的事件不會得知）。 */
+export const isLearnedOnArrival = (event: WorldEvent, mapId: string) =>
+  event.mapId === mapId && (event.knownBy === 'region' || event.knownBy === 'faction');
+
+/**
+ * 更新玩家已知事件（O34 第 2 階段）：本次行動的新事件依「發生時得知」判定；行動後所在地區改變時，
+ * 另得知抵達地區先前發生的地區／勢力事件。新事件以行動前的事件序號區分。
+ */
+function updatePlayerKnownEvents(previous: PlayerState, state: PlayerState): PlayerState {
+  const known = new Set(state.world.playerKnownEventIds);
+  const firstNewSeq = previous.world.nextEventSeq;
+  const arrived = state.currentMapId !== previous.currentMapId;
+  const learned = state.world.events.filter((event) => !known.has(event.id) && (getEventSeq(event) >= firstNewSeq
+    ? isKnownToPlayerOnOccurrence(state, event)
+    : arrived && isLearnedOnArrival(event, state.currentMapId)));
+  if (!learned.length) return state;
+  return { ...state, world: { ...state.world, playerKnownEventIds: [...state.world.playerKnownEventIds, ...learned.map((event) => event.id)] } };
+}
+
+/** HUD 世界紀錄：玩家已知的事件（依發生順序）。 */
+export function getPlayerKnownEvents(state: Pick<PlayerState, 'world'>): WorldEvent[] {
+  const known = new Set(state.world.playerKnownEventIds);
+  return state.world.events.filter((event) => known.has(event.id));
 }
 
 /**
  * 每次狀態變更後執行的世界規則：記錄新死亡、處理委託人死亡、結算所在地區、觸發自動事件、移除過期修正並壓縮紀錄。
- * 讀檔與換角色不是行動，不經過此函式。
+ * 讀檔與換角色不是行動，不經過此函式。模擬與規則腳本使用此版本（角色一律依規則決策）。
  */
 export function finalizeWorld(previous: PlayerState, next: PlayerState, hints: Record<string, DeathHint> = {}): PlayerState {
+  return finalizeWorldWithAgentBatch(previous, next, hints).state;
+}
+
+/**
+ * 同 finalizeWorld；deferAgentsToAI 時，跨日最後一天挑出的角色先不決策，回傳 agentBatch 交給 AI（O34 第 2 階段）。
+ */
+export function finalizeWorldWithAgentBatch(previous: PlayerState, next: PlayerState, hints: Record<string, DeathHint> = {},
+  options: { deferAgentsToAI?: boolean } = {}): { state: PlayerState; agentBatch?: AgentBatch } {
   let state = next;
   const firstNewEventSeq = state.world.nextEventSeq;
   for (const template of unitTemplatesDatabase()) {
@@ -506,8 +556,9 @@ export function finalizeWorld(previous: PlayerState, next: PlayerState, hints: R
   state = applyActionReputation(previous, state, newDeaths);
   state = resolveOrphanedQuests(state);
   state = settleRegion(state, state.currentMapId);
-  // 重要角色（O34）：處理死亡角色的接手，並在跨過遊戲日時依規則後備每日決策一次。
-  state = settleAgents(previous, state);
+  // 重要角色（O34）：處理死亡角色的接手，並在跨過遊戲日時每日決策一次（最後一天可交給 AI）。
+  const agents = settleAgents(previous, state, options.deferAgentsToAI);
+  state = agents.state;
   // 自動事件、劇情片段完成、卡死保底與幕期限可能互相使對方的條件成立；交替結算到沒有變化為止（有上限，避免循環）。
   for (let pass = 0; pass <= storyletsDatabase.length + 2; pass += 1) {
     const before = state;
@@ -515,9 +566,10 @@ export function finalizeWorld(previous: PlayerState, next: PlayerState, hints: R
     if (state === before) break;
   }
   state = pruneGeneratedQuests(expireGeneratedQuests(state));
+  state = updatePlayerKnownEvents(previous, state);
   const modifiers = state.world.modifiers.filter((modifier) => isModifierActive(modifier, state.gameTimeMinutes));
   const world = compressEvents(modifiers.length === state.world.modifiers.length ? state.world : { ...state.world, modifiers });
-  return world === state.world ? state : { ...state, world };
+  return { state: world === state.world ? state : { ...state, world }, ...(agents.batch ? { agentBatch: agents.batch } : {}) };
 }
 
 /** 寫入一筆玩家聲望變化事件；只有得知此事的勢力列在 changes 中。 */
@@ -609,7 +661,7 @@ const getPresentResidentIds = (state: PlayerState) => {
  */
 export type EventKnowledgeLevel = 'witnessed' | 'rumor' | 'public' | 'legend';
 
-const KNOWLEDGE_LABELS: Record<EventKnowledgeLevel, string> = { witnessed: '親眼目擊', rumor: '傳聞', public: '公開消息', legend: '傳說' };
+export const KNOWLEDGE_LABELS: Record<EventKnowledgeLevel, string> = { witnessed: '親眼目擊', rumor: '傳聞', public: '公開消息', legend: '傳說' };
 const KNOWLEDGE_ORDER: EventKnowledgeLevel[] = ['witnessed', 'rumor', 'public', 'legend'];
 
 /** 與目擊者同勢力、未在場的單位是否聽說了經過（只有帶細節的事件才有傳聞）。 */
