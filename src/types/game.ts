@@ -757,6 +757,63 @@ export interface CombatState {
   participants: CombatParticipant[];
   /** 玩家目前攻擊的敵方單位 ID。 */
   targetUnitId: string;
+  /** 開場方式（O45）：一般、玩家伏擊、陷阱、敵方偷襲。舊快照沒有此欄位時視為一般。 */
+  opening?: CombatOpening;
+}
+
+/** 戰鬥開場方式（O45）。 */
+export type CombatOpening = 'normal' | 'player_ambush' | 'trap' | 'enemy_ambush';
+
+/** 遭遇狀態（O45）：發生時間與是否由玩家先發現對方（先發現時可伏擊）。 */
+export interface EncounterInfo {
+  startedAtMinutes: number;
+  playerSpottedFirst: boolean;
+}
+
+/** 手段 → 結果表（O45；O50-2 擴充）。 */
+export type ActionMethodId = 'ambush' | 'trap' | 'attack';
+
+export interface ActionMethodOutcome {
+  opening: CombatOpening;
+  /** 開場第一擊（必中、敵人不反擊）的傷害倍率。 */
+  firstStrikeMultiplier?: number;
+  /** 陷阱傷害：敵方最大 HP 的比例。 */
+  trapDamageRatio?: number;
+}
+
+export interface ActionMethodStatic {
+  id: ActionMethodId;
+  label: string;
+  /** 檢定能力值；沒有時不檢定（直接採用 onSuccess）。 */
+  checkAbility?: 'str' | 'dex' | 'con' | 'int' | 'wis' | 'cha';
+  /** DC = dcBase + 敵方 dcOpponentAbility 的修正。 */
+  dcBase?: number;
+  dcOpponentAbility?: 'str' | 'dex' | 'con' | 'int' | 'wis' | 'cha';
+  /** 只能對「玩家先發現」的遭遇使用。 */
+  requiresPlayerSpottedFirst: boolean;
+  onSuccess: ActionMethodOutcome;
+  onFailure: ActionMethodOutcome;
+}
+
+export interface CombatRulesStatic {
+  encounterExpiryMinutes: number;
+  perception: { ability: 'str' | 'dex' | 'con' | 'int' | 'wis' | 'cha'; dcBase: number; opponentAbility: 'str' | 'dex' | 'con' | 'int' | 'wis' | 'cha' };
+  flee: { stat: 'spd'; dcBase: number; opponentSpdDivisor: number };
+  residentReaggroMinutes: number;
+  defaultTrapWaitMinutes: number;
+  /** 沒開戰時偵測 AI 敘事宣稱攻防的字詞。 */
+  claimPatterns: string[];
+  /** 打字的戰鬥說法（開戰、過濾建議行動）。 */
+  typedCombatPatterns: string[];
+  /** 打字伏擊（對玩家先發現的遭遇）。 */
+  ambushPatterns: string[];
+  /** 打字設陷阱等待。 */
+  trapPatterns: string[];
+}
+
+export interface ActionMethodDataStatic {
+  methods: ActionMethodStatic[];
+  combatRules: CombatRulesStatic;
 }
 
 export type DeathCause = 'combat' | 'self_inflicted' | 'misadventure' | 'unknown';
@@ -884,6 +941,10 @@ export interface PlayerState {
   storyFlags: Record<string, boolean>; // 例如: { "FLAG_TUTORIAL_DONE": true }
   defeatedUnits: Record<string, number>;
   encounteredUnitId?: string;
+  /** 目前遭遇的狀態（O45）；與 encounteredUnitId 同時設定與清除。 */
+  encounterInfo?: EncounterInfo;
+  /** 敵對居民最近一次在此地區強制開戰（O45）：同一次停留只強制一次，離開地區即清除。 */
+  residentAggro?: { mapId: string; atMinutes: number };
   unitDispositionOverrides: Record<string, UnitDisposition>;
   /** 各勢力對目前角色的聲望（角色層；新角色依劇本初始值重置）。 */
   factionReputation: Record<string, number>;
@@ -1012,6 +1073,10 @@ export interface AIResponsePayload {
   storyText: string;
   suggestedActions: string[];
   encounterRequest?: { unitId: string } | null;
+  /** 第 6 版（O45）：玩家以敘事方式開戰時，AI 只選手段與目標，檢定與結果由規則處理。 */
+  combatRequest?: { unitId: string; method: ActionMethodId } | null;
+  /** 第 6 版（O45）：遭遇的對象在敘事中離開時為 true，遊戲清除遭遇。 */
+  encounterEnded?: boolean;
   travelRequest?: { destinationMapId: string } | null;
   /** 使用目前地區商店的服務；只可選遊戲提供的候選，由前端以與 HUD 相同的規則結算。 */
   serviceRequest?: { shopId: string; serviceId: string } | null;

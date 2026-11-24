@@ -1,5 +1,6 @@
 import type {
   AbilityScores,
+  ActionMethodDataStatic,
   AgentActionType,
   AgentRulesStatic,
   ItemStatic,
@@ -54,6 +55,7 @@ import rawQuestTemplates from './quest_templates.json';
 import rawAIContext from './ai_context.json';
 import rawStory from './story.json';
 import rawAgentRules from './agent_rules.json';
+import rawActionMethods from './action_methods.json';
 
 // 進行靜態型別轉型，確保導出的資料陣列完全符合 DTO 規範
 export const itemsDatabase: ItemStatic[] = rawItems as ItemStatic[];
@@ -74,6 +76,10 @@ export const questTemplatesDatabase: QuestTemplateStatic[] = questTemplateData.t
 export const aiContextConfig: AIContextConfigStatic = rawAIContext as AIContextConfigStatic;
 export const storyData: StoryDataStatic = rawStory as StoryDataStatic;
 export const agentRules: AgentRulesStatic = rawAgentRules as AgentRulesStatic;
+/** 手段 → 結果表與戰鬥前規則（O45）。 */
+export const actionMethodData: ActionMethodDataStatic = rawActionMethods as ActionMethodDataStatic;
+export const combatRules = actionMethodData.combatRules;
+export const getActionMethod = (id: string) => actionMethodData.methods.find((method) => method.id === id);
 /** 重要角色的行動種類（O34 第 1 階段）。 */
 export const AGENT_ACTION_TYPES: AgentActionType[] = ['idle', 'post_quest', 'trigger_event', 'change_faction_relation'];
 /** 依順序排列的幕。 */
@@ -996,4 +1002,36 @@ export function validateAgentData(): string[] {
 }
 
 /** 全部靜態資料驗證；建置前由 scripts/validate-data.mjs 執行，有錯誤即中止建置。 */
-export const validateGameData = (): string[] => [...validateGrowthData(), ...validateWorldUnitData(), ...validateEventData(), ...validateFactionData(), ...validateQuestTemplateData(), ...validateStoryData(), ...validateAgentData()];
+/** 手段 → 結果表（O45）：手段齊全、能力值與數值在合理範圍。 */
+function validateActionMethodData(): string[] {
+  const issues: string[] = [];
+  const abilities = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
+  const openings = ['normal', 'player_ambush', 'trap', 'enemy_ambush'];
+  const ids = new Set<string>();
+  for (const method of actionMethodData.methods) {
+    const label = `手段 ${method.id}`;
+    if (ids.has(method.id)) issues.push(`${label}: id 重複`);
+    ids.add(method.id);
+    if (method.checkAbility && !abilities.includes(method.checkAbility)) issues.push(`${label}: checkAbility 不合法`);
+    if (method.dcOpponentAbility && !abilities.includes(method.dcOpponentAbility)) issues.push(`${label}: dcOpponentAbility 不合法`);
+    if (method.checkAbility && (!Number.isInteger(method.dcBase) || (method.dcBase as number) < 5 || (method.dcBase as number) > 25)) issues.push(`${label}: dcBase 需為 5～25 的整數`);
+    for (const outcome of [method.onSuccess, method.onFailure]) {
+      if (!outcome || !openings.includes(outcome.opening)) issues.push(`${label}: 開場方式不合法`);
+      if (outcome?.firstStrikeMultiplier !== undefined && (outcome.firstStrikeMultiplier < 1 || outcome.firstStrikeMultiplier > 5)) issues.push(`${label}: firstStrikeMultiplier 需在 1～5`);
+      if (outcome?.trapDamageRatio !== undefined && (outcome.trapDamageRatio <= 0 || outcome.trapDamageRatio > 1)) issues.push(`${label}: trapDamageRatio 需在 0～1`);
+    }
+  }
+  for (const id of ['ambush', 'trap', 'attack']) if (!ids.has(id)) issues.push(`手段表缺少 ${id}`);
+  const rules = actionMethodData.combatRules;
+  if (!(rules.encounterExpiryMinutes > 0)) issues.push('combatRules.encounterExpiryMinutes 需大於 0');
+  if (!(rules.residentReaggroMinutes > 0)) issues.push('combatRules.residentReaggroMinutes 需大於 0');
+  if (!(rules.defaultTrapWaitMinutes > 0 && rules.defaultTrapWaitMinutes <= MAX_WAIT_MINUTES)) issues.push(`combatRules.defaultTrapWaitMinutes 需在 1～${MAX_WAIT_MINUTES}`);
+  if (!abilities.includes(rules.perception.ability) || !abilities.includes(rules.perception.opponentAbility)) issues.push('combatRules.perception 能力值不合法');
+  if (!(rules.flee.opponentSpdDivisor > 0)) issues.push('combatRules.flee.opponentSpdDivisor 需大於 0');
+  for (const key of ['claimPatterns', 'typedCombatPatterns', 'ambushPatterns', 'trapPatterns'] as const) {
+    if (!Array.isArray(rules[key]) || rules[key].some((pattern) => typeof pattern !== 'string' || !pattern)) issues.push(`combatRules.${key} 需為非空字串陣列`);
+  }
+  return issues;
+}
+
+export const validateGameData = (): string[] => [...validateGrowthData(), ...validateWorldUnitData(), ...validateEventData(), ...validateFactionData(), ...validateQuestTemplateData(), ...validateStoryData(), ...validateAgentData(), ...validateActionMethodData()];

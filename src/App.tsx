@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { ActionCheckResult, CharacterHistoryEntry, SaveSlotId, SkillStatic, PlayerState, StoryMessage, WorldUnitStatic } from './types/game';
+import type { ActionCheckResult, CharacterHistoryEntry, SaveSlotId, SkillStatic, PlayerState, StoryMessage } from './types/game';
 import { AUTO_SLOT_ID, clearLegacySaves, continueWorldWithCharacter, createHistoryEntry, createWorld, deleteSlot, deleteWorld, exportWorld, getLastWriteFailed, importWorld, loadSaveIndex, readSlot, setActiveWorld, subscribeSaveStatus, writeSlot, type LoadedSlot } from './utils/saveStorage';
 import { SaveManager } from './components/SaveManager';
 import { applyStateChanges } from './utils/applyStateChanges';
 import { applyMemoryNotes, getMemoryEligibleUnitIds } from './utils/unitMemory';
-import { aiContextConfig, canPlayerEnterMap, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getShopById, getUnlockedSkills, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, scenario } from './data/staticData';
-import { getPlayerStatBreakdown, resolveActionCheck } from './utils/gameChecks';
+import { aiContextConfig, canPlayerEnterMap, combatRules, getCharacterClassById, getItemById, getMapById, getPlayerResourceCaps, getShopById, getUnlockedSkills, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, scenario } from './data/staticData';
 import { getClaimedArrivalMapIds, resolveExplicitTravelIntent, storyClaimsPlayerMoved, type TravelIntentResolution } from './utils/travelIntent';
 import { buildSystemOptions, getCombatStartBlock, type SystemAction } from './utils/systemOptions';
 import { OptionBar } from './components/OptionBar';
@@ -28,89 +27,22 @@ import { createInitialPlayer } from './utils/playerInit';
 import { isSelfDamageIntent, parseExplicitSelfDamage, parseWaitIntent, unsupportedInventoryItemRequested } from './utils/playerActionIntent';
 import { buyItem, getAvailableServices, purchaseService, sellItem } from './utils/tradeRules';
 import { ACTION_DURATIONS, advanceGameTime, formatDuration, formatGameTime, getGameDay, isValidWaitMinutes, MAX_WAIT_MINUTES, waitGameTime } from './utils/gameTime';
-import { grantUnitExp } from './utils/unitProgress';
-import { createCombat, getCombatTarget, setEnemyHp } from './utils/combatState';
-import { getPlayerWorldUnit } from './utils/worldUnits';
+import { getCombatTarget } from './utils/combatState';
+import { resolveActionCheck } from './utils/gameChecks';
+import { applyPostActionRules, buildCombatPlayer, OPENING_LABELS, resolveAmbush, resolveCombatRequest, resolveEnemyTurn, resolveFlee, resolveFoundByEnemy, resolvePlayerAttack, resolveTrapWait, startCombatByPlan, startNormalCombat, withUnitHp, type CombatStepResult } from './utils/combatResolution';
+import { clearEncounter, filterCombatSuggestions, findAggressiveResident, getAmbushableUnit, getEncounteredUnit, getSpottedHostileEncounter, hasCombatClaim, hasEnemyNearby, isTypedAmbushText, isTypedCombatText, isTypedTrapText, setEncounter } from './utils/encounters';
 import { applyEventProposals, finalizeWorldWithAgentBatch, getEventSeq, getPlayerKnownEvents, isKnownToPlayerOnOccurrence, type DeathHint, type PlayerPosition } from './utils/worldEvents';
 import { createSuccessorReputation, describeReputationChanges } from './utils/factions';
 import { rollWaitInterruption } from './utils/waitRules';
 import type { CharacterAlignment } from './types/game';
-
-function withUnitHp(player: PlayerState, unitId: string, currentHp: number, isDead = false): PlayerState {
-  const state = player.unitInstances[unitId];
-  return { ...player, unitInstances: { ...player.unitInstances, [unitId]: { ...state, currentHp, isDead } } };
-}
-
-/** 擊倒單位時取得其全部持有物與金幣（世界實際庫存）；掉落表與經驗另行結算。 */
-function takeHoldings(player: PlayerState, unitId: string, unitName: string) {
-  const state = player.unitInstances[unitId];
-  if (!state || (state.gold <= 0 && state.inventory.length === 0)) return { player, loot: [] as { itemId: string; quantity: number }[], gold: 0 };
-  const inventory = player.inventory.map((entry) => ({ ...entry }));
-  for (const item of state.inventory) {
-    const owned = inventory.find((entry) => entry.itemId === item.itemId);
-    if (owned) owned.quantity += item.quantity;
-    else inventory.push({ ...item });
-  }
-  const itemText = state.inventory.map((item) => `${getItemById(item.itemId)?.name ?? item.itemId} ×${item.quantity}`).join('、');
-  const record = {
-    id: `${Date.now()}-${Math.random()}`,
-    type: 'unit_transfer' as const,
-    description: `從 ${unitName} 身上取得${[state.gold > 0 ? `${state.gold} 金幣` : '', itemText].filter(Boolean).join('、')}`,
-    goldChange: state.gold,
-    timestamp: Date.now()
-  };
-  return {
-    player: {
-      ...player,
-      gold: player.gold + state.gold,
-      inventory,
-      unitInstances: { ...player.unitInstances, [unitId]: { ...state, gold: 0, inventory: [] } },
-      transactionHistory: [record, ...player.transactionHistory].slice(0, 100)
-    },
-    loot: state.inventory,
-    gold: state.gold
-  };
-}
-
-function resolveEnemyTurn(player: PlayerState, combat: NonNullable<PlayerState['combat']>, unit: WorldUnitStatic) {
-  const special = unit.specialAbilities?.find((ability) => ability.combatAction && combat.round % ability.combatAction.triggerEveryRounds === 0);
-  const action = special?.combatAction;
-  const checkStat = action?.checkStat ?? 'def';
-  const dc = action?.dc ?? 10 + Math.floor(unit.stats.atk / 2);
-  const check = {
-    ...resolveActionCheck(player, checkStat, dc),
-    stat: checkStat,
-    reason: action ? `${unit.name}施放${special?.name}：玩家進行${checkStat === 'dex' ? '閃避' : '抵抗'}檢定` : `${unit.name}反擊：玩家進行閃避檢定`,
-    label: action ? `${special?.name}檢定` : '玩家閃避檢定'
-  } satisfies ActionCheckResult;
-  const damage = check.success ? 0 : Math.max(1, Math.floor(unit.stats.atk * (action?.damageMultiplier ?? 1)) - Math.floor(getPlayerStatBreakdown(player, 'def').statValue / 4));
-  const hp = Math.max(0, player.hp - damage);
-  const isDead = hp <= 0;
-  const unconsciousTurns = !isDead && !check.success ? action?.applyUnconsciousTurnsOnFailure ?? 0 : 0;
-  const statusEffects = player.statusEffects.filter((effect) => effect.id !== 'unconscious');
-  if (unconsciousTurns > 0) statusEffects.push({ id: 'unconscious', remainingTurns: unconsciousTurns });
-  // 擊倒玩家的單位依同一規則獲得玩家的擊倒經驗，並可能升級。
-  const victorGrowth = isDead ? grantUnitExp(player.unitInstances, unit.id, getPlayerWorldUnit(player).expReward, player.world) : undefined;
-  const deathHints: Record<string, DeathHint> = isDead ? { [player.unitId]: { cause: 'combat', killerUnitId: unit.id } } : {};
-  const nextPlayer: PlayerState = {
-    ...player, hp, isDead, statusEffects,
-    ...(victorGrowth ? { unitInstances: victorGrowth.instances } : {}),
-    ...(isDead ? { encounteredUnitId: undefined } : {}),
-    ...(isDead ? { combat: undefined } : { combat: { ...combat, round: combat.round + 1 } })
-  };
-  const result = check.success
-    ? action ? `你成功閃過${special?.name}。` : `你成功閃避${unit.name}的反擊。`
-    : `${action ? `${special?.name}命中` : `${unit.name}反擊命中`}，你受到 ${damage} 點傷害。${unconsciousTurns ? `你陷入昏迷 ${unconsciousTurns} 回合。` : ''}`;
-  const victorLevelText = victorGrowth && victorGrowth.level > victorGrowth.previousLevel ? `\n📈 ${unit.name}升至 Lv.${victorGrowth.level}。` : '';
-  return { player: nextPlayer, check, deathHints, text: `${result}${isDead ? `\n☠️ HP 歸零，你已死亡。${victorLevelText}` : `\n第 ${combat.round + 1} 回合開始。`}` };
-}
 
 /** 多段移動的結果說明（O44）：途經地區、耗時，以及途中遭遇或未抵達的原因。 */
 function describeRouteTravel(travel: RouteTravelResult, player: PlayerState): string {
   const via = travel.passed.length ? `途經${travel.passed.map((map) => map.name).join('、')}，` : '';
   const unit = travel.interruptedByUnitId ? getWorldUnitById(travel.interruptedByUnitId, player) : undefined;
   if (unit) {
-    return `📍 你從${travel.origin.name}出發前往${travel.destination.name}，${via}在${travel.arrived.name}遇到${unit.name}，移動被打斷（耗時 ${formatDuration(travel.elapsedMinutes)}）。\n👁️ 遭遇：${unit.name}。可從下方選項列挑戰。`;
+    // 途中被找上（O45）：附上察覺結果（先發現對方，或遭到偷襲）。
+    return `📍 你從${travel.origin.name}出發前往${travel.destination.name}，${via}在${travel.arrived.name}遇到${unit.name}，移動被打斷（耗時 ${formatDuration(travel.elapsedMinutes)}）。\n${travel.foundByEnemy?.text ?? `👁️ 遭遇：${unit.name}。`}`;
   }
   if (travel.stoppedBySegmentLimit) {
     return `📍 你從${travel.origin.name}出發前往${travel.destination.name}，${via}走了 ${formatDuration(travel.elapsedMinutes)}，目前停在${travel.arrived.name}，尚未抵達。單次行動最多移動 ${travel.passed.length + 1} 段，請繼續前往。`;
@@ -132,8 +64,8 @@ function createRestoreNotice(player: PlayerState, savedAt: number, messageCount:
     `進行中任務：${activeQuests.length ? activeQuests.join('、') : '無'}`,
     `持有物：${inventory.length ? inventory.join('、') : '無'}`
   ];
-  if (combatUnit && player.combat) lines.push(`戰鬥恢復：第 ${player.combat.round} 回合，${combatUnit.name} HP ${getCombatTarget(player.combat)?.currentHp ?? 0}/${combatUnit.stats.hp}`);
-  else if (player.encounteredUnitId) lines.push(`已遭遇單位：${getWorldUnitById(player.encounteredUnitId)?.name ?? player.encounteredUnitId}（可從選項列挑戰）`);
+  if (combatUnit && player.combat) lines.push(`戰鬥恢復：第 ${player.combat.round} 回合，${combatUnit.name} HP ${getCombatTarget(player.combat)?.currentHp ?? 0}/${combatUnit.stats.hp}（${OPENING_LABELS[player.combat.opening ?? 'normal']}）`);
+  else if (player.encounteredUnitId) lines.push(`已遭遇單位：${getWorldUnitById(player.encounteredUnitId)?.name ?? player.encounteredUnitId}${player.encounterInfo?.playerSpottedFirst ? '（你先發現對方，可從選項列伏擊或挑戰）' : '（可從選項列挑戰）'}`);
   else lines.push('戰鬥狀態：目前沒有進行中的戰鬥，也尚未遭遇敵人。');
   return {
     id: 'session-restore-notice',
@@ -225,7 +157,12 @@ export default function App() {
    * 行動造成的狀態變更一律經此套用：先執行世界規則（死亡紀錄、地區結算、自動事件），
    * 新寫入的世界事件以系統訊息附在本次行動結果之後。讀檔與換角色不是行動，直接 setPlayer。
    */
-  const updatePlayer = (nextPlayer: PlayerState, deathHints?: Record<string, DeathHint>) => {
+  const updatePlayer = (rawNextPlayer: PlayerState, rawDeathHints?: Record<string, DeathHint>) => {
+    // O45：遭遇失效、離開地區清除強制開戰紀錄、進入新地區時敵對居民主動攻擊；結果以系統訊息附在本次行動之後。
+    const post = applyPostActionRules(player, rawNextPlayer);
+    const nextPlayer = post.player;
+    const deathHints = post.deathHints ? { ...rawDeathHints, ...post.deathHints } : rawDeathHints;
+    for (const notice of post.notices) setTimeout(() => appendSystemMessage(notice.text, notice.checks.length ? notice.checks : undefined, true), 0);
     const usedThisTurn = turnCallBaseRef.current === null ? 0 : getAICallCount() - turnCallBaseRef.current;
     const skipReason = !isAgentAIEnabled(modelSettings) ? '設定已關閉角色 AI' : !apiKey.trim() ? '尚未設定 API Key'
       : nextPlayer.isDead ? '角色已死亡' : !canMakeAnotherCall(usedThisTurn) ? '已達每回合呼叫上限' : undefined;
@@ -436,7 +373,7 @@ export default function App() {
     const currentMap = getMapById(sourcePlayer.currentMapId);
     const destination = getMapById(mapId);
     if (!currentMap?.connectedMapIds.includes(mapId) || !destination || !canPlayerEnterMap(sourcePlayer, destination)) return null;
-    const nextPlayer = advanceGameTime({ ...sourcePlayer, previousMapId: sourcePlayer.currentMapId, currentMapId: destination.id, encounteredUnitId: undefined }, 'travel');
+    const nextPlayer = advanceGameTime(clearEncounter({ ...sourcePlayer, previousMapId: sourcePlayer.currentMapId, currentMapId: destination.id }), 'travel');
     return { player: nextPlayer, destination };
   };
 
@@ -461,6 +398,21 @@ export default function App() {
 
     try {
       const aiResponse = await sendPlayerAction(modelSettings, apiKey, turnPlayer, actionText, messages, characterHistory, resolvedTravel);
+      // O45：玩家以敘事方式開戰（combatRequest）。合法時由規則開戰，只採用 AI 的敘事（接近的過程），
+      // 不套用 AI 的檢定、狀態變更與人物記憶，也不另外呼叫開戰敘事（D13）。已先結算移動的回合不處理。
+      const combatPlan = resolvedTravel ? undefined : resolveCombatRequest(turnPlayer, aiResponse.combatRequest, (unitId) => getCombatStartBlock(turnPlayer, unitId, true));
+      if (combatPlan?.ok) {
+        const started = startCombatByPlan(advanceGameTime(turnPlayer, 'dialogue'), combatPlan);
+        if (started) {
+          updatePlayer(started.player, started.deathHints);
+          applied = true;
+          setMessages((prev) => [...prev,
+            { id: `${Date.now()}-ai`, sender: 'ai', text: aiResponse.storyText, timestamp: new Date().toLocaleTimeString() },
+            { id: `${Date.now()}-combat`, sender: 'system', text: started.text, checkResults: started.checks.length ? started.checks : undefined, invalidatesOptions: true, timestamp: new Date().toLocaleTimeString() }]);
+          return;
+        }
+      }
+      const combatRequestNotice = combatPlan && !combatPlan.ok ? `\n\n⚠️ 系統說明：無法依敘事開戰（${combatPlan.reason}），本回合照一般行動處理。` : '';
       let storyText = aiResponse.storyText;
       let resultToApply = aiResponse;
       let checkResult: ActionCheckResult | undefined;
@@ -485,8 +437,10 @@ export default function App() {
       // AI 依任務範本提議的支線委託：同樣只在沒有檢定或檢定成功時考慮，由遊戲驗證後發布並預扣報酬。
       const questPosting = !checkResult || checkResult.success ? postQuestProposals(nextPlayer, aiResponse.questProposals) : undefined;
       if (questPosting) nextPlayer = questPosting.state;
+      // 沒開戰卻宣稱攻防（O45 D14）：有敵人可交戰時，敘事宣稱命中、擊殺、閃避等，附上說明並捨棄本回合人物記憶。
+      const falseCombatClaim = !turnPlayer.combat && hasEnemyNearby(turnPlayer) && hasCombatClaim(storyText);
       // 人物記憶：對話已發生，不論檢定結果都記下；以行動前的在場人物驗證。
-      nextPlayer = applyMemoryNotes(nextPlayer, aiResponse.memoryNotes, getMemoryEligibleUnitIds(turnPlayer)).state;
+      if (!falseCombatClaim) nextPlayer = applyMemoryNotes(nextPlayer, aiResponse.memoryNotes, getMemoryEligibleUnitIds(turnPlayer)).state;
       // 劇情片段：只在沒有檢定或檢定成功時考慮，以行動前（AI 看到的狀態）的候選驗證。
       const storyStart = !checkResult || checkResult.success ? startStorylets(turnPlayer, nextPlayer, aiResponse.storyletProposals) : undefined;
       if (storyStart) nextPlayer = storyStart.state;
@@ -501,7 +455,11 @@ export default function App() {
         : questPosting?.rejected.length ? `
 
 ⚠️ 委託未成立：${questPosting.rejected.join('；')}。` : '';
-      if (nextPlayer.isDead) nextPlayer = { ...nextPlayer, encounteredUnitId: undefined };
+      if (nextPlayer.isDead) nextPlayer = clearEncounter(nextPlayer);
+      // AI 回報遭遇的對象已離開（O45 D5）：清除遭遇（之後若同回合提出新遭遇，照常設定）。
+      const endedUnit = aiResponse.encounterEnded && !nextPlayer.combat ? getEncounteredUnit(nextPlayer) : undefined;
+      if (aiResponse.encounterEnded && !nextPlayer.combat) nextPlayer = clearEncounter(nextPlayer);
+      const encounterEndedNotice = endedUnit ? `\n\n👁️ ${endedUnit.name}離開了，遭遇結束。` : '';
       const requestedEncounter = aiResponse.encounterRequest?.unitId;
       const requestedUnit = requestedEncounter ? getWorldUnitById(requestedEncounter) : undefined;
       const encounterUnit = requestedUnit?.requiresEncounter ? requestedUnit : undefined;
@@ -510,10 +468,13 @@ export default function App() {
         !!encounterUnit && encounterUnit.mapIds.includes(currentMap.id) && currentMap.unitsPresent.includes(encounterUnit.id) &&
         (!encounterUnit.requiredQuestId || nextPlayer.activeQuests.some((quest) => quest.questId === encounterUnit.requiredQuestId && quest.status === 'in_progress'));
       // 移動途中的遭遇已在移動說明中列出，AI 重複提出同一單位時不再提示。
-      const encounterNotice = encounterAllowed && encounterUnit && encounterUnit.id !== turnPlayer.encounteredUnitId
-        ?`\n\n👁️ 遭遇：${encounterUnit.name}。可從下方選項列挑戰。`
+      // 主動探索遇到（O45 D1）：玩家先發現對方；對同一單位重複提出時沿用原本的遭遇（不重設時限）。
+      const isNewEncounter = encounterAllowed && !!encounterUnit && encounterUnit.id !== nextPlayer.encounteredUnitId;
+      const encounterNotice = isNewEncounter && encounterUnit && encounterUnit.id !== turnPlayer.encounteredUnitId
+        ? `\n\n👁️ 遭遇：${encounterUnit.name}。${getWorldUnitDisposition(nextPlayer, encounterUnit.id) === 'hostile'
+          ? '你先發現了對方，可從下方選項列伏擊、挑戰，或移動離開；做其他事會被發現並開戰。' : '可從下方選項列挑戰。'}`
         : '';
-      if (encounterAllowed && encounterUnit) nextPlayer = { ...nextPlayer, encounteredUnitId: encounterUnit.id };
+      if (isNewEncounter && encounterUnit) nextPlayer = setEncounter(nextPlayer, encounterUnit.id, true);
       const deathNotice = !turnPlayer.isDead && nextPlayer.isDead
         ? '\n\n☠️ 你的生命值降至 0，角色死亡。可讀取死亡前的自動存檔重新嘗試。'
         : '';
@@ -573,8 +534,13 @@ export default function App() {
           : `\n\n⚠️ ${serviceName}未完成：${serviceResult && !serviceResult.ok ? serviceResult.reason : '找不到這項服務。'}`;
       updatePlayer(nextPlayer, nextPlayer.isDead && !player.isDead
         ? { [player.unitId]: { cause: isSelfDamageIntent(actionText) ? 'self_inflicted' : 'misadventure', note: checkResult?.reason } }
-        : undefined);
+        : resolvedTravel?.foundByEnemy?.deathHints);
       applied = true;
+      const falseClaimNotice = falseCombatClaim
+        ? '\n\n⚠️ 系統說明：尚未交戰，敘事中的攻防沒有生效。若要動手，可從選項列伏擊或挑戰。'
+        : '';
+      // 有敵人可交戰時，不建議以打字進行戰鬥（O45 D15），改由選項列的伏擊、挑戰處理。
+      const suggestions = hasEnemyNearby(nextPlayer) ? filterCombatSuggestions(aiResponse.suggestedActions) : aiResponse.suggestedActions;
 
       const previousMap = getMapById(turnPlayer.currentMapId);
       const nextMap = getMapById(nextPlayer.currentMapId);
@@ -603,8 +569,9 @@ export default function App() {
         {
           id: (Date.now() + 1).toString(),
           sender: 'ai',
-          text: `${storyText}${storyletNotice}${postedQuestNotice}${questNotice}${questCompletionNotice}${unitTransferNotice}${unitDispositionNotice}${encounterNotice}${serviceNotice}${locationNotice}${deathNotice}`,
-          options: aiResponse.suggestedActions,
+          text: `${storyText}${falseClaimNotice}${combatRequestNotice}${storyletNotice}${postedQuestNotice}${questNotice}${questCompletionNotice}${unitTransferNotice}${unitDispositionNotice}${encounterEndedNotice}${encounterNotice}${serviceNotice}${locationNotice}${deathNotice}`,
+          options: suggestions,
+          checkResults: resolvedTravel?.foundByEnemy?.checks.length ? resolvedTravel.foundByEnemy.checks : undefined,
           travelOptions: textTravelIntent.kind === 'ambiguous'
             ? textTravelIntent.candidates.map((candidate) => ({ mapId: candidate.id, name: candidate.name }))
             : undefined,
@@ -616,9 +583,10 @@ export default function App() {
       const errorMessage = err instanceof Error ? err.message : '無法連線至 AI 服務';
       // 已由規則結算的移動（O44／O50）不因 AI 失敗而取消：照常套用移動與途中遭遇，只略過敘事。
       if (resolvedTravel && !applied) {
-        updatePlayer(resolvedTravel.player);
+        updatePlayer(resolvedTravel.player, resolvedTravel.foundByEnemy?.deathHints);
         setMessages((prev) => [...prev, {
           id: `${Date.now()}-travel`, sender: 'system', invalidatesOptions: true, timestamp: new Date().toLocaleTimeString(),
+          checkResults: resolvedTravel.foundByEnemy?.checks.length ? resolvedTravel.foundByEnemy.checks : undefined,
           text: `${describeRouteTravel(resolvedTravel, resolvedTravel.player)}\n⚠️ 敘事失敗，移動已完成：${errorMessage}`
         }]);
       } else {
@@ -656,10 +624,13 @@ export default function App() {
       setMessages((previous) => [...previous, createUserMessage(actionText), { id: `${Date.now()}-travel`, sender: 'system', text: `目前無法前往${destination?.name ?? mapId}。`, timestamp: new Date().toLocaleTimeString() }]);
       return;
     }
-    if (!apiKey) {
-      updatePlayer(travel.player);
+    // 途中遭到偷襲（O45，已開戰或已死亡）時不送 AI 敘事，以規則結果呈現；未設定 AI 時同樣只顯示移動結果。
+    const ambushedOnRoute = !!travel.player.combat || travel.player.isDead;
+    if (!apiKey || ambushedOnRoute) {
+      updatePlayer(travel.player, travel.foundByEnemy?.deathHints);
       setMessages((previous) => [...previous, createUserMessage(actionText), {
-        id: `${Date.now()}-travel`, sender: 'system', text: `${describeRouteTravel(travel, travel.player)}\n（尚未設定 AI，略過敘事。）`, invalidatesOptions: true, timestamp: new Date().toLocaleTimeString()
+        id: `${Date.now()}-travel`, sender: 'system', text: `${describeRouteTravel(travel, travel.player)}${apiKey ? '' : '\n（尚未設定 AI，略過敘事。）'}`,
+        checkResults: travel.foundByEnemy?.checks.length ? travel.foundByEnemy.checks : undefined, invalidatesOptions: true, timestamp: new Date().toLocaleTimeString()
       }]);
       return;
     }
@@ -789,45 +760,95 @@ export default function App() {
       setMessages((previous) => [...previous, userMessage, { id: `${Date.now()}-combat`, sender: 'system', text: block ?? '目前地區或目標資料不存在。', timestamp: new Date().toLocaleTimeString() }]);
       return;
     }
-    const provoked = getWorldUnitDisposition(player, unitId) === 'hostile'
-      ? player
-      : applyStateChanges(player, { storyText: '', suggestedActions: [], stateChanges: { unitDispositionChanges: [{ unitId, disposition: 'hostile' }] } }, 'game');
-    const unitState = unit.population ? undefined : provoked.unitInstances[unit.id];
-    // 地區居民的戰鬥 HP 會保留；需遭遇的單位每次戰鬥以完整 HP 開始。
-    const currentHp = unit.requiresEncounter ? unit.stats.hp : unitState?.currentHp ?? unit.stats.hp;
-    const combatPlayer: PlayerState = { ...provoked, encounteredUnitId: unitId, combat: createCombat([provoked.unitId], [{ unitId, currentHp }]) };
+    const provoked = getWorldUnitDisposition(player, unitId) !== 'hostile';
+    const combatPlayer = buildCombatPlayer(player, unitId, 'normal')!;
     updatePlayer(combatPlayer);
     setMessages((previous) => [...previous, userMessage, {
       id: `${Date.now()}-combat`, sender: 'system', timestamp: new Date().toLocaleTimeString(),
-      text: `你${provoked === player ? '與' : '激怒並與'}${unit.name}進入戰鬥！攻擊、已解鎖技能及消耗品各自消耗一個行動回合；敵人存活時會反擊並進行閃避檢定。`
+      text: `你${provoked ? '激怒並與' : '與'}${unit.name}進入戰鬥！攻擊、已解鎖技能及消耗品各自消耗一個行動回合；敵人存活時會反擊並進行閃避檢定。`
     }]);
     void narrateCombatStart(userMessage.text, combatPlayer);
   };
 
-  /** 等待（O50）：選項列與打字的等待都經此執行；非安全地區可能被敵人打斷。不呼叫 AI。 */
+  /** 規則結算的開戰結果（伏擊、陷阱、強制開戰）：套用並顯示系統訊息與檢定。 */
+  const commitCombatStep = (result: CombatStepResult, actionText?: string) => {
+    updatePlayer(result.player, result.deathHints);
+    setMessages((previous) => [...previous, ...(actionText ? [createUserMessage(actionText)] : []), {
+      id: `${Date.now()}-combat`, sender: 'system', text: result.text, checkResults: result.checks.length ? result.checks : undefined,
+      invalidatesOptions: true, timestamp: new Date().toLocaleTimeString()
+    }]);
+  };
+
+  /**
+   * 被發現（O45 D1、D9、D10）：玩家先發現的敵對遭遇，或在場的敵對居民，在玩家做其他行動時搶先出手；原本的行動不進行。
+   * 移動、挑戰、伏擊不經此判定。回傳 true 表示已處理（呼叫端不再執行原本的行動）。
+   */
+  const preemptByEnemy = (actionText?: string): boolean => {
+    if (player.combat || !canPlayerAct(player)) return false;
+    const spotted = getSpottedHostileEncounter(player);
+    if (spotted) {
+      commitCombatStep(startNormalCombat(player, spotted, `⚠️ ${spotted.name}發現了你，戰鬥開始！你原本的行動沒有進行。`), actionText);
+      return true;
+    }
+    const resident = findAggressiveResident(player);
+    if (!resident) return false;
+    const found = resolveFoundByEnemy(player, resident, `⚠️ 這裡的${resident.name}對你懷有敵意，你原本的行動沒有進行。\n`);
+    commitCombatStep({ ...found, player: { ...found.player, residentAggro: { mapId: player.currentMapId, atMinutes: player.gameTimeMinutes } } }, actionText);
+    return true;
+  };
+
+  /** 伏擊（O45 D3）：選項列、打字的「偷襲某某」與 AI 的 combatRequest 都依同一規則。 */
+  const executeAmbush = (unitId: string, actionText?: string) => {
+    const unit = getAmbushableUnit(player, unitId);
+    if (!unit || !canPlayerAct(player)) {
+      setMessages((previous) => [...previous, ...(actionText ? [createUserMessage(actionText)] : []),
+        { id: `${Date.now()}-combat`, sender: 'system', text: '只能伏擊你先發現、而且還沒察覺你的對象。', timestamp: new Date().toLocaleTimeString() }]);
+      return;
+    }
+    commitCombatStep(resolveAmbush(advanceGameTime(player, 'quick'), unit), actionText ?? `伏擊${unit.name}`);
+  };
+
+  /** 設陷阱等待（O45 D4）：非安全地區；選項列與打字共用。不呼叫 AI。 */
+  const executeSetTrap = (minutes: number, actionText?: string) => {
+    if (player.combat || !canPlayerAct(player)) return;
+    const result = resolveTrapWait(player, minutes);
+    if (!result) {
+      setMessages((previous) => [...previous, ...(actionText ? [createUserMessage(actionText)] : []),
+        { id: `${Date.now()}-trap`, sender: 'system', text: '這裡不能設陷阱（安全地區不會有敵人經過）。', timestamp: new Date().toLocaleTimeString() }]);
+      return;
+    }
+    commitCombatStep(result, actionText ?? `設陷阱等待 ${formatDuration(minutes)}`);
+  };
+
+  /**
+   * 等待（O50）：選項列與打字的等待都經此執行；非安全地區可能被敵人打斷。不呼叫 AI。
+   * O45：被打斷時先擲察覺（D2）；沒有被打斷時遭遇清除（D5）。
+   */
   const executeWait = (minutes: number, typed?: { actionText: string; hasFollowUp: boolean }) => {
     if (player.combat || !canPlayerAct(player)) return;
     const interruption = rollWaitInterruption(player, minutes);
     const waited = waitGameTime(player, interruption.elapsedMinutes);
     if (waited === player) return;
     const interruptUnit = interruption.unitId ? getWorldUnitById(interruption.unitId, player) : undefined;
-    const waitNext = interruptUnit ? { ...waited, encounteredUnitId: interruptUnit.id } : waited;
-    const text = interruptUnit
-      ? `⏳ 你等待了 ${formatDuration(interruption.elapsedMinutes)}，${interruptUnit.name}出現，等待被打斷！現在是 ${formatGameTime(waitNext.gameTimeMinutes)}。\n👁️ 遭遇：${interruptUnit.name}。可從下方選項列挑戰。`
-      : `⏳ 你原地等待了 ${formatDuration(minutes)}，現在是 ${formatGameTime(waitNext.gameTimeMinutes)}。等待不會恢復生命與魔力。${typed?.hasFollowUp ? '\n等待之後的行動請另外輸入。' : ''}`;
+    if (interruptUnit) {
+      commitCombatStep(resolveFoundByEnemy(waited, interruptUnit,
+        `⏳ 你等待了 ${formatDuration(interruption.elapsedMinutes)}，${interruptUnit.name}出現，等待被打斷！現在是 ${formatGameTime(waited.gameTimeMinutes)}。\n`), typed?.actionText);
+      return;
+    }
+    const waitNext = clearEncounter(waited);
+    const text = `⏳ 你原地等待了 ${formatDuration(minutes)}，現在是 ${formatGameTime(waitNext.gameTimeMinutes)}。等待不會恢復生命與魔力。${typed?.hasFollowUp ? '\n等待之後的行動請另外輸入。' : ''}`;
     updatePlayer(waitNext);
     setMessages((previous) => [...previous, ...(typed ? [createUserMessage(typed.actionText)] : []),
       { id: `${Date.now()}-wait`, sender: 'system', text, invalidatesOptions: true, timestamp: new Date().toLocaleTimeString() }]);
   };
 
+  /** 逃跑（O45 D8）：速度檢定，失敗浪費回合、敵人反擊。 */
   const handleFleeCombat = () => {
     if (!player.combat || !canPlayerAct(player)) return;
-    const combatUnit = getWorldUnitById(player.combat.targetUnitId, player);
-    const outOfCombat = { ...player };
-    delete outOfCombat.combat;
-    delete outOfCombat.encounteredUnitId;
-    updatePlayer(advanceGameTime(outOfCombat, 'combatRound'));
-    appendSystemMessage(`你與${combatUnit?.name ?? '敵人'}拉開距離，戰鬥結束。`, undefined, true);
+    const result = resolveFlee(player);
+    if (!result) return;
+    updatePlayer(result.player, result.deathHints);
+    appendSystemMessage(result.text, result.checks, true);
   };
 
   const handleCombatAction = (skill?: SkillStatic, sourcePlayer: PlayerState = player) => {
@@ -839,81 +860,16 @@ export default function App() {
       const recovered = { ...advanceGameTime(sourcePlayer, 'combatRound'), statusEffects: sourcePlayer.statusEffects.filter((effect) => effect.id !== 'unconscious'), combat: { ...combat } };
       const enemyTurn = resolveEnemyTurn(recovered, combat, unit);
       updatePlayer(enemyTurn.player, enemyTurn.deathHints);
-      appendSystemMessage(`你仍昏迷，失去本回合行動。\n${enemyTurn.text}`, [enemyTurn.check]);
+      appendSystemMessage(`你仍昏迷，失去本回合行動。\n${enemyTurn.text}`, enemyTurn.checks);
       return;
     }
     if (skill && sourcePlayer.mp < skill.costMp) return;
-
-    const attackCheck = {
-      ...resolveActionCheck(sourcePlayer, 'atk', 10 + unit.stats.def),
-      stat: 'atk' as const,
-      reason: `第 ${combat.round} 回合：${skill?.name ?? '攻擊'}${unit.name}`,
-      label: '玩家攻擊檢定'
-    };
-    const checks: ActionCheckResult[] = [attackCheck];
-    const playerAttack = getPlayerStatBreakdown(sourcePlayer, 'atk').statValue;
-    const skillMultiplier = skill?.effect.kind === 'damage_multiplier' ? skill.effect.multiplier : 1;
-    const damage = attackCheck.success
-      ? Math.max(1, Math.floor(playerAttack * skillMultiplier) - unit.stats.def)
-      : 0;
-    const targetHp = attackCheck.success
-      ? Math.max(0, target.currentHp - damage)
-      : target.currentHp;
-    const attackText = attackCheck.success
-      ? `${skill?.name ?? '攻擊'}命中，對${unit.name}造成 ${damage} 點傷害。`
-      : `${skill?.name ?? '攻擊'}未命中${unit.name}。`;
-    const timedPlayer = advanceGameTime(sourcePlayer, 'combatRound');
-    const actionPlayer = skill ? { ...timedPlayer, mp: timedPlayer.mp - skill.costMp } : timedPlayer;
-    const combatActionPlayer = unit.requiresEncounter ? actionPlayer : withUnitHp(actionPlayer, unit.id, targetHp, targetHp <= 0);
-
-    if (targetHp <= 0) {
-      // 單位一致：擊倒任何單位都走同一流程。取得其持有物、依掉落表擲骰、依公式給予經驗
-      // （地區居民的經驗可由劇本關閉，殺害的後果由勢力聲望承擔），並記入擊倒數與任務進度。
-      const looted = takeHoldings(combatActionPlayer, unit.id, unit.name);
-      const dropItems = (unit.loot?.dropItems ?? []).flatMap((drop) => {
-        if (!globalThis.crypto?.getRandomValues) return [];
-        const roll = new Uint32Array(1);
-        globalThis.crypto.getRandomValues(roll);
-        return roll[0] / 0x1_0000_0000 < drop.chance ? [{ itemId: drop.itemId, quantity: 1 }] : [];
-      });
-      const lootGold = unit.loot?.gold ?? 0;
-      const expGain = unit.requiresEncounter || scenario.rules.residentKillGrantsExp ? unit.expReward : 0;
-      const questUpdates = sourcePlayer.activeQuests.filter((quest) => quest.status === 'in_progress')
-        .map((quest) => ({ questId: quest.questId, status: 'completed' as const }));
-      const nextPlayer = applyStateChanges(looted.player, {
-        storyText: '', suggestedActions: [],
-        stateChanges: {
-          expChange: expGain,
-          goldChange: lootGold,
-          addItems: dropItems,
-          defeatedUnits: [{ unitId: unit.id, quantity: 1 }],
-          questUpdates
-        }
-      }, 'game');
-      const completedQuests = nextPlayer.activeQuests.filter((quest) => quest.status === 'completed' &&
-        sourcePlayer.activeQuests.some((previous) => previous.questId === quest.questId && previous.status === 'in_progress'));
-      // 唯一個體擊倒即永久死亡（寫入死亡事件）；族群樣板代表一群個體，不會因單次擊倒而消失。
-      const victoryState = unit.population ? { ...nextPlayer } : withUnitHp(nextPlayer, unit.id, 0, true);
-      delete victoryState.combat;
-      delete victoryState.encounteredUnitId;
-      updatePlayer(victoryState, { [unit.id]: { cause: 'combat', killerUnitId: sourcePlayer.unitId } });
-      const gains = [
-        expGain > 0 ? `${expGain} EXP` : '',
-        lootGold + looted.gold > 0 ? `${lootGold + looted.gold} 金幣` : '',
-        ...[...looted.loot, ...dropItems].map((item) => `${getItemById(item.itemId)?.name ?? item.itemId} ×${item.quantity}`)
-      ].filter(Boolean);
-      const levelText = nextPlayer.level > looted.player.level ? ` 📈 升至 Lv.${nextPlayer.level}！` : '';
-      const questText = completedQuests.map((quest) => `任務「${findQuest(sourcePlayer, quest.questId)?.title ?? quest.questId}」完成，需求道具已交付並領取獎勵。`).join('\n');
-      appendSystemMessage(`${unit.isBoss ? '🏆' : '⚔️'} ${attackText}\n${unit.name}已被擊倒！${gains.length ? `獲得 ${gains.join('、')}。` : '沒有獲得任何東西。'}${expGain > 0 ? '' : '（不會獲得經驗）'}${levelText}${questText ? `\n${questText}` : ''}`, checks, true);
-      return;
-    }
-
-    const nextCombat = setEnemyHp(combat, unit.id, targetHp);
-    const enemyTurn = resolveEnemyTurn({ ...combatActionPlayer, combat: nextCombat }, nextCombat, unit);
-    updatePlayer(enemyTurn.player, enemyTurn.deathHints);
-    appendSystemMessage(`${attackText}\n${enemyTurn.text}`, [...checks, enemyTurn.check]);
+    // 攻擊、技能的命中、傷害、擊倒結算與敵方反擊（O45 移至 combatResolution，伏擊與陷阱共用）。
+    const result = resolvePlayerAttack(sourcePlayer, { skill });
+    if (!result) return;
+    updatePlayer(result.player, result.deathHints);
+    appendSystemMessage(result.text, result.checks, !!result.victory);
   };
-
   const handleAttack = () => handleCombatAction();
 
   const handleUseSkill = (skillId: string) => {
@@ -975,13 +931,32 @@ export default function App() {
     const combatNext = combatUnit.requiresEncounter ? next : withUnitHp(next, combatUnit.id, getCombatTarget(player.combat)?.currentHp ?? 0);
     const enemyTurn = resolveEnemyTurn({ ...combatNext, combat: player.combat }, player.combat, combatUnit);
     updatePlayer(enemyTurn.player, enemyTurn.deathHints);
-    appendSystemMessage(`使用${item.name}，${details}。\n${enemyTurn.text}`, [enemyTurn.check]);
+    appendSystemMessage(`使用${item.name}，${details}。\n${enemyTurn.text}`, enemyTurn.checks);
   };
 
   const handleSendAction = async (actionText: string) => {
     // 角色決策進行中（O34 第 2 階段）不接受新行動；UI 已停用，這裡再擋一次，避免日後新入口繞過。
     if (agentThinking) return;
     const isQuestion = /(?:如何|怎麼|能否|可不可以|是否|請問|教我|詢問|不要|不想|無法|不能)/u.test(actionText);
+    // 打字攻擊：原有關鍵字，加上「補上一劍」「結果了牠的性命」等說法（O45 D12，字詞在資料檔）。
+    const attackIntent = !isQuestion && (/(?:攻擊|攻打|打倒|擊倒|砍向|砍|刺向|刺|揮擊|attack|strike|fight)/iu.test(actionText) || isTypedCombatText(actionText)) &&
+      !/(?:攻擊自己|打自己|刺自己|砍自己)/u.test(actionText);
+    if (!player.combat && canPlayerAct(player)) {
+      // 打字伏擊（O45 D12）：對玩家先發現的對象直接走伏擊規則，不呼叫 AI。
+      const ambushTarget = !isQuestion && isTypedAmbushText(actionText) ? getAmbushableUnit(player) : undefined;
+      if (ambushTarget) {
+        executeAmbush(ambushTarget.id, actionText);
+        return;
+      }
+      // 被發現（O45 D1、D9）：攻擊與明確移動以外的行動，會讓敵人搶先出手。
+      if (!attackIntent && resolveExplicitTravelIntent(actionText, player).kind !== 'resolved' && preemptByEnemy(actionText)) return;
+      // 打字設陷阱（O45 D4）：有指定合法時長就照時長，否則用預設時長。
+      if (!isQuestion && isTypedTrapText(actionText)) {
+        const waitIntent = parseWaitIntent(actionText);
+        executeSetTrap(waitIntent?.kind === 'duration' && isValidWaitMinutes(waitIntent.minutes) ? waitIntent.minutes : combatRules.defaultTrapWaitMinutes, actionText);
+        return;
+      }
+    }
     const useVerb = /(?:使用|喝|飲用|服用|吃下|吃|use|consume)/iu.test(actionText);
     const requestedItemMatches = useVerb && !isQuestion
       ? itemsDatabase.filter((item) => item.type === 'consumable' && (actionText.includes(item.name) || actionText.includes(item.id)))
@@ -1016,7 +991,6 @@ export default function App() {
       return;
     }
 
-    const attackIntent = !isQuestion && /(?:攻擊|攻打|打倒|擊倒|砍向|砍|刺向|刺|揮擊|attack|strike|fight)/iu.test(actionText) && !/(?:攻擊自己|打自己|刺自己|砍自己)/u.test(actionText);
     if (attackIntent && canPlayerAct(player)) {
       const map = getMapById(player.currentMapId);
       const available = getWorldUnitsAtMap(player.currentMapId, player).filter((unit) => unit.population || !player.unitInstances[unit.id]?.isDead);
@@ -1122,10 +1096,15 @@ export default function App() {
   /** 選項列的系統選項（O50）：一律呼叫與打字相同的執行函式。打開商店、告示板只在選項列內展開，不改變狀態。 */
   const runSystemAction = (action: SystemAction) => {
     if (loading || agentThinking) return;
+    // 被發現（O45 D1、D9）：移動、挑戰、伏擊、戰鬥動作與只展開清單的選項以外，敵人會搶先出手。
+    const exempt = ['travel', 'challenge', 'ambush', 'attack', 'flee', 'openShop', 'noticeBoard'].includes(action.kind) || (action.kind === 'useSkill' && !!player.combat);
+    if (!exempt && preemptByEnemy()) return;
     switch (action.kind) {
       case 'travel': executeTravel(action.mapId); break;
       case 'talk': executeTalk(action.unitId); break;
       case 'challenge': executeStartCombat(action.unitId); break;
+      case 'ambush': executeAmbush(action.unitId); break;
+      case 'trapWait': executeSetTrap(action.minutes); break;
       case 'acceptQuest': handleAcceptQuest(action.questId); break;
       case 'turnInQuest': handleTurnInQuest(action.questId); break;
       case 'buy': handleBuyItem(action.shopId, action.itemId); break;
@@ -1171,7 +1150,8 @@ export default function App() {
       />
       {isSidebarOpen && isNarrow && <div aria-hidden="true" onClick={() => setIsSidebarOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 20 }} />}
       {isSidebarOpen && <div style={isNarrow ? { position: 'fixed', top: 0, right: 0, bottom: 0, maxWidth: '85vw', zIndex: 21, display: 'flex' } : { display: 'flex', flexShrink: 0 }}>
-        <PlayerHUD player={player} onOpenSaveManager={() => setIsSaveManagerOpen(true)} storageWarning={storageWarning || autosaveFailed} busy={loading || agentThinking} onUseItem={handleUseItem} onEquipItem={handleEquipItem} />
+        <PlayerHUD player={player} onOpenSaveManager={() => setIsSaveManagerOpen(true)} storageWarning={storageWarning || autosaveFailed} busy={loading || agentThinking} onUseItem={(itemId) => { if (!player.combat && preemptByEnemy()) return; handleUseItem(itemId); }}
+          onEquipItem={(itemId) => { if (preemptByEnemy()) return; handleEquipItem(itemId); }} />
       </div>}
       {isKeyModalOpen && <ApiKeyModal
         isOpen={true}

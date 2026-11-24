@@ -5,6 +5,7 @@ import { canPlayerAct, isPlayerUnconscious } from './playerStatus';
 import { canTrade } from './tradeRules';
 import { formatDuration, MAX_WAIT_MINUTES } from './gameTime';
 import { hasNoticeBoard } from './storylets';
+import { getAmbushableUnit } from './encounters';
 
 /**
  * 系統選項（O50 第一階段）：前端依目前狀態產生、規則直接執行的動作。
@@ -14,6 +15,8 @@ export type SystemAction =
   | { kind: 'travel'; mapId: string }
   | { kind: 'talk'; unitId: string }
   | { kind: 'challenge'; unitId: string }
+  | { kind: 'ambush'; unitId: string }
+  | { kind: 'trapWait'; minutes: number }
   | { kind: 'acceptQuest'; questId: string }
   | { kind: 'turnInQuest'; questId: string }
   | { kind: 'openShop'; shopId: string }
@@ -155,8 +158,12 @@ export function buildSystemOptions(player: PlayerState): SystemOptionSet {
   const immediate: SystemOption[] = [];
   const presentUnits = getPresentUnits(player);
 
-  // 剛遭遇的敵人：直接列在最前面。
-  const encountered = player.encounteredUnitId ? presentUnits.find((unit) => unit.id === player.encounteredUnitId && unit.requiresEncounter) : undefined;
+  // 剛遭遇的對象：直接列在最前面。玩家先發現時另有「伏擊」（O45 D1、D3）。
+  const encountered = player.encounteredUnitId ? presentUnits.find((unit) => unit.id === player.encounteredUnitId) : undefined;
+  const ambushable = encountered ? getAmbushableUnit(player, encountered.id) : undefined;
+  if (ambushable) {
+    immediate.push({ id: `ambush:${ambushable.id}`, label: `🗡️ 伏擊 ${ambushable.name}`, title: '敏捷檢定；成功時先手一擊必中、傷害加成，失敗時敵方先攻', action: { kind: 'ambush', unitId: ambushable.id } });
+  }
   if (encountered && !getCombatStartBlock(player, encountered.id)) {
     immediate.push({ id: `challenge:${encountered.id}`, label: `⚔️ 挑戰 ${encountered.name}`, action: { kind: 'challenge', unitId: encountered.id } });
   }
@@ -203,9 +210,14 @@ export function buildSystemOptions(player: PlayerState): SystemOptionSet {
     disabledReason: player.mp < skill.costMp ? '魔力不足' : undefined, action: { kind: 'useSkill', skillId: skill.id }
   }));
 
-  const wait: SystemOption[] = scenario.rules.waitOptionMinutes.filter((minutes) => minutes > 0 && minutes <= MAX_WAIT_MINUTES).map((minutes) => ({
-    id: `wait:${minutes}`, label: `⏳ 等待 ${formatDuration(minutes)}`, action: { kind: 'wait', minutes }
-  }));
+  const waitMinutes = scenario.rules.waitOptionMinutes.filter((minutes) => minutes > 0 && minutes <= MAX_WAIT_MINUTES);
+  const wait: SystemOption[] = [
+    ...waitMinutes.map((minutes): SystemOption => ({ id: `wait:${minutes}`, label: `⏳ 等待 ${formatDuration(minutes)}`, action: { kind: 'wait', minutes } })),
+    // 設陷阱等待（O45 D4）：只在非安全地區。
+    ...(map.isSafeZone ? [] : waitMinutes.map((minutes): SystemOption => ({
+      id: `trap:${minutes}`, label: `🪤 設陷阱等待 ${formatDuration(minutes)}`, title: '期間有敵人出現時擲智力檢定；成功時陷阱造成傷害並由你先手', action: { kind: 'trapWait', minutes }
+    })))
+  ];
 
   const groups: SystemOptionGroup[] = [
     { id: 'travel', label: '移動', options: travel },
