@@ -472,7 +472,8 @@ export default function App() {
       const isNewEncounter = encounterAllowed && !!encounterUnit && encounterUnit.id !== nextPlayer.encounteredUnitId;
       const encounterNotice = isNewEncounter && encounterUnit && encounterUnit.id !== turnPlayer.encounteredUnitId
         ? `\n\n👁️ 遭遇：${encounterUnit.name}。${getWorldUnitDisposition(nextPlayer, encounterUnit.id) === 'hostile'
-          ? '你先發現了對方，可從下方選項列伏擊、挑戰，或移動離開；做其他事會被發現並開戰。' : '可從下方選項列挑戰。'}`
+          ? '你先發現了對方，可從下方選項列伏擊、挑戰，或移動離開；做其他事會被發現並開戰。'
+          : '對方目前沒有敵意，你可以觀望或離開；選項列的伏擊會使對方轉為敵對。'}`
         : '';
       if (isNewEncounter && encounterUnit) nextPlayer = setEncounter(nextPlayer, encounterUnit.id, true);
       const deathNotice = !turnPlayer.isDead && nextPlayer.isDead

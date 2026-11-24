@@ -334,7 +334,13 @@ export function applyPostActionRules(before: PlayerState, next: PlayerState): { 
     player = expired.player;
     notices.push({ text: `👁️ ${expired.expiredUnitName}已經不在附近，遭遇結束。`, checks: [] });
   }
-  if (moved && !player.combat && canPlayerAct(player)) {
+  // D10：戰鬥結束或逃跑成功時，再次強制的 30 分鐘從此刻起算（review 第 1 輪建議 5）。
+  if (before.combat && !player.combat && player.residentAggro?.mapId === player.currentMapId) {
+    player = { ...player, residentAggro: { ...player.residentAggro, atMinutes: player.gameTimeMinutes } };
+  }
+  // 本次行動已設定遭遇（例如移動途中被找上、AI 在抵達回合提出遭遇）時不再判定居民，避免蓋掉遭遇；
+  // 下一個行動再由 preemptByEnemy 處理（review 第 1 輪應修 1）。
+  if (moved && !player.combat && !player.encounteredUnitId && canPlayerAct(player)) {
     const resident = findAggressiveResident(player);
     if (resident) {
       const found = resolveFoundByEnemy(player, resident, `⚠️ 這裡的${resident.name}對你懷有敵意。\n`);

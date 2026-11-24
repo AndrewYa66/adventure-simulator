@@ -1028,7 +1028,7 @@ function validateActionMethodData(): string[] {
   if (!(rules.defaultTrapWaitMinutes > 0 && rules.defaultTrapWaitMinutes <= MAX_WAIT_MINUTES)) issues.push(`combatRules.defaultTrapWaitMinutes 需在 1～${MAX_WAIT_MINUTES}`);
   if (!abilities.includes(rules.perception.ability) || !abilities.includes(rules.perception.opponentAbility)) issues.push('combatRules.perception 能力值不合法');
   if (!(rules.flee.opponentSpdDivisor > 0)) issues.push('combatRules.flee.opponentSpdDivisor 需大於 0');
-  for (const key of ['claimPatterns', 'typedCombatPatterns', 'ambushPatterns', 'trapPatterns'] as const) {
+  for (const key of ['claimPatterns', 'typedCombatPatterns', 'suggestionFilterPatterns', 'ambushPatterns', 'trapPatterns'] as const) {
     if (!Array.isArray(rules[key]) || rules[key].some((pattern) => typeof pattern !== 'string' || !pattern)) issues.push(`combatRules.${key} 需為非空字串陣列`);
   }
   return issues;

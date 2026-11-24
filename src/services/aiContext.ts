@@ -197,7 +197,7 @@ function buildRules(): string {
 - 只有玩家行動或明確世界事件確實改變了當前地區單位對玩家的關係時，才在 stateChanges.unitDispositionChanges 回報單位 ID 與 friendly/neutral/hostile；純對話、陣營傾向或臆測不能改變關係。單位關係變更須與 storyText 敘事一致。
 - 每次回應都必須包含 encounterRequest；若玩家尚未實際看見或接觸敵人，設為 null。只有探索、搜索或情境中確實遇見敵人時，才指定本地區可遭遇清單中的 unitId，並在敘事中描述遭遇。不可只因單位存在於地圖資料，就宣稱玩家已遭遇；不可遭遇未列出的敵人。
 - 玩家在對話中明確要求攻擊目前地區的敵人時，不可假裝攻擊已命中、敵人已受傷或已被擊敗；戰鬥與獎勵由遊戲端確定性規則處理，若無法由遊戲端執行，只能說明尚未發起戰鬥。
-- 開戰（combatRequest）：每次回應都必須包含 combatRequest。只有玩家本回合明確要對「可開戰對象」動手時才填入：method 為 attack（正面攻擊）、ambush（偷襲、伏擊；只限 canAmbush 為 true 的對象）或 trap（設陷阱等敵人上門，unitId 填任一可開戰對象或遭遇對象）；否則為 null。填入時 storyText 只描寫接近、埋伏或布置的過程，停在出手的前一刻：不可寫出命中、閃避、受傷、擊倒或逃走，成敗由遊戲擲骰後另行顯示；checkRequest、stateChanges 與 memoryNotes 不會套用。
+- 開戰（combatRequest）：每次回應都必須包含 combatRequest。只有玩家本回合明確要對「可開戰對象」動手時才填入：method 為 attack（正面攻擊）、ambush（偷襲、伏擊；只限 canAmbush 為 true 的對象）或 trap（設陷阱等敵人上門，unitId 填任一可開戰對象或遭遇對象）；射箭、投擲、施法等遠程攻擊同樣用 attack（或可伏擊時的 ambush），不要改用 checkRequest；否則為 null。填入時 storyText 只描寫接近、埋伏或布置的過程，停在出手的前一刻：不可寫出命中、閃避、受傷、擊倒或逃走，成敗由遊戲擲骰後另行顯示；checkRequest、stateChanges 與 memoryNotes 不會套用。
 - 沒有進行中的戰鬥時，不論玩家怎麼描述，storyText 都不可寫出攻防結果（命中、閃避、格擋、受傷、擊殺）；suggestedActions 也不要提供以文字進行的戰鬥動作（遊戲的選項列已有伏擊與挑戰）。
 - encounterEnded：每次回應都必須包含（boolean）。只有目前遭遇的對象在本回合敘事中離開、逃走或走遠時為 true，否則為 false。
 - 不可在敘事中宣稱玩家已使用消耗品、恢復 HP/MP 或已取得金幣/經驗/掉落物，除非對應狀態變更已由遊戲端結算。

@@ -162,7 +162,12 @@ export function buildSystemOptions(player: PlayerState): SystemOptionSet {
   const encountered = player.encounteredUnitId ? presentUnits.find((unit) => unit.id === player.encounteredUnitId) : undefined;
   const ambushable = encountered ? getAmbushableUnit(player, encountered.id) : undefined;
   if (ambushable) {
-    immediate.push({ id: `ambush:${ambushable.id}`, label: `🗡️ 伏擊 ${ambushable.name}`, title: '敏捷檢定；成功時先手一擊必中、傷害加成，失敗時敵方先攻', action: { kind: 'ambush', unitId: ambushable.id } });
+    const provokes = getWorldUnitDisposition(player, ambushable.id) !== 'hostile';
+    immediate.push({
+      id: `ambush:${ambushable.id}`, label: `🗡️ 伏擊 ${ambushable.name}`,
+      title: `敏捷檢定；成功時先手一擊必中、傷害加成，失敗時敵方先攻${provokes ? '。對方目前沒有敵意，伏擊會使對方轉為敵對' : ''}`,
+      action: { kind: 'ambush', unitId: ambushable.id }
+    });
   }
   if (encountered && !getCombatStartBlock(player, encountered.id)) {
     immediate.push({ id: `challenge:${encountered.id}`, label: `⚔️ 挑戰 ${encountered.name}`, action: { kind: 'challenge', unitId: encountered.id } });

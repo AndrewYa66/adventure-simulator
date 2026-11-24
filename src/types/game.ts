@@ -805,6 +805,8 @@ export interface CombatRulesStatic {
   claimPatterns: string[];
   /** 打字的戰鬥說法（開戰、過濾建議行動）。 */
   typedCombatPatterns: string[];
+  /** 有敵人時從建議行動中過濾掉的說法（另含打字戰鬥與伏擊字詞）。 */
+  suggestionFilterPatterns: string[];
   /** 打字伏擊（對玩家先發現的遭遇）。 */
   ambushPatterns: string[];
   /** 打字設陷阱等待。 */

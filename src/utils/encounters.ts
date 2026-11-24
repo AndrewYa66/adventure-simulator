@@ -46,9 +46,10 @@ export function getEncounteredUnit(player: PlayerState): WorldUnitStatic | undef
   if (!player.encounteredUnitId) return undefined;
   const unit = getWorldUnitById(player.encounteredUnitId, player);
   const map = getMapById(player.currentMapId);
-  if (!unit || !map || !unit.mapIds.includes(map.id)) return undefined;
+  // 與 getCombatStartBlock 的「在場」一致：出現在此地區、列在 unitsPresent、非休眠、存活（review 第 1 輪建議 8）。
+  if (!unit || !map || !unit.mapIds.includes(map.id) || !map.unitsPresent.includes(unit.id)) return undefined;
   const state = unit.population ? undefined : player.unitInstances[unit.id];
-  if (state?.isDead || state?.currentHp === 0) return undefined;
+  if (state?.isDead || state?.currentHp === 0 || state?.isDormant) return undefined;
   return unit;
 }
 
@@ -111,7 +112,7 @@ export const hasCombatClaim = (storyText: string) => includesAny(storyText, comb
 /** 有遭遇時過濾掉打字戰鬥的建議行動（D15）。 */
 export function filterCombatSuggestions(suggestions: string[]): string[] {
   return suggestions.filter((text) => !isTypedCombatText(text) && !isTypedAmbushText(text) &&
-    !/(?:攻擊|攻打|砍向|刺向|揮擊|拔劍|衝向)/u.test(text));
+    !includesAny(text, combatRules.suggestionFilterPatterns));
 }
 
 /** 目前是否有敵人可交戰（遭遇中，或在場有敵對單位）：只在此時偵測攻防宣稱，降低誤判。 */
