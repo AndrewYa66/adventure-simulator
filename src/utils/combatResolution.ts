@@ -93,7 +93,8 @@ export function resolveEnemyTurn(player: PlayerState, combat: NonNullable<Player
   // 擊倒玩家的單位依同一規則獲得玩家的擊倒經驗，並可能升級。
   const victorGrowth = isDead ? grantUnitExp(player.unitInstances, unit.id, getPlayerWorldUnit(player).expReward, player.world) : undefined;
   const deathHints: Record<string, DeathHint> = isDead ? { [player.unitId]: { cause: 'combat', killerUnitId: unit.id } } : {};
-  const nextRound = openingStrike ? combat.round : combat.round + 1;
+  // 敵方偷襲以第 0 回合表示先攻一擊，結算後同樣進入下一回合（第 1 回合）。
+  const nextRound = combat.round + 1;
   const base: PlayerState = {
     ...player, hp, isDead, statusEffects,
     ...(victorGrowth ? { unitInstances: victorGrowth.instances } : {}),

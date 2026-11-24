@@ -939,7 +939,8 @@ export default function App() {
     if (agentThinking) return;
     const isQuestion = /(?:如何|怎麼|能否|可不可以|是否|請問|教我|詢問|不要|不想|無法|不能)/u.test(actionText);
     // 打字攻擊：原有關鍵字，加上「補上一劍」「結果了牠的性命」等說法（O45 D12，字詞在資料檔）。
-    const attackIntent = !isQuestion && (/(?:攻擊|攻打|打倒|擊倒|砍向|砍|刺向|刺|揮擊|attack|strike|fight)/iu.test(actionText) || isTypedCombatText(actionText)) &&
+    // 補充的說法只在有敵人可交戰時才視為攻擊，避免一般對話（例如提到「踢倒」）誤觸開戰。
+    const attackIntent = !isQuestion && (/(?:攻擊|攻打|打倒|擊倒|砍向|砍|刺向|刺|揮擊|attack|strike|fight)/iu.test(actionText) || (isTypedCombatText(actionText) && hasEnemyNearby(player))) &&
       !/(?:攻擊自己|打自己|刺自己|砍自己)/u.test(actionText);
     if (!player.combat && canPlayerAct(player)) {
       // 打字伏擊（O45 D12）：對玩家先發現的對象直接走伏擊規則，不呼叫 AI。

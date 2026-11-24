@@ -58,6 +58,15 @@ const innService = trade.getAvailableServices(base)[0];
 const startQuest = data.questsDatabase.find((quest) => quests.canAcceptQuest(base, quest));
 const startNpcs = data.getResidentUnitIds(startMap).map((id) => data.getWorldUnitById(id));
 const otherNpc = data.getWorldUnitById(data.getResidentUnitIds(otherMap)[0]);
+// O45 戰鬥前行動：野外地區、對玩家敵對且無任務前置的可遭遇單位（玩家先發現），與中立的可遭遇單位。
+const { module: encounters } = await runnerImport('/src/utils/encounters.ts');
+const wildMap = data.mapsDatabase.find((map) => !map.isSafeZone && data.getEncounterUnitIds(map).some((id) => data.getWorldUnitDisposition(base, id) === 'hostile' && !data.getWorldUnitById(id).source.requiredQuestId));
+const foe = data.getWorldUnitById(data.getEncounterUnitIds(wildMap).find((id) => data.getWorldUnitDisposition(base, id) === 'hostile' && !data.getWorldUnitById(id).source.requiredQuestId));
+const neutralFoe = data.getWorldUnitById(data.getEncounterUnitIds(wildMap).find((id) => data.getWorldUnitDisposition(base, id) !== 'hostile') ?? foe.id);
+const wildNpc = data.getWorldUnitById(data.getResidentUnitIds(wildMap)[0]);
+const atWild = { ...base, currentMapId: wildMap.id };
+const spottedFoe = encounters.setEncounter(atWild, foe.id, true);
+const metNeutral = encounters.setEncounter(atWild, neutralFoe.id, false);
 const merchant = startNpcs.find((unit) => unit.shopId && unit.id !== innService?.shopId && data.getShopById(unit.shopId)?.ownerUnitId === unit.id) ?? startNpcs[1];
 
 // 世界事件情境：前一位角色在戰鬥中殺死委託人 NPC 後自我了斷，新角色在同一世界接續。
@@ -170,6 +179,23 @@ const scenarios = [
     check: (r) => none(r.stateChanges?.unitDispositionChanges), expect: '不改變關係' },
   { group: '遭遇', name: '和 NPC 閒聊', player: elsewhere, action: `我坐下來和${otherNpc?.name ?? '旅人'}聊聊最近的見聞`,
     check: (r) => none(r.encounterRequest), expect: '無 encounterRequest' },
+  // O45 戰鬥前行動：AI 只選手段與目標，敘事停在出手前一刻，不宣稱命中或擊殺。
+  { group: '戰鬥前行動', name: '悄悄繞到背後出手', player: spottedFoe, action: `我屏住呼吸，悄悄繞到${foe.name}背後，打算出其不意地出手`,
+    check: (r) => r.combatRequest?.unitId === foe.id && ['ambush', 'attack'].includes(r.combatRequest?.method) && !encounters.hasCombatClaim(r.storyText), expect: 'combatRequest ambush/attack、不宣稱攻防' },
+  { group: '戰鬥前行動', name: '正面衝鋒', player: spottedFoe, action: `我拔出劍，大吼一聲正面衝向${foe.name}`,
+    check: (r) => r.combatRequest?.unitId === foe.id && !encounters.hasCombatClaim(r.storyText), expect: 'combatRequest 指向遭遇對象、不宣稱攻防' },
+  { group: '戰鬥前行動', name: '一劍砍頭', player: spottedFoe, action: `我一劍砍下${foe.name}的頭`,
+    check: (r) => r.combatRequest?.unitId === foe.id && !encounters.hasCombatClaim(r.storyText), expect: 'combatRequest、敘事不寫出擊殺' },
+  { group: '戰鬥前行動', name: '拉弓射擊', player: spottedFoe, action: `我舉起弓瞄準${foe.name}射出一箭`,
+    check: (r) => r.combatRequest?.unitId === foe.id && !encounters.hasCombatClaim(r.storyText), expect: 'combatRequest、敘事不寫出命中' },
+  { group: '戰鬥前行動', name: '閃過撲擊反擊', player: metNeutral, action: `我閃過${neutralFoe.name}的撲擊，反手一刀砍向牠`,
+    check: (r) => (r.combatRequest === null || r.combatRequest?.unitId === neutralFoe.id) && !encounters.hasCombatClaim(r.storyText), expect: '沒開戰或開戰對象正確、不宣稱攻防' },
+  { group: '戰鬥前行動', name: '只是觀察', player: spottedFoe, action: `我躲在樹叢裡觀察${foe.name}的動向`,
+    check: (r) => none(r.combatRequest) && !encounters.hasCombatClaim(r.storyText), expect: '無 combatRequest、不宣稱攻防' },
+  { group: '戰鬥前行動', name: '等對方自己離開', player: metNeutral, action: `我停下腳步保持距離，等${neutralFoe.name}自己走開`,
+    check: (r) => none(r.combatRequest) && !encounters.hasCombatClaim(r.storyText), expect: '無 combatRequest（encounterEnded 可為 true）' },
+  { group: '戰鬥前行動', name: '向 NPC 打聽', player: metNeutral, action: `${wildNpc?.name ?? '旅人'}，這附近安不安全？`,
+    check: (r) => none(r.combatRequest), expect: '無 combatRequest' },
   { group: '世界事件', name: '向目擊者詢問死因', player: successor, history: afterDeathHistory,
     action: `${witnessNpc.name}，${victimNpc.name}是怎麼死的？是誰下的手？`,
     check: (r) => r.storyText.includes(formerName), expect: `目擊者說出兇手 ${formerName}` },
@@ -275,6 +301,8 @@ for (const model of models) {
       travelRequest: response.travelRequest ?? null,
       unitDispositionChanges: response.stateChanges?.unitDispositionChanges ?? [],
       encounterRequest: response.encounterRequest ?? null,
+      combatRequest: response.combatRequest ?? null,
+      encounterEnded: response.encounterEnded || null,
       eventProposals: response.eventProposals ?? [],
       questProposals: response.questProposals ?? [],
       memoryNotes: response.memoryNotes ?? [],

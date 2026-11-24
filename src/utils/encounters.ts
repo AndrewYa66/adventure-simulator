@@ -111,7 +111,7 @@ export const hasCombatClaim = (storyText: string) => includesAny(storyText, comb
 /** 有遭遇時過濾掉打字戰鬥的建議行動（D15）。 */
 export function filterCombatSuggestions(suggestions: string[]): string[] {
   return suggestions.filter((text) => !isTypedCombatText(text) && !isTypedAmbushText(text) &&
-    !/(?:攻擊|攻打|砍|刺|揮擊|殺)/u.test(text));
+    !/(?:攻擊|攻打|砍向|刺向|揮擊|拔劍|衝向)/u.test(text));
 }
 
 /** 目前是否有敵人可交戰（遭遇中，或在場有敵對單位）：只在此時偵測攻防宣稱，降低誤判。 */
