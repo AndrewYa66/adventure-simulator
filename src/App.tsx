@@ -470,12 +470,17 @@ export default function App() {
       // 移動途中的遭遇已在移動說明中列出，AI 重複提出同一單位時不再提示。
       // 主動探索遇到（O45 D1）：玩家先發現對方；對同一單位重複提出時沿用原本的遭遇（不重設時限）。
       const isNewEncounter = encounterAllowed && !!encounterUnit && encounterUnit.id !== nextPlayer.encounteredUnitId;
+      const hostileEncounter = !!encounterUnit && getWorldUnitDisposition(nextPlayer, encounterUnit.id) === 'hostile';
+      // 本回合的檢定失敗（例如搜索時弄出聲響）卻遇到敵對對象：視為被對方找上，改擲察覺（試玩發現的敘事與規則不一致）。
+      const encounterFound = isNewEncounter && encounterUnit && hostileEncounter && checkResult && !checkResult.success
+        ? resolveFoundByEnemy(nextPlayer, encounterUnit, '') : undefined;
       const encounterNotice = isNewEncounter && encounterUnit && encounterUnit.id !== turnPlayer.encounteredUnitId
-        ? `\n\n👁️ 遭遇：${encounterUnit.name}。${getWorldUnitDisposition(nextPlayer, encounterUnit.id) === 'hostile'
-          ? '你先發現了對方，可從下方選項列伏擊、挑戰，或移動離開；做其他事會被發現並開戰。'
+        ? `\n\n👁️ 遭遇：${encounterUnit.name}。${encounterFound ? `你的行動驚動了對方。\n${encounterFound.text}`
+          : hostileEncounter ? '你先發現了對方，可從下方選項列伏擊、挑戰，或移動離開；做其他事會被發現並開戰。'
           : '對方目前沒有敵意，你可以觀望或離開；選項列的伏擊會使對方轉為敵對。'}`
         : '';
-      if (isNewEncounter && encounterUnit) nextPlayer = setEncounter(nextPlayer, encounterUnit.id, true);
+      if (encounterFound) nextPlayer = encounterFound.player;
+      else if (isNewEncounter && encounterUnit) nextPlayer = setEncounter(nextPlayer, encounterUnit.id, !(checkResult && !checkResult.success));
       const deathNotice = !turnPlayer.isDead && nextPlayer.isDead
         ? '\n\n☠️ 你的生命值降至 0，角色死亡。可讀取死亡前的自動存檔重新嘗試。'
         : '';
@@ -534,7 +539,8 @@ export default function App() {
           ? `\n\n🛏️ 使用${serviceName}，支付 ${serviceResult.totalPrice} 金幣，經過 ${formatDuration(ACTION_DURATIONS.rest)}，生命與魔力已恢復。`
           : `\n\n⚠️ ${serviceName}未完成：${serviceResult && !serviceResult.ok ? serviceResult.reason : '找不到這項服務。'}`;
       updatePlayer(nextPlayer, nextPlayer.isDead && !player.isDead
-        ? { [player.unitId]: { cause: isSelfDamageIntent(actionText) ? 'self_inflicted' : 'misadventure', note: checkResult?.reason } }
+        ? (encounterFound?.deathHints && nextPlayer.isDead ? encounterFound.deathHints
+          : { [player.unitId]: { cause: isSelfDamageIntent(actionText) ? 'self_inflicted' : 'misadventure', note: checkResult?.reason } })
         : resolvedTravel?.foundByEnemy?.deathHints);
       applied = true;
       const falseClaimNotice = falseCombatClaim
@@ -572,7 +578,8 @@ export default function App() {
           sender: 'ai',
           text: `${storyText}${falseClaimNotice}${combatRequestNotice}${storyletNotice}${postedQuestNotice}${questNotice}${questCompletionNotice}${unitTransferNotice}${unitDispositionNotice}${encounterEndedNotice}${encounterNotice}${serviceNotice}${locationNotice}${deathNotice}`,
           options: suggestions,
-          checkResults: resolvedTravel?.foundByEnemy?.checks.length ? resolvedTravel.foundByEnemy.checks : undefined,
+          checkResults: [...(resolvedTravel?.foundByEnemy?.checks ?? []), ...(encounterFound?.checks ?? [])].length
+            ? [...(resolvedTravel?.foundByEnemy?.checks ?? []), ...(encounterFound?.checks ?? [])] : undefined,
           travelOptions: textTravelIntent.kind === 'ambiguous'
             ? textTravelIntent.candidates.map((candidate) => ({ mapId: candidate.id, name: candidate.name }))
             : undefined,
