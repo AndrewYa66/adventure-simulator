@@ -12,6 +12,7 @@ import type {
   LevelBenchmarkStatic,
   MapFacility,
   MapStatic,
+  PartyRulesStatic,
   UnitInstance,
   PlayerState,
   QuestStatic,
@@ -56,6 +57,7 @@ import rawAIContext from './ai_context.json';
 import rawStory from './story.json';
 import rawAgentRules from './agent_rules.json';
 import rawActionMethods from './action_methods.json';
+import rawPartyRules from './party_rules.json';
 
 // 進行靜態型別轉型，確保導出的資料陣列完全符合 DTO 規範
 export const itemsDatabase: ItemStatic[] = rawItems as ItemStatic[];
@@ -79,6 +81,8 @@ export const agentRules: AgentRulesStatic = rawAgentRules as AgentRulesStatic;
 /** 手段 → 結果表與戰鬥前規則（O45）。 */
 export const actionMethodData: ActionMethodDataStatic = rawActionMethods as ActionMethodDataStatic;
 export const combatRules = actionMethodData.combatRules;
+/** 隊伍規則（O35-1，party_rules.json）。 */
+export const partyRules: PartyRulesStatic = rawPartyRules as PartyRulesStatic;
 export const getActionMethod = (id: string) => actionMethodData.methods.find((method) => method.id === id);
 /** 重要角色的行動種類（O34 第 1 階段）。 */
 export const AGENT_ACTION_TYPES: AgentActionType[] = ['idle', 'post_quest', 'trigger_event', 'change_faction_relation'];
@@ -225,7 +229,13 @@ export interface UnitWorldSource {
   unitInstances?: Record<string, Pick<UnitInstance, 'level' | 'isDormant'>>;
   world?: { modifiers: WorldModifier[] };
   gameTimeMinutes?: number;
+  /** 隊伍（O35-1）：同伴的所在地等於玩家所在地，不再算原居所的在場單位。 */
+  party?: string[];
+  currentMapId?: string;
 }
+
+/** 單位是否在玩家的隊伍中（O35-1）。 */
+export const isInParty = (source: Pick<UnitWorldSource, 'party'> | undefined, unitId: string): boolean => !!source?.party?.includes(unitId);
 
 /**
  * 共用單位查詢。
@@ -280,16 +290,33 @@ export const createDefaultUnitInstance = (template: UnitStatic, options: { awake
 export const createDefaultUnitInstances = (): Record<string, UnitInstance> =>
   Object.fromEntries(unitTemplatesDatabase().map((template) => [template.id, createDefaultUnitInstance(template)]));
 
-/** 地圖上列出的單位（依資料順序）。潛伏中的單位不在場，不列出。 */
+/**
+ * 地圖上在場的單位（依資料順序）。潛伏中的單位不在場，不列出。
+ * 傳入隊伍時（O35-1）：同伴不算原居所的在場單位，改列在玩家所在地（排在該地單位之後）。
+ */
 export const getWorldUnitsAtMap = (mapId: string, source?: UnitWorldSource): WorldUnitStatic[] => {
   const map = getMapById(mapId);
   if (!map) return [];
-  return map.unitsPresent
+  const companions = source?.currentMapId === mapId ? (source.party ?? []).filter((unitId) => !map.unitsPresent.includes(unitId)) : [];
+  return [...map.unitsPresent.filter((unitId) => !isInParty(source, unitId) || source?.currentMapId === mapId), ...companions]
     .flatMap((unitId) => {
       if (source?.unitInstances?.[unitId]?.isDormant) return [];
       const unit = getWorldUnitById(unitId, source);
       return unit ? [unit] : [];
     });
+};
+
+/** 單位此刻是否在某地區（O35-1）：同伴跟著玩家，其他單位依地圖資料；不檢查存活。 */
+export const isUnitAtMap = (source: Pick<UnitWorldSource, 'party' | 'currentMapId'>, unitId: string, mapId: string): boolean =>
+  isInParty(source, unitId) ? source.currentMapId === mapId : !!getMapById(mapId)?.unitsPresent.includes(unitId);
+
+/** 此刻在某地區的居民 ID（O35-1）：地圖居民扣掉跟玩家離開的同伴，玩家所在地另加隊伍同伴；不檢查存活。 */
+export const getResidentIdsAt = (source: Pick<UnitWorldSource, 'party' | 'currentMapId'>, mapId: string): string[] => {
+  const map = getMapById(mapId);
+  if (!map) return [];
+  const residents = getResidentUnitIds(map).filter((unitId) => !isInParty(source, unitId) || source.currentMapId === mapId);
+  const companions = source.currentMapId === mapId ? (source.party ?? []).filter((unitId) => !residents.includes(unitId)) : [];
+  return [...residents, ...companions];
 };
 
 /** 地區居民（進入地區即在場、可交談；不含需遭遇的單位）的 ID。 */
@@ -502,7 +529,28 @@ export function validateWorldUnitData(): string[] {
     for (const drop of unit.loot?.dropItems ?? []) {
       if (!getItemById(drop.itemId) || !(drop.chance > 0 && drop.chance <= 1)) issues.push(`${unit.id}: 掉落物 ${drop.itemId} 無效或機率不在 0～1`);
     }
+    // O35-1：成群遭遇數量只用於族群樣板；同伴只能是地區居民的唯一個體。
+    if (unit.groupSize !== undefined) {
+      const { min, max } = unit.groupSize;
+      if (!unit.population) issues.push(`${unit.id}: groupSize 只能用於族群樣板（population）`);
+      if (!Number.isInteger(min) || !Number.isInteger(max) || min < 1 || max < min || max > 10) issues.push(`${unit.id}: groupSize 須為整數且 1 ≤ min ≤ max ≤ 10`);
+    }
+    if (unit.companion) {
+      const label = `${unit.id}.companion`;
+      if (typeof unit.companion.recruitable !== 'boolean') issues.push(`${label}: recruitable 須為 true 或 false`);
+      if (unit.population || unit.requiresEncounter || unit.dormantUntilOccupation) issues.push(`${label}: 同伴須為地區居民的唯一個體（不可是族群、需遭遇或潛伏單位）`);
+      const conditions = unit.companion.joinConditions ?? {};
+      validateFactionConditions(label, { reputation: conditions.reputation }, issues);
+      for (const flag of [...(conditions.flags ?? []), ...(conditions.excludesFlags ?? [])]) {
+        if (typeof flag !== 'string' || !flag.trim()) issues.push(`${label}: 旗標名稱無效`);
+      }
+    }
   }
+
+  if (!(Number.isInteger(partyRules.maxCompanions) && partyRules.maxCompanions >= 1 && partyRules.maxCompanions <= 6)) issues.push('party_rules.maxCompanions 須為 1～6 的整數');
+  if (!(partyRules.aggroWeights?.player > 0 && partyRules.aggroWeights?.companion > 0)) issues.push('party_rules.aggroWeights 的權重須大於 0');
+  if (!(partyRules.companionHealThreshold > 0 && partyRules.companionHealThreshold < 1)) issues.push('party_rules.companionHealThreshold 須介於 0 與 1 之間');
+  if (!(Number.isInteger(partyRules.reviveHp) && partyRules.reviveHp >= 1)) issues.push('party_rules.reviveHp 須為正整數');
 
   for (const shop of shopsDatabase) {
     if (getUnitTemplateById(shop.ownerUnitId)?.shopId !== shop.id) issues.push(`${shop.id}: 經營者 ${shop.ownerUnitId} 不存在或未指向此商店`);
@@ -518,6 +566,13 @@ export function validateWorldUnitData(): string[] {
   }
 
   return issues;
+}
+
+/** 同伴入隊、離隊效果（O35-1）：須指向可招募的單位。 */
+function validatePartyEffects(label: string, effects: { partyJoin?: string[]; partyLeave?: string[] }, issues: string[]) {
+  for (const unitId of [...(effects.partyJoin ?? []), ...(effects.partyLeave ?? [])]) {
+    if (!getUnitTemplateById(unitId)?.companion?.recruitable) issues.push(`${label}: 入隊／離隊效果的 ${unitId} 不是可招募的同伴`);
+  }
 }
 
 /** 驗證靜態事件：ID 唯一、引用可解析、效果與世界修正格式正確。 */
@@ -578,6 +633,7 @@ export function validateEventData(): string[] {
     for (const unitId of [...(event.requires?.unitsAlive ?? []), ...(event.requires?.unitsDead ?? [])]) {
       if (!unitExists(unitId)) issues.push(`${label}: 找不到單位 ${unitId}`);
     }
+    validatePartyEffects(label, event.effects, issues);
     for (const mapId of event.requires?.mapIds ?? []) {
       if (!getMapById(mapId)) issues.push(`${label}: 找不到地圖 ${mapId}`);
     }
@@ -875,6 +931,7 @@ export function validateStoryData(): string[] {
 
     const onComplete = storylet.onComplete;
     if (!onComplete?.summary?.trim()) issues.push(`${label}: 缺少完成描述`);
+    validatePartyEffects(label, onComplete ?? {}, issues);
     if (onComplete?.knownBy !== undefined && !['witnesses', 'faction', 'region', 'world'].includes(onComplete.knownBy)) issues.push(`${label}: 無效的完成傳播範圍 ${onComplete.knownBy}`);
     if (onComplete?.knownBy === 'faction') issues.push(`${label}: 完成描述的傳播範圍不支援同勢力`);
     for (const eventId of onComplete?.eventIds ?? []) {

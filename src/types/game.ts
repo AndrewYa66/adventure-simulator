@@ -169,6 +169,41 @@ export interface UnitStatic extends UnitBuild {
   }[];
   /** 重要角色（O34）：設定後每個遊戲日依盤算決策一次；未設定的單位只有規則行為。 */
   agent?: AgentProfileStatic;
+  /** 可招募為同伴（O35-1）；未設定代表不能入隊。 */
+  companion?: CompanionProfileStatic;
+  /** 族群樣板的成群遭遇數量（O35-1）：開戰時擲 min～max 隻；未設定為 1。 */
+  groupSize?: { min: number; max: number };
+}
+
+/** 同伴入隊條件（O35-1）：全部成立才能由選項列邀請；劇情片段與事件的入隊效果不檢查這些條件。 */
+export interface CompanionJoinConditions {
+  /** 對玩家不敵對（個人關係與勢力聲望）。 */
+  notHostile?: boolean;
+  flags?: string[];
+  excludesFlags?: string[];
+  /** 玩家對勢力的聲望等級須介於 minTier 與 maxTier 之間（含）。 */
+  reputation?: FactionConditions['reputation'];
+}
+
+/** 同伴設定（units.json 的 companion，O35-1）。 */
+export interface CompanionProfileStatic {
+  recruitable: boolean;
+  joinConditions?: CompanionJoinConditions;
+  /** 給 AI 的個性與口吻（同伴插話用）。 */
+  traits?: string[];
+  voice?: string;
+}
+
+/** 隊伍規則（party_rules.json，O35-1），數值皆可調。 */
+export interface PartyRulesStatic {
+  /** 同伴上限（不含玩家）。 */
+  maxCompanions: number;
+  /** 敵人選目標的仇恨基礎權重。 */
+  aggroWeights: { player: number; companion: number };
+  /** 同伴在我方有人 HP 比例低於此值時優先治療。 */
+  companionHealThreshold: number;
+  /** 倒地同伴在勝利或逃跑成功後以此 HP 起身。 */
+  reviveHp: number;
 }
 
 /** 重要角色的行動種類（O34 第 1 階段）。 */
@@ -308,7 +343,17 @@ export interface UnitInstance {
   diedAtMinutes?: number;
   /** 潛伏中（尚未經由「他方佔領」出現）：視為不在場，isDead 為 true 但沒有死亡事件。 */
   isDormant?: boolean;
+  /** 目前 MP（O35-1，同伴使用技能）；未設定代表全滿。 */
+  currentMp?: number;
+  /** 狀態效果（O35-1：昏迷、嘲諷），與玩家相同。 */
+  statusEffects?: CombatStatusEffect[];
+  /** 同伴在戰鬥中 HP 歸零為倒地，不是死亡（O35-1）；勝利或逃跑成功後起身。 */
+  downed?: boolean;
 }
+
+/** 狀態效果（O35-1）：昏迷者跳過回合；嘲諷使敵人在持續回合內只攻擊施放者。 */
+export type CombatStatusId = 'unconscious' | 'taunt';
+export interface CombatStatusEffect { id: CombatStatusId; remainingTurns: number }
 
 export interface TransactionRecord {
   id: string;
@@ -444,6 +489,9 @@ export interface EventStatic {
   effects: {
     setFlags?: string[];
     clearFlags?: string[];
+    /** 同伴入隊、離隊（O35-1）：以單位 ID 指定，須為可招募的存活單位。 */
+    partyJoin?: string[];
+    partyLeave?: string[];
     worldModifiers?: { scope: WorldModifierScope; stat: UnitStatKey; op: 'add' | 'multiply'; value: number; durationMinutes?: number }[];
   } & FactionEffects;
   knownBy: EventKnownBy;
@@ -606,6 +654,9 @@ export interface StoryletStatic {
     /** 完成時寫入事件紀錄的公開結果。 */
     summary: string;
     knownBy?: EventKnownBy;
+    /** 同伴入隊、離隊（O35-1）。 */
+    partyJoin?: string[];
+    partyLeave?: string[];
   };
   scene: StoryletScene;
 }
@@ -745,20 +796,24 @@ export interface QuestProposal {
 // ==========================================
 
 /**
- * 戰鬥參與者：party（玩家、日後的同伴）的 HP 存於各自存檔/實例；enemy 的 HP 在戰鬥中追蹤。
- * 結構預留多對多戰鬥（O35）；目前遊戲規則仍為玩家對單一敵人。
+ * 戰鬥參與者（O35-1 多對多）：key 是戰鬥內的編號（我方為單位 ID；成群的同種敵人為「單位 ID#序號」）。
+ * 我方（玩家、同伴）的 HP、MP 與狀態存在玩家存檔與單位實例；敵方的 HP 與狀態在戰鬥中追蹤。
  */
 export type CombatParticipant =
-  | { unitId: string; side: 'party' }
-  | { unitId: string; side: 'enemy'; currentHp: number };
+  | { key: string; unitId: string; side: 'party' }
+  | { key: string; unitId: string; side: 'enemy'; label: string; currentHp: number; statusEffects?: CombatStatusEffect[] };
 
 export interface CombatState {
   round: number;
   participants: CombatParticipant[];
-  /** 玩家目前攻擊的敵方單位 ID。 */
-  targetUnitId: string;
-  /** 開場方式（O45）：一般、玩家伏擊、陷阱、敵方偷襲。舊快照沒有此欄位時視為一般。 */
-  opening?: CombatOpening;
+  /** 行動順序（參與者 key）：開戰時依 SPD 由高到低排定，整場固定。 */
+  turnOrder: string[];
+  /** 目前行動者在 turnOrder 的索引；輪到玩家時才等待輸入。 */
+  turnIndex: number;
+  /** 玩家鎖定的敵人 key。 */
+  targetKey: string;
+  /** 開場方式（O45）：一般、玩家伏擊、陷阱、敵方偷襲。 */
+  opening: CombatOpening;
 }
 
 /** 戰鬥開場方式（O45）。 */
@@ -838,7 +893,8 @@ export interface WorldEvent {
   awareFactionIds: string[];
   /** 觸發原因，例如「戰鬥」「條件成立自動觸發」「AI 提議」。 */
   cause: string;
-  death?: { victimUnitId: string; victimName: string; cause: DeathCause; killerUnitId?: string; killerName?: string };
+  /** killerUnitId 是承擔後果者（同伴出手時為玩家，O35-1 D32）；actorUnitId 是實際出手者（與 killer 不同時才記）。 */
+  death?: { victimUnitId: string; victimName: string; cause: DeathCause; killerUnitId?: string; killerName?: string; actorUnitId?: string; actorName?: string };
   /** 靜態事件 ID（scenario_event）。 */
   eventId?: string;
   /** 造成的改變。 */
@@ -913,7 +969,7 @@ export interface PlayerState {
   setupComplete: boolean;
   abilities: AbilityScores;
   isDead: boolean;
-  statusEffects: { id: 'unconscious'; remainingTurns: number }[];
+  statusEffects: CombatStatusEffect[];
   level: number;
   exp: number;
   hp: number;
@@ -961,6 +1017,8 @@ export interface PlayerState {
   }[];
   /** 進行中的戰鬥；掉落與特殊招式取自單位樣板的功能欄位。 */
   combat?: CombatState;
+  /** 隊伍中的同伴單位 ID（O35-1，角色層）；所在地永遠等於玩家所在地，由規則推導，存檔只記成員。 */
+  party: string[];
   /** 世界狀態：事件紀錄、世界修正與地區結算（世界層）。 */
   world: WorldRuntimeState;
 }

@@ -42,6 +42,7 @@ export const createInitialPlayer = (
     unitDispositionOverrides: {},
     factionReputation: createInitialReputation(),
     activeQuests: [],
+    party: [],
     world: createWorldState(scenario.start.gameTimeMinutes)
   };
 };

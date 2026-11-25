@@ -29,7 +29,8 @@ import { buyItem, getAvailableServices, purchaseService, sellItem } from './util
 import { ACTION_DURATIONS, advanceGameTime, formatDuration, formatGameTime, getGameDay, isValidWaitMinutes, MAX_WAIT_MINUTES, waitGameTime } from './utils/gameTime';
 import { getCombatTarget } from './utils/combatState';
 import { resolveActionCheck } from './utils/gameChecks';
-import { applyPostActionRules, buildCombatPlayer, OPENING_LABELS, resolveAmbush, resolveCombatRequest, resolveEnemyTurn, resolveFlee, resolveFoundByEnemy, resolvePlayerAttack, resolveTrapWait, startCombatByPlan, startNormalCombat, withUnitHp, type CombatStepResult } from './utils/combatResolution';
+import { applyPostActionRules, getCombatActionBlock, OPENING_LABELS, resolveAmbush, resolveCombatRequest, resolveFoundByEnemy, resolvePlayerCombatAction, resolveTrapWait, startCombatByPlan, startNormalCombat, switchCombatTarget, type CombatStepResult, type PlayerCombatAction } from './utils/combatResolution';
+import { getInviteBlock, joinParty, leaveParty, getCompanionResources } from './utils/party';
 import { clearEncounter, filterCombatSuggestions, findAggressiveResident, getAmbushableUnit, getEncounteredUnit, getSpottedHostileEncounter, hasCombatClaim, hasEnemyNearby, isTypedAmbushText, isTypedCombatText, isTypedTrapText, setEncounter } from './utils/encounters';
 import { applyEventProposals, finalizeWorldWithAgentBatch, getEventSeq, getPlayerKnownEvents, isKnownToPlayerOnOccurrence, type DeathHint, type PlayerPosition } from './utils/worldEvents';
 import { createSuccessorReputation, describeReputationChanges } from './utils/factions';
@@ -51,9 +52,26 @@ function describeRouteTravel(travel: RouteTravelResult, player: PlayerState): st
   return `📍 你${travel.passed.length ? `從${travel.origin.name}出發，` : ''}${via}${time}抵達${travel.arrived.name}。${travel.arrived.description}`;
 }
 
+/** 隊伍變化的系統訊息（O35-1）：入隊、離隊（含原因與回到的地方）。 */
+function describePartyChange(before: PlayerState, after: PlayerState): string | undefined {
+  const name = (unitId: string) => getWorldUnitById(unitId, after)?.name ?? unitId;
+  const joined = after.party.filter((unitId) => !before.party.includes(unitId));
+  const left = before.party.filter((unitId) => !after.party.includes(unitId));
+  const lines = [
+    ...joined.map((unitId) => `🤝 ${name(unitId)}加入了你的隊伍，會跟著你行動、一起戰鬥。`),
+    ...left.map((unitId) => {
+      const home = getMapById(getWorldUnitById(unitId)?.homeMapId ?? '')?.name ?? '原處';
+      if (after.unitInstances[unitId]?.isDead) return `☠️ ${name(unitId)}已經不在人世，離開了隊伍。`;
+      const hostile = getWorldUnitDisposition(after, unitId) === 'hostile';
+      return `👋 ${name(unitId)}${hostile ? '對你轉為敵對，' : ''}離開了隊伍，回到${home}。${hostile ? '' : '之後可以再邀請同行。'}`;
+    })
+  ];
+  return lines.length ? lines.join('\n') : undefined;
+}
+
 function createRestoreNotice(player: PlayerState, savedAt: number, messageCount: number): StoryMessage {
   const map = getMapById(player.currentMapId);
-  const combatUnit = player.combat ? getWorldUnitById(player.combat.targetUnitId, player) : undefined;
+  const combatTarget = player.combat ? getCombatTarget(player.combat) : undefined;
   const activeQuests = player.activeQuests.filter((quest) => quest.status === 'in_progress')
     .map((quest) => findQuest(player, quest.questId)?.title ?? quest.questId);
   const inventory = player.inventory.map((entry) => `${getItemById(entry.itemId)?.name ?? entry.itemId} ×${entry.quantity}`);
@@ -64,7 +82,8 @@ function createRestoreNotice(player: PlayerState, savedAt: number, messageCount:
     `進行中任務：${activeQuests.length ? activeQuests.join('、') : '無'}`,
     `持有物：${inventory.length ? inventory.join('、') : '無'}`
   ];
-  if (combatUnit && player.combat) lines.push(`戰鬥恢復：第 ${player.combat.round} 回合，${combatUnit.name} HP ${getCombatTarget(player.combat)?.currentHp ?? 0}/${combatUnit.stats.hp}（${OPENING_LABELS[player.combat.opening ?? 'normal']}）`);
+  if (combatTarget && player.combat) lines.push(`戰鬥恢復：第 ${player.combat.round} 回合，${combatTarget.label} HP ${combatTarget.currentHp}（${OPENING_LABELS[player.combat.opening]}）`);
+  if (player.party.length) lines.push(`隊伍：${player.party.map((unitId) => getWorldUnitById(unitId, player)?.name ?? unitId).join('、')}`);
   else if (player.encounteredUnitId) lines.push(`已遭遇單位：${getWorldUnitById(player.encounteredUnitId)?.name ?? player.encounteredUnitId}${player.encounterInfo?.playerSpottedFirst ? '（你先發現對方，可從選項列伏擊或挑戰）' : '（可從選項列挑戰）'}`);
   else lines.push('戰鬥狀態：目前沒有進行中的戰鬥，也尚未遭遇敵人。');
   return {
@@ -179,6 +198,9 @@ export default function App() {
   function commitWorldUpdate(before: PlayerState, finalized: PlayerState, positionBefore: PlayerPosition = before) {
     setPlayer(finalized);
     playerRef.current = finalized;
+    // 隊伍變化（O35-1）：邀請、離隊、劇情效果與自動離隊都在這裡告知，避免重複訊息。
+    const partyNotice = describePartyChange(before, finalized);
+    if (partyNotice) setTimeout(() => appendSystemMessage(partyNotice, undefined, true), 0);
     // 劇情片段完成與推進幕另以主線訊息呈現，不重複列在世界變化中。
     const storyNotice = describeStoryProgress(before, finalized);
     if (storyNotice) setTimeout(() => appendSystemMessage(storyNotice), 0);
@@ -769,13 +791,14 @@ export default function App() {
       return;
     }
     const provoked = getWorldUnitDisposition(player, unitId) !== 'hostile';
-    const combatPlayer = buildCombatPlayer(player, unitId, 'normal')!;
-    updatePlayer(combatPlayer);
+    // O35-1：依 SPD 排定行動順序，比玩家快的敵人與同伴先行動，結算到玩家回合。
+    const started = startNormalCombat(player, unit, `你${provoked ? '激怒並與' : '與'}${unit.name}進入戰鬥！輪到你時，攻擊、技能及消耗品各消耗一個行動回合；同伴與敵人由規則依行動順序行動。`);
+    updatePlayer(started.player, started.deathHints);
     setMessages((previous) => [...previous, userMessage, {
-      id: `${Date.now()}-combat`, sender: 'system', timestamp: new Date().toLocaleTimeString(),
-      text: `你${provoked ? '激怒並與' : '與'}${unit.name}進入戰鬥！攻擊、已解鎖技能及消耗品各自消耗一個行動回合；敵人存活時會反擊並進行閃避檢定。`
+      id: `${Date.now()}-combat`, sender: 'system', timestamp: new Date().toLocaleTimeString(), text: started.text,
+      checkResults: started.checks.length ? started.checks : undefined, invalidatesOptions: true
     }]);
-    void narrateCombatStart(userMessage.text, combatPlayer);
+    if (started.player.combat) void narrateCombatStart(userMessage.text, started.player);
   };
 
   /** 規則結算的開戰結果（伏擊、陷阱、強制開戰）：套用並顯示系統訊息與檢定。 */
@@ -850,37 +873,51 @@ export default function App() {
       { id: `${Date.now()}-wait`, sender: 'system', text, invalidatesOptions: true, timestamp: new Date().toLocaleTimeString() }]);
   };
 
-  /** 逃跑（O45 D8）：速度檢定，失敗浪費回合、敵人反擊。 */
-  const handleFleeCombat = () => {
-    if (!player.combat || !canPlayerAct(player)) return;
-    const result = resolveFlee(player);
+  /**
+   * 玩家的戰鬥行動（O35-1）：攻擊、技能、治療、道具、逃跑都經此執行；之後同伴與敵人自動結算到下次輪到玩家（D12）。
+   */
+  const executeCombatAction = (action: PlayerCombatAction) => {
+    const block = getCombatActionBlock(player, action);
+    if (block) { appendSystemMessage(block); return; }
+    const result = resolvePlayerCombatAction(player, action);
     if (!result) return;
     updatePlayer(result.player, result.deathHints);
-    appendSystemMessage(result.text, result.checks, true);
+    appendSystemMessage(result.text, result.checks.length ? result.checks : undefined, !result.player.combat);
   };
 
-  const handleCombatAction = (skill?: SkillStatic, sourcePlayer: PlayerState = player) => {
-    const combat = sourcePlayer.combat;
-    const target = combat ? getCombatTarget(combat) : undefined;
-    const unit = target ? getWorldUnitById(target.unitId, sourcePlayer) : undefined;
-    if (!combat || !target || !unit || sourcePlayer.isDead) return;
-    if (isPlayerUnconscious(sourcePlayer)) {
-      const recovered = { ...advanceGameTime(sourcePlayer, 'combatRound'), statusEffects: sourcePlayer.statusEffects.filter((effect) => effect.id !== 'unconscious'), combat: { ...combat } };
-      const enemyTurn = resolveEnemyTurn(recovered, combat, unit);
-      updatePlayer(enemyTurn.player, enemyTurn.deathHints);
-      appendSystemMessage(`你仍昏迷，失去本回合行動。\n${enemyTurn.text}`, enemyTurn.checks);
-      return;
-    }
-    if (skill && sourcePlayer.mp < skill.costMp) return;
-    // 攻擊、技能的命中、傷害、擊倒結算與敵方反擊（O45 移至 combatResolution，伏擊與陷阱共用）。
-    const result = resolvePlayerAttack(sourcePlayer, { skill });
-    if (!result) return;
-    updatePlayer(result.player, result.deathHints);
-    appendSystemMessage(result.text, result.checks, !!result.victory);
+  /** 逃跑（D17）：全隊一起逃，速度檢定；失敗浪費回合、敵人照常行動。 */
+  const handleFleeCombat = () => executeCombatAction({ kind: 'flee' });
+
+  const handleCombatAction = (skill?: SkillStatic) => {
+    if (!player.combat || player.isDead) return;
+    // 昏迷時正常流程會自動跳過回合；這裡是保險。
+    executeCombatAction(isPlayerUnconscious(player) ? { kind: 'skip' } : { kind: 'attack', skill });
   };
   const handleAttack = () => handleCombatAction();
 
-  const handleUseSkill = (skillId: string) => {
+  /** 切換鎖定目標（D21）：不耗回合。 */
+  const handleSwitchTarget = (enemyKey: string) => {
+    const next = player.combat ? switchCombatTarget(player, enemyKey) : undefined;
+    if (!next) return;
+    setPlayer(next);
+    playerRef.current = next;
+  };
+
+  /** 對象名稱：自己或隊伍同伴。 */
+  const describeTarget = (targetKey: string) => targetKey === player.unitId ? '自己' : getWorldUnitById(targetKey, player)?.name ?? targetKey;
+
+  /** 戰鬥外對同伴恢復（O35-1 D21）：技能或道具；回傳恢復量與新狀態，對象不是隊伍同伴時回傳 undefined。 */
+  const restoreCompanionOutOfCombat = (source: PlayerState, unitId: string, hpRestore: number, mpRestore: number) => {
+    const unit = getWorldUnitById(unitId, source);
+    const instance = source.unitInstances[unitId];
+    if (!unit || !instance || !source.party.includes(unitId)) return undefined;
+    const resources = getCompanionResources(source, unit);
+    const hp = Math.min(hpRestore, Math.max(0, resources.maxHp - resources.hp));
+    const mp = Math.min(mpRestore, Math.max(0, resources.maxMp - resources.mp));
+    return { hp, mp, player: { ...source, unitInstances: { ...source.unitInstances, [unitId]: { ...instance, currentHp: resources.hp + hp, currentMp: resources.mp + mp } } } };
+  };
+
+  const handleUseSkill = (skillId: string, targetKey: string = player.unitId) => {
     const skill = getUnlockedSkills(player.classId, player.level).find((entry) => entry.id === skillId);
     if (!skill || !canPlayerAct(player)) return;
     if (skill.effect.kind !== 'healing' && !player.combat) {
@@ -891,30 +928,55 @@ export default function App() {
       appendSystemMessage(`${skill.name}需要 ${skill.costMp} MP，目前魔力不足，沒有施放。`);
       return;
     }
-    if (skill.effect.kind === 'healing') {
-      if (player.combat) return;
-      const caps = getPlayerResourceCaps(player);
-      const restored = Math.min(skill.effect.hpRestore, Math.max(0, caps.maxHp - player.hp));
-      if (restored <= 0) {
-        appendSystemMessage(`${skill.name}目前無法恢復 HP，沒有消耗 MP。`);
-        return;
-      }
-      const nextPlayer = applyStateChanges(advanceGameTime(player, 'quick'), {
-        storyText: '', suggestedActions: [],
-        stateChanges: { hpChange: restored, mpChange: -skill.costMp }
-      }, 'game');
-      updatePlayer(nextPlayer);
-      appendSystemMessage(`施放${skill.name}，HP +${restored}、MP -${skill.costMp}。`);
+    // 戰鬥中：傷害技能打鎖定目標，治療技能可選我方任一人（D21），消耗一個行動回合。
+    if (player.combat) {
+      executeCombatAction(skill.effect.kind === 'healing' ? { kind: 'heal', skill, targetKey } : { kind: 'attack', skill });
       return;
     }
-    if (!player.combat) return;
-    handleCombatAction(skill);
+    if (skill.effect.kind !== 'healing') return;
+    if (targetKey !== player.unitId) {
+      const restored = restoreCompanionOutOfCombat(player, targetKey, skill.effect.hpRestore, 0);
+      if (!restored || restored.hp <= 0) {
+        appendSystemMessage(`${skill.name}目前無法恢復${describeTarget(targetKey)}的 HP，沒有消耗 MP。`);
+        return;
+      }
+      updatePlayer(advanceGameTime({ ...restored.player, mp: player.mp - skill.costMp }, 'quick'));
+      appendSystemMessage(`對${describeTarget(targetKey)}施放${skill.name}，HP +${restored.hp}、MP -${skill.costMp}。`);
+      return;
+    }
+    const caps = getPlayerResourceCaps(player);
+    const restored = Math.min(skill.effect.hpRestore, Math.max(0, caps.maxHp - player.hp));
+    if (restored <= 0) {
+      appendSystemMessage(`${skill.name}目前無法恢復 HP，沒有消耗 MP。`);
+      return;
+    }
+    const nextPlayer = applyStateChanges(advanceGameTime(player, 'quick'), {
+      storyText: '', suggestedActions: [],
+      stateChanges: { hpChange: restored, mpChange: -skill.costMp }
+    }, 'game');
+    updatePlayer(nextPlayer);
+    appendSystemMessage(`施放${skill.name}，HP +${restored}、MP -${skill.costMp}。`);
   };
 
-  const handleUseItem = (itemId: string) => {
+  const handleUseItem = (itemId: string, targetKey: string = player.unitId) => {
     const item = getItemById(itemId);
     const inventoryEntry = player.inventory.find((entry) => entry.itemId === itemId);
     if (!item || item.type !== 'consumable' || !inventoryEntry || inventoryEntry.quantity <= 0 || !canPlayerAct(player) || (player.combat && !item.usableInCombat)) return;
+    // 戰鬥中使用道具消耗一個行動回合，可對我方任一人使用（O35-1 D21）。
+    if (player.combat) {
+      executeCombatAction({ kind: 'item', item, targetKey });
+      return;
+    }
+    if (targetKey !== player.unitId) {
+      const restored = restoreCompanionOutOfCombat(player, targetKey, item.effect.hpRestore ?? 0, item.effect.mpRestore ?? 0);
+      if (!restored || (restored.hp <= 0 && restored.mp <= 0)) {
+        appendSystemMessage(`${item.name}目前無法恢復${describeTarget(targetKey)}的 HP 或 MP，沒有消耗道具。`);
+        return;
+      }
+      updatePlayer(applyStateChanges(advanceGameTime(restored.player, 'quick'), { storyText: '', suggestedActions: [], stateChanges: { removeItems: [{ itemId, quantity: 1 }] } }, 'game'));
+      appendSystemMessage(`對${describeTarget(targetKey)}使用${item.name}，${[restored.hp > 0 ? `HP +${restored.hp}` : '', restored.mp > 0 ? `MP +${restored.mp}` : ''].filter(Boolean).join('、')}。`);
+      return;
+    }
     const caps = getPlayerResourceCaps(player);
     const hpRestore = Math.min(item.effect.hpRestore ?? 0, Math.max(0, caps.maxHp - player.hp));
     const mpRestore = Math.min(item.effect.mpRestore ?? 0, Math.max(0, caps.maxMp - player.mp));
@@ -922,24 +984,29 @@ export default function App() {
       appendSystemMessage(`${item.name}目前無法恢復任何 HP 或 MP，沒有消耗道具。`);
       return;
     }
-
     const next = applyStateChanges(advanceGameTime(player, 'quick'), {
       storyText: '', suggestedActions: [],
       stateChanges: { hpChange: hpRestore, mpChange: mpRestore, removeItems: [{ itemId, quantity: 1 }] }
     }, 'game');
     const details = [hpRestore > 0 ? `HP +${hpRestore}` : '', mpRestore > 0 ? `MP +${mpRestore}` : ''].filter(Boolean).join('、');
-    if (!player.combat) {
-      updatePlayer(next);
-      appendSystemMessage(`使用${item.name}，${details}。`);
-      return;
-    }
+    updatePlayer(next);
+    appendSystemMessage(`使用${item.name}，${details}。`);
+  };
 
-    const combatUnit = getWorldUnitById(player.combat.targetUnitId, player);
-    if (!combatUnit) return;
-    const combatNext = combatUnit.requiresEncounter ? next : withUnitHp(next, combatUnit.id, getCombatTarget(player.combat)?.currentHp ?? 0);
-    const enemyTurn = resolveEnemyTurn({ ...combatNext, combat: player.combat }, player.combat, combatUnit);
-    updatePlayer(enemyTurn.player, enemyTurn.deathHints);
-    appendSystemMessage(`使用${item.name}，${details}。\n${enemyTurn.text}`, enemyTurn.checks);
+  /** 邀請同行（O35-1 D4、D30）：只由規則入隊，條件成立才出現在選項列；不呼叫 AI。入隊訊息由 commitWorldUpdate 統一產生。 */
+  const handleInvite = (unitId: string) => {
+    const unit = getWorldUnitById(unitId, player);
+    const block = getInviteBlock(player, unitId);
+    if (block || !unit) { appendSystemMessage(block ?? '找不到這個人物。'); return; }
+    setMessages((previous) => [...previous, createUserMessage(`邀請${unit.name}同行`)]);
+    updatePlayer(advanceGameTime(joinParty(player, unitId), 'dialogue'));
+  };
+
+  /** 請同伴離隊（D5）：同伴回到原居所，之後可再邀請。 */
+  const handleDismiss = (unitId: string) => {
+    if (!player.party.includes(unitId) || player.combat) return;
+    setMessages((previous) => [...previous, createUserMessage(`請${getWorldUnitById(unitId, player)?.name ?? unitId}離隊`)]);
+    updatePlayer(advanceGameTime(leaveParty(player, unitId), 'dialogue'));
   };
 
   const handleSendAction = async (actionText: string) => {
@@ -1012,9 +1079,9 @@ export default function App() {
         setMessages((prev) => [...prev, userMessage, { id: `${Date.now()}-combat`, sender: 'system', text, timestamp: new Date().toLocaleTimeString() }]);
         return;
       }
-      if (player.combat && matched.length === 1 && matched[0].id !== player.combat.targetUnitId) {
-        const currentUnit = getWorldUnitById(player.combat.targetUnitId);
-        setMessages((prev) => [...prev, userMessage, { id: `${Date.now()}-combat`, sender: 'system', text: `目前正在與${currentUnit?.name ?? '敵人'}戰鬥，無法切換目標。`, timestamp: new Date().toLocaleTimeString() }]);
+      if (player.combat && matched.length === 1 && matched[0].id !== getCombatTarget(player.combat)?.unitId) {
+        const current = getCombatTarget(player.combat);
+        setMessages((prev) => [...prev, userMessage, { id: `${Date.now()}-combat`, sender: 'system', text: `目前鎖定${current?.label ?? '敵人'}；要換目標請從選項列的「目標」切換。`, timestamp: new Date().toLocaleTimeString() }]);
         return;
       }
       if (player.combat) {
@@ -1106,7 +1173,7 @@ export default function App() {
   const runSystemAction = (action: SystemAction) => {
     if (loading || agentThinking) return;
     // 被發現（O45 D1、D9）：移動、挑戰、伏擊、戰鬥動作與只展開清單的選項以外，敵人會搶先出手。
-    const exempt = ['travel', 'challenge', 'ambush', 'attack', 'flee', 'openShop', 'noticeBoard'].includes(action.kind) || (action.kind === 'useSkill' && !!player.combat);
+    const exempt = ['travel', 'challenge', 'ambush', 'attack', 'flee', 'openShop', 'noticeBoard', 'switchTarget'].includes(action.kind) || (['useSkill', 'useItem'].includes(action.kind) && !!player.combat);
     if (!exempt && preemptByEnemy()) return;
     switch (action.kind) {
       case 'travel': executeTravel(action.mapId); break;
@@ -1120,7 +1187,11 @@ export default function App() {
       case 'sell': handleSellItem(action.shopId, action.itemId); break;
       case 'service': handleUseService(action.shopId, action.serviceId); break;
       case 'wait': executeWait(action.minutes); break;
-      case 'useSkill': handleUseSkill(action.skillId); break;
+      case 'useSkill': handleUseSkill(action.skillId, action.targetKey); break;
+      case 'useItem': handleUseItem(action.itemId, action.targetKey); break;
+      case 'switchTarget': handleSwitchTarget(action.enemyKey); break;
+      case 'invite': handleInvite(action.unitId); break;
+      case 'dismiss': handleDismiss(action.unitId); break;
       case 'attack': handleAttack(); break;
       case 'flee': handleFleeCombat(); break;
       case 'openShop': case 'noticeBoard': break;

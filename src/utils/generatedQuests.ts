@@ -73,6 +73,8 @@ export interface QuestPostingOptions {
 function giverBlockReason(state: QuestState, template: QuestTemplateStatic, giver: WorldUnitStatic | undefined, options: QuestPostingOptions = {}): string | undefined {
   const map = getMapById(state.currentMapId);
   if (!giver || giver.requiresEncounter) return '發布者不是地區居民';
+  // 隊伍同伴不發布委託（O35-1 D25：AI 不可替同伴做改變狀態的事）。
+  if (state.party.includes(giver.id)) return '發布者是隊伍同伴';
   if (options.requirePresence !== false && !map?.unitsPresent.includes(giver.id)) return '發布者不在目前地區';
   if (!isAlive(state, giver.id)) return '發布者已死亡';
   if (getWorldUnitDisposition(state, giver.id) === 'hostile') return '發布者對你敵對';

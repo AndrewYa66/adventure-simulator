@@ -73,7 +73,7 @@ const merchant = startNpcs.find((unit) => unit.shopId && unit.id !== innService?
 const victimNpc = startNpcs.find((unit) => data.questsDatabase.some((quest) => quest.questGiverId === unit.id));
 const formerName = '亞瑟';
 const former = init.createInitialPlayer(formerName, data.scenario.defaultPlayer.classId, data.scenario.defaultPlayer.alignment, true);
-const formerInCombat = { ...former, combat: { round: 1, participants: [{ unitId: former.unitId, side: 'party' }, { unitId: victimNpc.id, side: 'enemy', currentHp: 1 }], targetUnitId: victimNpc.id } };
+const formerInCombat = { ...former, combat: { round: 1, participants: [{ key: former.unitId, unitId: former.unitId, side: 'party' }, { key: victimNpc.id, unitId: victimNpc.id, side: 'enemy', label: victimNpc.name, currentHp: 1 }], turnOrder: [former.unitId, victimNpc.id], turnIndex: 0, targetKey: victimNpc.id, opening: 'normal' } };
 const formerKilled = world.finalizeWorld(formerInCombat, { ...formerInCombat, combat: undefined, unitInstances: { ...formerInCombat.unitInstances, [victimNpc.id]: { ...formerInCombat.unitInstances[victimNpc.id], currentHp: 0, isDead: true } } }, { [victimNpc.id]: { cause: 'combat', killerUnitId: former.unitId } });
 const formerDead = world.finalizeWorld(formerKilled, { ...formerKilled, hp: 0, isDead: true }, { [former.unitId]: { cause: 'self_inflicted' } });
 const afterDeathHistory = [saves.createHistoryEntry(formerDead)];

@@ -33,6 +33,8 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
     // 族群樣板代表一群個體，個別擊倒不影響其餘個體的關係變更。
     const isAlive = !!unit && (unit.population || (!player.unitInstances[unit.id]?.isDead && player.unitInstances[unit.id]?.currentHp !== 0));
     if (!unit || !isPresent || !isAlive || !['friendly', 'neutral', 'hostile'].includes(change.disposition)) continue;
+    // AI 不可替隊伍同伴改變狀態（O35-1 D25）：同伴的關係只由規則改變。
+    if (source === 'ai' && player.party.includes(unit.id)) continue;
     unitDispositionOverrides[unit.id] = change.disposition;
   }
 
@@ -40,7 +42,8 @@ export function applyStateChanges(player: PlayerState, response: AIResponsePaylo
     for (const transfer of changes.unitItemTransfers ?? []) {
       const unit = getWorldUnitById(transfer.unitId);
       const state = unitInstances[transfer.unitId];
-      if (!unit || !unit.mapIds.includes(player.currentMapId) || (unit.requiresEncounter && player.encounteredUnitId !== unit.id) ||
+      // 隊伍同伴不能經由 AI 敘事給東西（O35-1 D25）。
+      if (!unit || player.party.includes(unit.id) || !unit.mapIds.includes(player.currentMapId) || (unit.requiresEncounter && player.encounteredUnitId !== unit.id) ||
           getWorldUnitDisposition({ factionReputation: player.factionReputation, unitDispositionOverrides }, unit.id) === 'hostile' || !getItemById(transfer.itemId) ||
           !Number.isInteger(transfer.quantity) || transfer.quantity < 1 || !state || state.isDead || state.currentHp === 0) continue;
       const stock = state.inventory.find((entry) => entry.itemId === transfer.itemId);

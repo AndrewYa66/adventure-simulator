@@ -57,7 +57,8 @@ export const OptionBar: React.FC<OptionBarProps> = ({ player, optionSet, busy, b
     : buildNoticeBoardOptions(player);
   const panelTitle = !panel ? '' : panel.kind === 'group' ? optionSet.groups.find((group) => group.id === panel.id)?.label ?? ''
     : panel.kind === 'shop' ? getShopById(panel.shopId)?.name ?? '' : '告示板';
-  const panelOpen = !!panel && !combat && !blocked && (panel.kind !== 'group' || optionSet.groups.some((group) => group.id === panel.id));
+  // 戰鬥中也可展開分組（O35-1：目標、治療、物品）；商店與告示板只在戰鬥外。
+  const panelOpen = !!panel && !blocked && (panel.kind === 'group' ? optionSet.groups.some((group) => group.id === panel.id) : !combat);
 
   const choose = (option: SystemOption) => {
     if (disabledAll || option.disabledReason) return;

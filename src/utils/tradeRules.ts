@@ -2,6 +2,7 @@ import type { ItemStatic, PlayerState, ShopStatic } from '../types/game';
 import { getMapById, getPlayerResourceCaps, getShopForUnit, getWorldUnitById, getWorldUnitDisposition } from '../data/staticData';
 import { advanceGameTime } from './gameTime';
 import { canPlayerAct } from './playerStatus';
+import { partyNeedsRest, restorePartyResources } from './party';
 
 export type TradeResult = { ok: true; player: PlayerState; quantity: number; totalPrice: number } |
   { ok: false; reason: string };
@@ -93,15 +94,16 @@ export function purchaseService(player: PlayerState, shop: ShopStatic, serviceId
   if (!Number.isSafeInteger(service.price) || service.price < 0) return { ok: false, reason: '服務價格資料無效。' };
   if (player.gold < service.price) return { ok: false, reason: `金幣不足，需要 ${service.price} 枚。` };
   if (player.hp >= getPlayerResourceCaps(player).maxHp &&
-      player.mp >= getPlayerResourceCaps(player).maxMp) return { ok: false, reason: '目前生命與魔力已恢復，無需休息。' };
+      player.mp >= getPlayerResourceCaps(player).maxMp && !partyNeedsRest(player)) return { ok: false, reason: '目前生命與魔力已恢復，無需休息。' };
   const caps = getPlayerResourceCaps(player);
-  // 休息類服務依行動類型固定耗時（rest）。
+  // 休息類服務依行動類型固定耗時（rest）；隊伍同伴一起恢復（O35-1 D16）。
+  const restored = restorePartyResources(player);
   return { ok: true, quantity: 1, totalPrice: service.price, player: advanceGameTime({
-    ...player,
+    ...restored,
     hp: caps.maxHp,
     mp: caps.maxMp,
     gold: player.gold - service.price,
-    unitInstances: { ...player.unitInstances, [shop.ownerUnitId]: { ...ownerState, gold: ownerState.gold + service.price } },
+    unitInstances: { ...restored.unitInstances, [shop.ownerUnitId]: { ...ownerState, gold: ownerState.gold + service.price } },
     transactionHistory: record(player, 'service', `使用服務：${service.name}`, -service.price)
   }, 'rest') };
 }
