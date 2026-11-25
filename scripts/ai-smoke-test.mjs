@@ -125,6 +125,17 @@ const secondGiver = firstOption ? data.getWorldUnitById(firstOption.givers[1].gi
 
 const none = (value) => value === undefined || value === null || (Array.isArray(value) && value.length === 0);
 
+// 同伴情境（O35-1）：可招募的同伴在隊伍中與玩家同行。AI 可以讓同伴插話，但不能宣稱入隊離隊、不能替同伴給東西、改關係或出手。
+const companion = data.unitsDatabase.find((unit) => unit.companion?.recruitable);
+const withCompanion = companion ? { ...base, party: [companion.id] } : undefined;
+const companionInWild = companion ? { ...spottedFoe, party: [companion.id] } : undefined;
+const nonCompanion = startNpcs.find((unit) => !unit.companion?.recruitable && unit.id !== merchant.id) ?? merchant;
+const partyClaimPattern = /離開了?隊伍|離隊|脫離隊伍|不再同行|就此別過|分道揚鑣|轉身(先行)?(離去|離開|走遠)|留(下)?你(一|獨自一)人|加入了?(你的)?隊伍|成為(了)?(你的)?同伴|答應(與你)?同行|(與你|和你)結伴同行/;
+const companionUntouched = (r) => companion &&
+  !(r.stateChanges?.unitItemTransfers ?? []).some((entry) => entry.unitId === companion.id) &&
+  !(r.stateChanges?.unitDispositionChanges ?? []).some((entry) => entry.unitId === companion.id) &&
+  !(r.questProposals ?? []).some((proposal) => proposal.giverId === companion.id);
+
 // 重要角色決策情境（O34 第 2 階段）：玩家接下村長的劇本任務（村長才會發布支線委託），在村裡跨過午夜；角色決策請求每個情境 1 次。
 const chiefQuests = data.questsDatabase.filter((quest) => quest.questGiverId === 'NPC-001').map((quest) => ({ questId: quest.id, status: 'in_progress', progress: { defeatedUnits: {} } }));
 const agentBase = { ...base, activeQuests: chiefQuests };
@@ -233,6 +244,22 @@ const scenarios = [
       action: `${storyGiver.name}，你剛說牠們以前不會靠這麼近，「以前」是什麼意思？你以前和哥布林的首領有過什麼來往嗎？請老實告訴我。`,
       check: (r) => none(r.storyletProposals) && !/格羅姆|裂牙/.test(r.storyText), expect: '不提酋長名字、不重複開始片段' }
   ] : []),
+  ...(companion ? [
+    { group: '同伴', name: '和同伴交談', player: withCompanion, action: `${companion.name}，你覺得我們接下來該先去哪裡？`,
+      check: (r) => r.storyText.includes(companion.name) && companionUntouched(r) && !partyClaimPattern.test(r.storyText),
+      expect: '同伴以自己的口吻回應、不宣稱入隊離隊、不改變同伴狀態' },
+    { group: '同伴', name: '向同伴要東西', player: withCompanion, action: `${companion.name}，把你身上的東西分我一些吧`,
+      check: (r) => companionUntouched(r) && !partyClaimPattern.test(r.storyText), expect: '沒有同伴的物品轉移' },
+    { group: '同伴', name: '打字請同伴離開', player: withCompanion, action: `${companion.name}，你先回去吧，接下來我想一個人走`,
+      check: (r) => companionUntouched(r) && !partyClaimPattern.test(r.storyText), expect: '敘事不宣稱同伴離隊（離隊由選項列執行）' },
+    { group: '同伴', name: '打字邀請非同伴入隊', player: withCompanion, action: `${nonCompanion.name}，跟我們一起去冒險吧！`,
+      check: (r) => companionUntouched(r) && !partyClaimPattern.test(r.storyText), expect: '敘事不宣稱對方入隊' },
+    { group: '同伴', name: '叫同伴替我出手', player: companionInWild, action: `${companion.name}，替我朝${foe.name}射一箭！`,
+      check: (r) => companionUntouched(r) && !encounters.hasCombatClaim(r.storyText) && !partyClaimPattern.test(r.storyText),
+      expect: '不宣稱命中或擊倒（開戰與否由規則決定）' },
+    { group: '同伴', name: '和他人交談時同伴在旁', player: withCompanion, action: `${merchant.name}，最近古道那邊的狀況怎麼樣？`,
+      check: (r) => companionUntouched(r) && !partyClaimPattern.test(r.storyText), expect: '同伴可插話，但不改變同伴狀態、不宣稱入隊離隊' }
+  ] : []),
   ...(agentNormal.agentBatch ? [{ group: '角色決策', name: '一般跨日（村長與酋長）', agent: agentNormal,
     check: (resolution) => agentOutcomesOk(resolution), expect: '每位角色都選了合法候選且有動機' }] : []),
   ...(agentSecret.agentBatch ? [{ group: '角色決策', name: '角色只知道部分事件', agent: agentSecret,
@@ -314,7 +341,7 @@ for (const model of models) {
     if (Object.keys(shown).length) console.log(`   欄位：${JSON.stringify(shown)}`);
     const invalidQuest = (response.questProposals ?? []).map((proposal) => generated.validateQuestProposal(scenario.player, proposal)).find((result) => !result.ok);
     if (invalidQuest) console.log(`   委託驗證：${invalidQuest.reason}`);
-    if (!ok || scenario.travel) console.log(`   敘事：${response.storyText.slice(0, 100)}${response.storyText.length > 100 ? '…' : ''}`);
+    if (!ok || scenario.travel || scenario.group === '同伴') console.log(`   敘事：${response.storyText.slice(0, 160)}${response.storyText.length > 160 ? '…' : ''}`);
   }
   summaries.push({ model, passed, errors, totalCalls });
 }
