@@ -2,6 +2,9 @@ import type { MapStatic, PlayerState } from '../types/game';
 import { canPlayerEnterMap, getMapById, scenario } from '../data/staticData';
 import { ACTION_DURATIONS, advanceGameTime } from './gameTime';
 import { rollWaitInterruption } from './waitRules';
+import { clearEncounter } from './encounters';
+import { resolveFoundByEnemy, type CombatStepResult } from './combatResolution';
+import { getWorldUnitById } from '../data/staticData';
 
 /**
  * 多段移動（O44）：前往不相鄰但可抵達的地區時，由規則沿最短路徑逐段移動，每段照常耗時；
@@ -41,6 +44,8 @@ export interface RouteTravelResult {
   elapsedMinutes: number;
   /** 途中遭遇而停下時的單位。 */
   interruptedByUnitId?: string;
+  /** 途中被找上時的察覺結果（O45）：先發現對方，或遭到偷襲（已開戰）。 */
+  foundByEnemy?: CombatStepResult;
   /** 因單次段數上限而未抵達。 */
   stoppedBySegmentLimit: boolean;
 }
@@ -57,13 +62,18 @@ export function travelAlongRoute(player: PlayerState, destinationMapId: string, 
   const steps = route.slice(0, Math.max(1, scenario.rules.routeTravel.maxSegmentsPerAction));
   let current = player;
   let interruptedByUnitId: string | undefined;
+  let foundByEnemy: CombatStepResult | undefined;
   for (const [index, mapId] of steps.entries()) {
-    current = advanceGameTime({ ...current, previousMapId: current.currentMapId, currentMapId: mapId, encounteredUnitId: undefined }, 'travel');
+    current = advanceGameTime(clearEncounter({ ...current, previousMapId: current.currentMapId, currentMapId: mapId }), 'travel');
     if (index === route.length - 1) break;
     const roll = rollWaitInterruption(current, ACTION_DURATIONS.travel, random);
     if (roll.unitId) {
       interruptedByUnitId = roll.unitId;
-      current = { ...current, encounteredUnitId: roll.unitId };
+      const unit = getWorldUnitById(roll.unitId, current);
+      if (unit) {
+        foundByEnemy = resolveFoundByEnemy(current, unit, '');
+        current = foundByEnemy.player;
+      }
       break;
     }
   }
@@ -76,6 +86,7 @@ export function travelAlongRoute(player: PlayerState, destinationMapId: string, 
     passed: traveled.slice(0, -1).map((mapId) => getMapById(mapId)!),
     elapsedMinutes: current.gameTimeMinutes - player.gameTimeMinutes,
     interruptedByUnitId,
+    foundByEnemy,
     stoppedBySegmentLimit: !interruptedByUnitId && current.currentMapId !== destinationMapId
   };
 }

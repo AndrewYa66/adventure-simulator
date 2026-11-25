@@ -118,7 +118,11 @@ function parseAIResponse(raw: unknown): AIResponsePayload | null {
   const value: Record<string, unknown> = {
     ...upgraded,
     ...(isEmptyRecord(upgraded.checkRequest) ? { checkRequest: null } : {}),
-    ...(isEmptyRecord(upgraded.checkOutcomes) ? { checkOutcomes: null } : {})
+    ...(isEmptyRecord(upgraded.checkOutcomes) ? { checkOutcomes: null } : {}),
+    // 第 6 版（O45）：combatRequest 形狀不對時視為沒有開戰請求（照一般回合處理），encounterEnded 只接受 true。
+    combatRequest: isRecord(upgraded.combatRequest) && typeof upgraded.combatRequest.unitId === 'string' && typeof upgraded.combatRequest.method === 'string'
+      ? { unitId: upgraded.combatRequest.unitId, method: upgraded.combatRequest.method } : null,
+    encounterEnded: upgraded.encounterEnded === true
   };
   if (typeof value.storyText !== 'string' || !Array.isArray(value.suggestedActions) ||
       !value.suggestedActions.every((action) => typeof action === 'string')) return null;

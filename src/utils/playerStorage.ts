@@ -293,7 +293,9 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     if (!enemies.length) return null;
     const savedTarget = value.combat.targetUnitId;
     const targetUnitId = typeof savedTarget === 'string' && enemies.some((enemy) => enemy.unitId === savedTarget) ? savedTarget : enemies[0].unitId;
-    combat = { ...createCombat([PLAYER_UNIT_ID], enemies), round: value.combat.round as number, targetUnitId };
+    const opening = ['normal', 'player_ambush', 'trap', 'enemy_ambush'].includes(String(value.combat.opening))
+      ? value.combat.opening as NonNullable<PlayerState['combat']>['opening'] : 'normal';
+    combat = { ...createCombat([PLAYER_UNIT_ID], enemies), round: value.combat.round as number, targetUnitId, opening };
   }
   const previousMapId = typeof value.previousMapId === 'string' &&
     getMapById(value.currentMapId)?.connectedMapIds.includes(value.previousMapId)
@@ -308,6 +310,15 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     savedEncounteredState?.isDead !== true && savedEncounteredState?.currentHp !== 0
     ? savedEncounteredUnitId
     : undefined;
+  // O45：遭遇的發生時間與「玩家先發現」；缺少或格式不對時以讀檔時間、未先發現補上。
+  const savedEncounterInfo = isRecord(value.encounterInfo) ? value.encounterInfo : undefined;
+  const encounterInfo = encounteredUnitId ? {
+    startedAtMinutes: Number.isSafeInteger(savedEncounterInfo?.startedAtMinutes) ? savedEncounterInfo!.startedAtMinutes as number : value.gameTimeMinutes as number,
+    playerSpottedFirst: savedEncounterInfo?.playerSpottedFirst === true
+  } : undefined;
+  const savedAggro = isRecord(value.residentAggro) ? value.residentAggro : undefined;
+  const residentAggro = savedAggro && typeof savedAggro.mapId === 'string' && savedAggro.mapId === value.currentMapId && Number.isSafeInteger(savedAggro.atMinutes)
+    ? { mapId: savedAggro.mapId, atMinutes: savedAggro.atMinutes as number } : undefined;
   // 聲望：缺少的勢力（靜態資料新增）補初始值，數值夾在範圍內，已移除的勢力略過。
   const factionReputation = createInitialReputation();
   for (const [factionId, reputation] of Object.entries(value.factionReputation as Record<string, unknown>)) {
@@ -365,7 +376,8 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     factionReputation,
     activeQuests,
     world,
-    ...(encounteredUnitId && !isDead ? { encounteredUnitId } : {}),
+    ...(encounteredUnitId && !isDead ? { encounteredUnitId, encounterInfo } : {}),
+    ...(residentAggro ? { residentAggro } : {}),
     ...(combat && !isDead ? { combat } : {})
   };
 }

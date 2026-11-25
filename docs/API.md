@@ -42,7 +42,7 @@ sendPlayerAction(
   - 近期對話視窗（`buildDialogueHistory`）：設定在 `ai_context.json` 的 `dialogue`。取最近 `maxTurns` 輪（目前 8；一輪從玩家訊息開始，未取滿時連同開場敘事），`includeSystemMessages` 為 `false` 時排除系統訊息（戰鬥結算、道具使用等結果已反映在系統提示的狀態中）；每則超過 `maxCharsPerMessage`（400）時保留開頭並加上「…」，整段超過 `maxChars`（4,000）時從最舊的訊息捨棄。以「玩家:」「GM:」標示發言者放在使用者提示的【近期劇情回顧】；組裝報告另列 `dialogue` 區段（字元、上限、省略的較舊訊息數），不計入系統提示的 `totalBudgetChars`，但估計 tokens 包含使用者提示。
   - 人物記憶 `memoryNotes`（第 4 版必填陣列，沒有時為空陣列）：`[{ unitId, note }]`，AI 在本回合互動出現在場人物日後應記得的新資訊（玩家告知的名字或來歷、承諾、請託、透露的祕密、明顯改變印象的言行）時提出。前端以 `applyMemoryNotes`（`src/utils/unitMemory.ts`）驗證：人物須是行動前目前地區存活的居民（非遭遇型單位），每次最多 `memory.maxNotesPerResponse` 則（2），每則正規化空白後截到 `maxNoteChars`（40）字，與既有記憶相同則略過；不論檢定結果都寫入（對話已發生）。寫入世界層 `world.unitMemories[unitId]`（`{ note, gameTimeMinutes, characterSeq }`，舊→新），每人超過 `maxNotesPerUnit`（8）則時捨棄最舊的。系統提示的在場人物附上 `memories`（只含目前角色代數的記憶），主持規則要求自然延續、不可矛盾。不增加 AI 呼叫次數。
 - **重要角色的盤算（O34）**：在場的重要角色在 `residents` 區段附上 `agenda: { goals, traits }`（自身與接手的盤算、個性），主持規則要求只透過言行流露；角色自己的行動由遊戲每日決策並寫入世界事件。不增加 AI 呼叫，也沒有改變回應格式。
-- **回應格式版本**：回應加入 `formatVersion`，目前為 `5`（`AI_RESPONSE_FORMAT_VERSION`），Gemini JSON Schema 要求填入此值。可解析的版本為 1、2、3、4、5；第 4 版加入 `memoryNotes`、第 5 版加入 `storyletProposals`，較舊版本沒有這些欄位時視為空陣列；沒有 `formatVersion` 的回應視為第 1 版。第 3 版（單位模型合併）將單位欄位改名：`encounterRequest.monsterId` → `unitId`、`stateChanges.npcItemTransfers[].npcId` → `unitItemTransfers[].unitId`、`defeatedMonsters[].monsterId` → `defeatedUnits[].unitId`；第 1、2 版回應的舊欄位名會在解析時轉成新名稱，第 3 版使用舊欄位名則視為格式錯誤。版本號不支援的回應會被拒絕：顯示「格式版本不受支援，本回合未套用任何變更」，不顯示其敘事、不套用狀態、不重試。日後新增請求類型（重要角色決策等）時提高版本號，並各自加上前端驗證。
+- **回應格式版本**：回應加入 `formatVersion`，目前為 `6`（`AI_RESPONSE_FORMAT_VERSION`），Gemini JSON Schema 要求填入此值。可解析的版本為 1～6；第 4 版加入 `memoryNotes`、第 5 版加入 `storyletProposals`、第 6 版（O45）加入 `combatRequest` 與 `encounterEnded`，較舊版本沒有這些欄位時視為空陣列（`combatRequest` 視為 null、`encounterEnded` 視為 false）；沒有 `formatVersion` 的回應視為第 1 版。第 3 版（單位模型合併）將單位欄位改名：`encounterRequest.monsterId` → `unitId`、`stateChanges.npcItemTransfers[].npcId` → `unitItemTransfers[].unitId`、`defeatedMonsters[].monsterId` → `defeatedUnits[].unitId`；第 1、2 版回應的舊欄位名會在解析時轉成新名稱，第 3 版使用舊欄位名則視為格式錯誤。版本號不支援的回應會被拒絕：顯示「格式版本不受支援，本回合未套用任何變更」，不顯示其敘事、不套用狀態、不重試。日後新增請求類型（重要角色決策等）時提高版本號，並各自加上前端驗證。
 
 ## 提供者 API 呼叫
 
@@ -68,10 +68,12 @@ sendPlayerAction(
 
 ```json
 {
-  "formatVersion": 5,
+  "formatVersion": 6,
   "storyText": "你察覺林間傳來一陣急促的腳步聲。",
   "suggestedActions": ["躲到樹後", "拔出武器戒備"],
   "encounterRequest": null,
+  "combatRequest": null,
+  "encounterEnded": false,
   "travelRequest": null,
   "serviceRequest": null,
   "checkRequest": {
@@ -95,6 +97,21 @@ sendPlayerAction(
 有檢定時，`stat` 可為 `atk`、`def`、`spd`、`str`、`dex`、`con`、`int`、`wis`、`cha`，DC 限整數 5–25，且必須提供成功與失敗敘述。能力值檢定採 d20 + `floor((能力值 - 10) / 2)` + 種族/職階的 `checkBonuses`；攻防速使用種族 × 職階 × 等級公式計算的數值加上裝備加值（見下方「單位成長」）。成功時套用 `stateChanges`，失敗時套用 `failureStateChanges`。失敗分支不能發放經驗、道具、任務完成或擊敗怪物紀錄。
 
 `encounterRequest`（`{ "unitId": "..." }`）只能指向本地區、已解鎖且玩家確實看見/接觸的需遭遇單位；遊戲驗證後才將其列入選項列（挑戰）。每個單位明確定義預設對玩家關係（友善、中立、敵對），實際關係依「個人關係覆寫 → 所屬勢力聲望等級 → 單位預設值」判定（見「勢力聲望與勢力間關係」）；`stateChanges.unitDispositionChanges` 只能變更目前地區存活單位的關係，遊戲會保存覆寫。九大陣營描述價值傾向，不直接決定敵友；敵對的單位不可提供任務或交易；敵對的地區居民與已遭遇的敵對單位都可由選項列的「挑戰」發起戰鬥。單位的實例狀態（等級、經驗、HP、死亡、持有物）保存在 `unitInstances`；擊倒的結算見「單位模型」。明確攻擊友善/中立單位會視為挑釁並轉為敵對。
+
+### 戰鬥前行動、先後手與強制戰鬥（O45，回應格式第 6 版）
+
+規格書 `docs/specs/O45.md`。規則在 `src/utils/encounters.ts`（遭遇狀態、察覺、失效、敵對居民、宣稱偵測）與 `src/utils/combatResolution.ts`（玩家攻擊、敵方回合、逃跑、伏擊、設陷阱等待、敵方偷襲、`applyPostActionRules`、`resolveCombatRequest`），全部是回傳 `{ player, checks, text, deathHints?, victory? }` 的純函式。
+
+- **`combatRequest`**（`{ "unitId": "...", "method": "attack" | "ambush" | "trap" } | null`）：玩家以敘事方式對「可開戰對象」動手時，AI 只選手段與目標；`unitId` 的 schema enum 只列可開戰對象（上下文「可開戰對象」，含 `canAmbush`），沒有對象時只允許 null。前端驗證：`ambush` 只限玩家先發現的對象、`attack` 依 `getCombatStartBlock`（可挑釁）、`trap` 只限非安全地區。合法時由規則開戰，本回合只採用 `storyText`（接近的過程），不套用 AI 的檢定、`stateChanges`、事件、委託、人物記憶與劇情片段，也不另外呼叫開戰敘事；不合法時忽略並在敘事後附「無法依敘事開戰（原因）」，照一般回合處理。形狀不對（例如 `{}`）視為 null。
+- **`encounterEnded`**（boolean）：遭遇的對象在敘事中離開時為 true，遊戲清除遭遇並提示；只接受 `true`，其他值視為 false。
+- **遭遇狀態**：`PlayerState.encounterInfo: { startedAtMinutes, playerSpottedFirst }` 與 `encounteredUnitId` 一起以 `setEncounter`／`clearEncounter` 設定與清除。主動探索（`encounterRequest` 通過驗證）時玩家先發現；被找上（等待打斷、移動途中、敵對居民）先擲察覺（感知對抗敵方敏捷），成功為玩家先發現，失敗為敵方偷襲。玩家先發現的敵對對象，玩家做移動、挑戰、伏擊以外的行動時會被強制開戰（一般開場，原本的行動不進行，不呼叫 AI）。遭遇經過 `encounterExpiryMinutes`（30）後失效、等待未被打斷時清除、`encounterEnded` 時清除。
+- **敵對居民**：目前地區存活、非休眠、對玩家敵對的居民（非需遭遇單位），進入地區時（含安全地區）與在地區行動時主動攻擊，判定同「被找上」。`PlayerState.residentAggro: { mapId, atMinutes }` 記錄最近一次強制，同一次停留在 `residentReaggroMinutes`（30）內不再強制，離開地區時清除。
+- **開場方式**：`CombatState.opening`：`normal`（一般，玩家先攻）、`player_ambush`（伏擊成功：先手一擊必中、傷害 × `firstStrikeMultiplier`，敵人不反擊）、`trap`（陷阱：敵方最大 HP × `trapDamageRatio` 傷害後接先手一擊）、`enemy_ambush`（敵方偷襲：以第 0 回合表示，敵方先攻一擊用一般反擊公式、不觸發特殊能力，之後進入第 1 回合）。HUD 與 AI 上下文以 `OPENING_LABELS` 顯示。
+- **伏擊**：敏捷檢定，DC = 10 ＋ 敵方感知修正；失敗為敵方偷襲。選項列「🗡️ 伏擊」、打字「偷襲／突襲／伏擊／埋伏」（對玩家先發現的對象，不呼叫 AI）與 `combatRequest` 的 `ambush` 共用 `resolveAmbush`。
+- **設陷阱等待**：非安全地區的「等待 ▸」內有「🪤 設陷阱等待」（時長同等待），打字「設陷阱」等字詞同樣適用（有合法時長就照時長，否則 `defaultTrapWaitMinutes`）。期間沿用等待的打斷擲骰；有敵人出現時改擲智力檢定（DC 同伏擊），成功為 `trap` 開場，失敗為一般開戰；沒有敵人就只是等待（遭遇清除）。不呼叫 AI。
+- **逃跑**：速度檢定，DC = 10 ＋ 敵方 SPD ÷ 2（捨去）；失敗浪費回合、敵人照常反擊。
+- **沒開戰時宣稱攻防**：沒有戰鬥、且有遭遇或在場有敵對單位時，敘事出現 `claimPatterns` 的字詞會附上「尚未交戰」說明並捨棄該回合的人物記憶；有敵人時 `suggestedActions` 過濾掉打字戰鬥的建議。
+- **資料檔 `src/data/action_methods.json`**（手段 → 結果表，可調；O50-2 會加入說服、偷竊等）：`methods[]`（`id`、`label`、`checkAbility`、`dcBase`、`dcOpponentAbility`、`requiresPlayerSpottedFirst`、`onSuccess`／`onFailure` 的 `opening`、`firstStrikeMultiplier`、`trapDamageRatio`）與 `combatRules`（`encounterExpiryMinutes`、`perception`、`flee`、`residentReaggroMinutes`、`defaultTrapWaitMinutes`、`claimPatterns`、`typedCombatPatterns`、`ambushPatterns`、`trapPatterns`）。`validate:data` 檢查手段齊全、能力值與數值範圍。
 
 `stateChanges` 支援 HP/MP/EXP/金幣增減、道具增加/移除、單位擊倒紀錄（`defeatedUnits`）、單位關係變更、任務接受及任務完成回報。劇情旗標不能由 AI 直接設定（舊格式的 `setFlags` 會被忽略），只能經由世界事件成立（見下方「世界事件、世界修正與世界規則」）。AI 只能對遊戲提供的「目前地區可接取任務」提出 `questAcceptances: ["QST-001"]`；玩家詢問任務不等於接受。選項列及對話接受會共用同一驗證，確認玩家位於任務指定地圖、任務給予者（地區居民）確實在場且存活、非敵對，且任務尚未接取或完成。靜態任務資料定義需求、獎勵值及上下限，完成時再次檢查需求；交付道具會從背包扣除，獎勵只發放一次。單位樣板以 ID、名稱、稱號、種族、職階與等級定義，數值由單位成長公式計算，可用 `statAdjustments` 做有上限的相對修正；所在地由地圖的 `unitsPresent` 決定。消耗品的 `usableInCombat` 布林欄位控制是否可在戰鬥中使用，描述文字只用於說明；consumable 的 `effect.hpRestore`/`effect.mpRestore` 定義固定回復量；玩家可從 HUD 使用背包中的消耗品，回復不會超過角色資源上限，無實際回復時不扣除道具。戰鬥中使用消耗品會觸發敵方反擊與 d20 閃避檢定。戰鬥狀態以 `{ "round": 1, "participants": [{ "unitId": "PLAYER-001", "side": "party" }, { "unitId": "NPC-001", "side": "enemy", "currentHp": 20 }], "targetUnitId": "NPC-001" }` 表示，預留 O35 多對多戰鬥；我方 HP 存於各自存檔/實例，敵方 HP 於戰鬥中追蹤。目前規則仍為玩家對單一敵人。玩家存檔包含穩定單位 ID `unitId: "PLAYER-001"`（存檔中必須為此保留 ID）；共用查詢 `resolveWorldUnit(player, unitId)` 可辨識玩家與其他單位，玩家視圖的 `stats` 以相同公式計算並加上裝備。玩家 ID 不可作為 `unitDispositionChanges`、`encounterRequest` 或戰鬥目標，單位資料也不得使用此 ID。主動技能定義於 `skills.json`，由職階的 `skillUnlocks` 依等級解鎖，技能 effect 定義傷害倍率，程式以 `max(1, floor(玩家 ATK × multiplier) - 敵方 DEF)` 計算傷害；技能消耗 MP 並消耗玩家回合。地圖移動使用獨立欄位 `travelRequest`，格式為 `{ "destinationMapId": "MAP-002" }`。Gemini GenerateContent 請求會使用 JSON Schema 強制包含所有回應欄位，並將 `travelRequest.destinationMapId` 限制為本次可移動的相鄰地圖 ID、將 `encounterRequest.unitId` 限制為可遭遇單位 ID、將 `questAcceptances` 限制為本區可接取任務 ID、將 `unitDispositionChanges.unitId` 限制為當前地區單位 ID；這保證格式與欄位，不代表語意正確，因此遊戲端仍會驗證。只有玩家明確要求移動時才設定；模型收到的可移動地區清單包含相鄰地圖 ID、正式名稱、專屬別名及分類標籤。泛稱地點會根據可到達候選和上一個地區解析；若仍有多個候選，前端要求玩家選擇，不把泛稱綁定到單一地圖。若 AI 敘事聲稱玩家已移動，但缺少或填錯 `travelRequest`，系統會附上合法目的地清單要求模型重產一次完整 JSON（受 `ai_context.json` 的 `maxCallsPerTurn` 限制）；判斷敘事是否宣稱移動時，會略過引號內的對話（「」『』“”）以及移動動詞前帶有過去、假設或打算語氣（例如曾經、上次、打算、如果、等你）的句子，避免人物談到其他地名時誤送修正請求；前端從玩家文字判斷的明確移動意圖（會優先於 AI 的 `travelRequest`）排除否定、詢問（含「嗎」與問號）、過去經歷（上次、以前、曾）與安危打聽，例如「你上次去那裡是什麼時候？」不算移動；仍無有效請求時不會移動，並會在對話明確提示。前端再次驗證地圖 ID、連通性及戰鬥狀態後，才更新 `currentMapId`。詢問地點、觀察或含糊意圖不會移動。回應不可用 `stateChanges` 修改地圖。
 
@@ -373,7 +390,7 @@ sendPlayerAction(
 - **匯出／匯入**：存檔管理可將一個世界的所有欄位匯出為 JSON（`format: "adventure-simulator-world"`）。匯入時驗證格式、版本、劇本與每個欄位內容，任何欄位無效即整份拒絕；一律以新世界 ID 匯入，不覆蓋任何現有存檔，寫入中途失敗會移除已寫入的欄位。
 - **容量管理**：存檔管理顯示本遊戲在 localStorage 的估計用量（以約 5 MB 上限計），達 80% 時警示；寫入失敗（例如容量不足）時 HUD 提示匯出備份，其他欄位不受影響。事件紀錄超過 200 件即壓縮成編年史，且存檔只保存有差異的單位實例；目前容量足夠，暫不改用 IndexedDB。
 
-存檔帶有 `schemaVersion`（`saveStorage.ts` 的 `SAVE_SCHEMA_VERSION`，目前為 15；第 15 版加入 `world.playerKnownEventIds`）。開發階段每次變更存檔格式就將版本加一；版本不符、缺少欄位或格式無效的存檔直接捨棄，不提供舊格式遷移；舊版單一快照（`TRPG_GAME_SESSION`、`TRPG_PLAYER_STATE`）在啟動時移除。正式上線後才開始為舊版本撰寫遷移。
+存檔帶有 `schemaVersion`（`saveStorage.ts` 的 `SAVE_SCHEMA_VERSION`，目前為 16；第 15 版加入 `world.playerKnownEventIds`，第 16 版（O45）加入角色層的 `encounterInfo`、`residentAggro` 與 `combat.opening`）。開發階段每次變更存檔格式就將版本加一；版本不符、缺少欄位或格式無效的存檔直接捨棄，不提供舊格式遷移；舊版單一快照（`TRPG_GAME_SESSION`、`TRPG_PLAYER_STATE`）在啟動時移除。正式上線後才開始為舊版本撰寫遷移。
 
 ## 金鑰安全限制
 

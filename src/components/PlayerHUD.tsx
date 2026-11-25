@@ -6,6 +6,7 @@ import { getPlayerStatBreakdown, STAT_LABELS } from '../utils/gameChecks';
 import { canAcceptQuest, canTurnInQuest, getQuestGiverName, isGeneratedQuest, listVisibleQuests } from '../utils/questRules';
 import { canPlayerAct, isPlayerUnconscious } from '../utils/playerStatus';
 import { getCombatTarget } from '../utils/combatState';
+import { OPENING_LABELS } from '../utils/combatResolution';
 import { formatGameTime } from '../utils/gameTime';
 import { describeStoryletGiver, getActDeadline, getEndingEpilogue, resolveStoryletGiver } from '../utils/storylets';
 import { getPlayerKnownEvents } from '../utils/worldEvents';
@@ -175,17 +176,18 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
           const unit = getWorldUnitById(player.combat.targetUnitId, player);
           return <div>
             <div style={{ marginBottom: '6px' }}>{unit?.name || player.combat.targetUnitId} HP {getCombatTarget(player.combat)?.currentHp ?? 0}/{unit?.stats.hp}</div>
-            <div style={{ color: '#aaa', fontSize: '11px', marginBottom: '8px' }}>第 {player.combat.round} 回合</div>
+            <div style={{ color: '#aaa', fontSize: '11px', marginBottom: '8px' }}>第 {player.combat.round} 回合・{OPENING_LABELS[player.combat.opening ?? 'normal']}</div>
             <div style={{ color: '#ffcc80', fontSize: '11px' }}>{isPlayerUnconscious(player) ? '💫 昏迷中，' : ''}戰鬥動作在選項列：攻擊、技能、逃跑。</div>
           </div>;
         })() : (() => {
           const unit = player.encounteredUnitId ? getWorldUnitById(player.encounteredUnitId, player) : undefined;
-          const encountered = unit?.requiresEncounter ? unit : undefined;
+          // O45：玩家先發現的敵對居民也是遭遇對象。
+          const encountered = unit?.requiresEncounter || player.encounterInfo?.playerSpottedFirst ? unit : undefined;
           const disposition = encountered ? getWorldUnitDisposition(player, encountered.id) : undefined;
           const dispositionLabel = disposition === 'friendly' ? '友善' : disposition === 'hostile' ? '敵對' : '中立';
           return encountered && currentMap?.unitsPresent.includes(encountered.id)
             ? <div>
-              <div style={{ color: '#ffcc80', fontSize: '12px', marginBottom: '5px' }}>已遭遇：{encountered.name}（{dispositionLabel}）</div>
+              <div style={{ color: '#ffcc80', fontSize: '12px', marginBottom: '5px' }}>已遭遇：{encountered.name}（{dispositionLabel}）{player.encounterInfo?.playerSpottedFirst ? '・你先發現對方' : ''}</div>
             </div>
             : <div style={{ color: '#aaa', fontSize: '12px' }}>{currentMap?.isSafeZone ? '安全地區沒有敵人。' : '尚未遭遇敵人；探索或搜索周遭以觸發遭遇。'}</div>;
         })()}

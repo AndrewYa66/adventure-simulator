@@ -1,0 +1,44 @@
+{
+  "_comment": "手段 → 結果表（O45）。O45 放開戰手段（伏擊、陷阱、攻擊）；O50-2 加入說服、偷竊等。數值皆可調。",
+  "methods": [
+    {
+      "id": "ambush",
+      "label": "伏擊",
+      "checkAbility": "dex",
+      "dcBase": 10,
+      "dcOpponentAbility": "wis",
+      "requiresPlayerSpottedFirst": true,
+      "onSuccess": { "opening": "player_ambush", "firstStrikeMultiplier": 1.5 },
+      "onFailure": { "opening": "enemy_ambush" }
+    },
+    {
+      "id": "trap",
+      "label": "設陷阱",
+      "checkAbility": "int",
+      "dcBase": 10,
+      "dcOpponentAbility": "wis",
+      "requiresPlayerSpottedFirst": false,
+      "onSuccess": { "opening": "trap", "trapDamageRatio": 0.25, "firstStrikeMultiplier": 1.5 },
+      "onFailure": { "opening": "normal" }
+    },
+    {
+      "id": "attack",
+      "label": "攻擊",
+      "requiresPlayerSpottedFirst": false,
+      "onSuccess": { "opening": "normal" },
+      "onFailure": { "opening": "normal" }
+    }
+  ],
+  "combatRules": {
+    "encounterExpiryMinutes": 30,
+    "perception": { "ability": "wis", "dcBase": 10, "opponentAbility": "dex" },
+    "flee": { "stat": "spd", "dcBase": 10, "opponentSpdDivisor": 2 },
+    "residentReaggroMinutes": 30,
+    "defaultTrapWaitMinutes": 60,
+    "claimPatterns": ["命中", "擊中", "砍中", "刺中", "射中", "擊殺", "斬殺", "擊倒了", "倒地不起", "沒了氣息", "斷了氣", "一命嗚呼", "結果了牠", "結果了他", "結果了她", "閃過了", "閃避了", "躲過了", "格擋了", "架開了", "鮮血直流"],
+    "typedCombatPatterns": ["補上一劍", "補一劍", "補刀", "結果了牠", "結果了他", "結果了她", "結果牠", "結果他", "結果她", "踢倒", "砍殺", "斬殺", "射向", "一劍刺", "一劍砍", "一刀砍", "一刀刺"],
+    "suggestionFilterPatterns": ["攻擊", "攻打", "砍向", "刺向", "揮擊", "拔劍", "衝向"],
+    "ambushPatterns": ["偷襲", "突襲", "伏擊", "埋伏"],
+    "trapPatterns": ["設陷阱", "布置陷阱", "佈置陷阱", "設下陷阱", "架設陷阱", "下陷阱"]
+  }
+}

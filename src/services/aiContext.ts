@@ -1,5 +1,5 @@
 import type { AIContextTrimmableSectionId, CharacterHistoryEntry, PlayerState, StoryMessage } from '../types/game';
-import { aiContextConfig, canPlayerEnterMap, describeUnitBuild, getFactionById, getMapById, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, scenario, storyData } from '../data/staticData';
+import { actionMethodData, aiContextConfig, combatRules, canPlayerEnterMap, describeUnitBuild, getFactionById, getMapById, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, itemsDatabase, scenario, storyData } from '../data/staticData';
 import { canAcceptQuest, canTurnInQuest, getQuestGiverName, isGeneratedQuest, listVisibleQuests } from '../utils/questRules';
 import { getQuestPostingOptions } from '../utils/generatedQuests';
 import { getFactionContextForAI } from '../utils/factions';
@@ -10,6 +10,9 @@ import { getCharacterLegacyForAI, getProposableEvents, getWorldContextForAI } fr
 import { getMemoryEligibleUnitIds, getUnitMemoriesForAI } from '../utils/unitMemory';
 import { getStoryContextForAI } from '../utils/storylets';
 import { getEffectiveAgentProfile } from '../utils/agents';
+import { getCombatStartBlock } from '../utils/systemOptions';
+import { getAmbushableUnit } from '../utils/encounters';
+import { OPENING_LABELS } from '../utils/combatResolution';
 
 /**
  * AI 上下文組裝器（O39）：集中負責主持人 AI 每次呼叫的上下文。
@@ -19,14 +22,14 @@ import { getEffectiveAgentProfile } from '../utils/agents';
  */
 
 /** 目前的回應格式版本；Gemini JSON Schema 要求填入此值。 */
-export const AI_RESPONSE_FORMAT_VERSION = 5;
+export const AI_RESPONSE_FORMAT_VERSION = 6;
 /**
  * 可解析的版本；沒有版本號的回應視為第 1 版。
  * 第 1、2 版的單位欄位使用舊名稱（monsterId、npcItemTransfers.npcId、defeatedMonsters），解析時轉為第 3 版名稱。
  * 第 4 版加入 memoryNotes（人物記憶）；較舊版本沒有此欄位，視為空陣列。
  * 第 5 版加入 storyletProposals（劇情片段選擇）；較舊版本沒有此欄位，視為空陣列。
  */
-export const SUPPORTED_AI_RESPONSE_FORMAT_VERSIONS = [1, 2, 3, 4, 5];
+export const SUPPORTED_AI_RESPONSE_FORMAT_VERSIONS = [1, 2, 3, 4, 5, 6];
 
 export type AIContextSectionId =
   | 'player' | 'legacy' | 'location' | 'residents' | 'factions' | 'story' | 'quests' | 'encounters' | 'items' | 'flags'
@@ -194,6 +197,9 @@ function buildRules(): string {
 - 只有玩家行動或明確世界事件確實改變了當前地區單位對玩家的關係時，才在 stateChanges.unitDispositionChanges 回報單位 ID 與 friendly/neutral/hostile；純對話、陣營傾向或臆測不能改變關係。單位關係變更須與 storyText 敘事一致。
 - 每次回應都必須包含 encounterRequest；若玩家尚未實際看見或接觸敵人，設為 null。只有探索、搜索或情境中確實遇見敵人時，才指定本地區可遭遇清單中的 unitId，並在敘事中描述遭遇。不可只因單位存在於地圖資料，就宣稱玩家已遭遇；不可遭遇未列出的敵人。
 - 玩家在對話中明確要求攻擊目前地區的敵人時，不可假裝攻擊已命中、敵人已受傷或已被擊敗；戰鬥與獎勵由遊戲端確定性規則處理，若無法由遊戲端執行，只能說明尚未發起戰鬥。
+- 開戰（combatRequest）：每次回應都必須包含 combatRequest。只有玩家本回合明確要對「可開戰對象」動手時才填入：method 為 attack（正面攻擊）、ambush（偷襲、伏擊；只限 canAmbush 為 true 的對象）或 trap（設陷阱等敵人上門，unitId 填任一可開戰對象或遭遇對象）；射箭、投擲、施法等遠程攻擊同樣用 attack（或可伏擊時的 ambush），不要改用 checkRequest；否則為 null。填入時 storyText 只描寫接近、埋伏或布置的過程，停在出手的前一刻：不可寫出命中、閃避、受傷、擊倒或逃走，成敗由遊戲擲骰後另行顯示；checkRequest、stateChanges 與 memoryNotes 不會套用。
+- 沒有進行中的戰鬥時，不論玩家怎麼描述，storyText 都不可寫出攻防結果（命中、閃避、格擋、受傷、擊殺）；suggestedActions 也不要提供以文字進行的戰鬥動作（遊戲的選項列已有伏擊與挑戰）。
+- encounterEnded：每次回應都必須包含（boolean）。只有目前遭遇的對象在本回合敘事中離開、逃走或走遠時為 true，否則為 false。
 - 不可在敘事中宣稱玩家已使用消耗品、恢復 HP/MP 或已取得金幣/經驗/掉落物，除非對應狀態變更已由遊戲端結算。
 注意事項：
 1. 當給予或扣除玩家道具時，只可使用上方「世界靜態物品清單」中的 Item ID。
@@ -209,6 +215,8 @@ function buildRules(): string {
   "storyText": "精彩生動的情境描繪與戰況（約 100-200 字，繁體中文）",
   "suggestedActions": ["選項 1", "選項 2", "選項 3"],
   "encounterRequest": null,
+  "combatRequest": null,
+  "encounterEnded": false,
   "travelRequest": null,
   "serviceRequest": null,
   "checkRequest": null,
@@ -288,6 +296,12 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
     )) ? [{ id: unit.id, name: unit.name, build: describeUnitBuild(unit), disposition: getWorldUnitDisposition(playerState, unit.id) }] : []);
   const availableServices = getAvailableServices(playerState);
   const encounteredUnit = playerState.encounteredUnitId ? getWorldUnitById(playerState.encounteredUnitId, playerState) : undefined;
+  // O45：可開戰對象（combatRequest 只可選這些 ID）；canAmbush 表示玩家先發現、可伏擊。
+  const combatTargets = playerState.combat ? [] : currentUnits.flatMap((unit) => getCombatStartBlock(playerState, unit.id, true) ? []
+    : [{ id: unit.id, name: unit.name, canAmbush: !!getAmbushableUnit(playerState, unit.id) }]);
+  const encounterStatus = encounteredUnit && playerState.encounterInfo
+    ? `${encounteredUnit.name}（${playerState.encounterInfo.playerSpottedFirst ? '玩家先發現，對方尚未察覺' : '雙方已照面'}；約 ${Math.max(0, combatRules.encounterExpiryMinutes - (playerState.gameTimeMinutes - playerState.encounterInfo.startedAtMinutes))} 分鐘後若沒有動作就會離開）`
+    : encounteredUnit?.name ?? '無';
   const playerUnit = getPlayerWorldUnit(playerState);
   const legacy: LegacyEntry[] = getCharacterLegacyForAI(playerState, characterHistory, aiContextConfig.legacy.maxCharacters, aiContextConfig.legacy.maxDeedsPerCharacter);
   // 歷代角色區段已列出的事件不在世界事件區段重複。
@@ -347,8 +361,9 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
       `- 可發布的支線委託（questProposals 只可依此提議；沒有列出代表目前不能發布）: ${JSON.stringify(questPostingOptions)}`
     ) },
     { id: 'encounters', dropped: 0, droppedEntries: 0, text: lines(
-      `- 當前戰鬥: ${playerState.combat ? JSON.stringify(playerState.combat) : '無'}`,
-      `- 目前已遭遇單位: ${encounteredUnit?.name ?? '無'}`,
+      `- 當前戰鬥: ${playerState.combat ? `${JSON.stringify(playerState.combat)}（開場：${OPENING_LABELS[playerState.combat.opening ?? 'normal']}）` : '無'}`,
+      `- 目前已遭遇單位: ${encounterStatus}`,
+      `- 可開戰對象（combatRequest 只可選這些 ID）: ${JSON.stringify(combatTargets)}`,
       `- 本地區可遭遇敵人（只可選這些 ID）: ${JSON.stringify(encounterCandidates)}`,
       `- 當前可使用服務（serviceRequest 只可選這些 shopId/serviceId）: ${JSON.stringify(availableServices)}`
     ) },
@@ -420,6 +435,17 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
         required: ['unitId'],
         additionalProperties: false
       },
+      // O45（第 6 版）：開戰手段與目標；沒有可開戰對象時只允許 null。
+      combatRequest: combatTargets.length ? {
+        type: ['object', 'null'],
+        properties: {
+          unitId: { type: 'string', enum: combatTargets.map((target) => target.id) },
+          method: { type: 'string', enum: actionMethodData.methods.map((method) => method.id) }
+        },
+        required: ['unitId', 'method'],
+        additionalProperties: false
+      } : { type: 'null' },
+      encounterEnded: { type: 'boolean' },
       // 沒有可用服務時只允許 null，避免模型被迫選擇佔位 ID。
       serviceRequest: availableServices.length ? {
         type: ['object', 'null'],
@@ -542,7 +568,7 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
         : { type: 'array', items: { type: 'string' }, maxItems: 0 }
     },
     required: [
-      'formatVersion', 'storyText', 'suggestedActions', 'encounterRequest', 'travelRequest', 'serviceRequest', 'checkRequest', 'checkOutcomes', 'stateChanges', 'failureStateChanges', 'eventProposals', 'questProposals', 'memoryNotes', 'storyletProposals'
+      'formatVersion', 'storyText', 'suggestedActions', 'encounterRequest', 'combatRequest', 'encounterEnded', 'travelRequest', 'serviceRequest', 'checkRequest', 'checkOutcomes', 'stateChanges', 'failureStateChanges', 'eventProposals', 'questProposals', 'memoryNotes', 'storyletProposals'
     ],
     additionalProperties: false
   };
