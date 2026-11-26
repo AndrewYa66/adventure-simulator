@@ -459,7 +459,8 @@ function runUntilPlayerTurn(ctx: Ctx): void {
     const key = combat.turnOrder[index];
     if (isPlayerKey(key)) {
       if (hasStatus(ctx.state, key, 'unconscious')) {
-        ctx.state = tickStatus(ctx.state, key, 'unconscious');
+        // 自動跳過的玩家回合同樣經過一個戰鬥回合的時間（review 第 1 輪 R2）。
+        ctx.state = tickStatus(advanceGameTime(ctx.state, 'combatRound'), key, 'unconscious');
         ctx.lines.push('💫 你仍昏迷，失去本回合行動。');
         continue;
       }
