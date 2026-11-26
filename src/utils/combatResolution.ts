@@ -364,7 +364,7 @@ function enemyAttack(ctx: Ctx, enemyKey: string, openingStrike = false): void {
 // 同伴的規則行為（D13）與治療
 // ---------------------------------------------------------------------------
 
-/** 治療我方一人（技能或道具）；倒地的同伴被治療後起身。回傳實際恢復量。 */
+/** 治療我方一人（技能或道具）。一般治療不能救起倒地的同伴（D9，只有復甦效果可以）。回傳實際恢復量。 */
 function healPartyMember(ctx: Ctx, targetKey: string, hpRestore: number, mpRestore = 0): { hp: number; mp: number } {
   if (isPlayerKey(targetKey)) {
     const caps = getPlayerResourceCaps(ctx.state);
@@ -377,20 +377,33 @@ function healPartyMember(ctx: Ctx, targetKey: string, hpRestore: number, mpResto
   const instance = ctx.state.unitInstances[targetKey];
   if (!unit || !instance) return { hp: 0, mp: 0 };
   const resources = getCompanionResources(ctx.state, unit);
+  if (resources.downed) return { hp: 0, mp: 0 };
   const hp = Math.min(hpRestore, Math.max(0, resources.maxHp - resources.hp));
   const mp = Math.min(mpRestore, Math.max(0, resources.maxMp - resources.mp));
-  const nextHp = resources.hp + hp;
-  ctx.state = { ...ctx.state, unitInstances: { ...ctx.state.unitInstances, [targetKey]: { ...instance, currentHp: nextHp, currentMp: resources.mp + mp, downed: nextHp <= 0 } } };
+  ctx.state = { ...ctx.state, unitInstances: { ...ctx.state.unitInstances, [targetKey]: { ...instance, currentHp: resources.hp + hp, currentMp: resources.mp + mp } } };
   return { hp, mp };
 }
 
-/** 我方 HP 比例最低、且低於門檻的成員（含倒地同伴）。 */
+/** 復甦起身的 HP（D35）：最大 HP × reviveRatio（捨去、至少 1）。 */
+export const getReviveHp = (maxHp: number): number => Math.max(1, Math.floor(maxHp * partyRules.reviveRatio));
+
+/** 以復甦效果救起倒地的同伴（D35）；下一次輪到他時才行動。回傳起身的 HP，對象不是倒地同伴時回傳 0。 */
+function revivePartyMember(ctx: Ctx, targetKey: string): number {
+  const unit = isPlayerKey(targetKey) ? undefined : getWorldUnitById(targetKey, ctx.state);
+  const instance = ctx.state.unitInstances[targetKey];
+  if (!unit || !instance || !getCompanionResources(ctx.state, unit).downed) return 0;
+  const hp = getReviveHp(unit.stats.hp);
+  ctx.state = { ...ctx.state, unitInstances: { ...ctx.state.unitInstances, [targetKey]: { ...instance, currentHp: hp, downed: false } } };
+  return hp;
+}
+
+/** 我方 HP 比例最低、且低於門檻的成員；倒地的同伴不是一般治療的對象（D9）。 */
 function findHealTarget(state: PlayerState): string | undefined {
   const combat = state.combat;
   if (!combat) return undefined;
-  return combat.participants.filter((participant) => participant.side === 'party')
+  return combat.participants.filter((participant) => participant.side === 'party' && isPartyStanding(state, participant.key))
     .map((participant) => ({ key: participant.key, ...partyHp(state, participant.key) }))
-    .filter((entry) => entry.hp / entry.maxHp < partyRules.companionHealThreshold && !(isPlayerKey(entry.key) && state.isDead))
+    .filter((entry) => entry.hp / entry.maxHp < partyRules.companionHealThreshold)
     .sort((a, b) => a.hp / a.maxHp - b.hp / b.maxHp)[0]?.key;
 }
 
@@ -529,16 +542,26 @@ export function getCombatActionBlock(player: PlayerState, action: PlayerCombatAc
   if (!combat || player.isDead) return '目前不在戰鬥中。';
   if (action.kind === 'skip') return undefined;
   if (!canPlayerAct(player)) return '你目前無法行動。';
+  // 技能須已解鎖且類型相符（review 第 1 輪 S4）：攻擊用傷害技能、治療用治療技能。
+  const skill = action.kind === 'attack' ? action.skill : action.kind === 'heal' ? action.skill : undefined;
+  if (skill && !getUnlockedSkills(player.classId, player.level).some((entry) => entry.id === skill.id)) return `你尚未習得${skill.name}。`;
   if (action.kind === 'attack') {
+    if (action.skill && action.skill.effect.kind !== 'damage_multiplier') return `${action.skill.name}不是攻擊技能。`;
     if (!getCombatTarget(combat)) return '沒有可攻擊的敵人。';
     if (action.skill && player.mp < action.skill.costMp) return `${action.skill.name}需要 ${action.skill.costMp} MP，目前魔力不足。`;
   }
   if (action.kind === 'heal' || action.kind === 'item') {
     const target = getParticipant(combat, action.targetKey);
     if (target?.side !== 'party') return '只能對我方成員使用。';
+    if (action.kind === 'heal' && action.skill.effect.kind !== 'healing') return `${action.skill.name}不是治療技能。`;
     if (action.kind === 'heal' && player.mp < action.skill.costMp) return `${action.skill.name}需要 ${action.skill.costMp} MP，目前魔力不足。`;
     if (action.kind === 'item' && !player.inventory.some((entry) => entry.itemId === action.item.id && entry.quantity > 0)) return `你沒有${action.item.name}。`;
     if (action.kind === 'item' && !action.item.usableInCombat) return `${action.item.name}無法在戰鬥中使用。`;
+    // 倒地的同伴只能用復甦效果救起；復甦效果只對倒地的同伴（D9、D35）。
+    const downed = !isPlayerKey(action.targetKey) && player.unitInstances[action.targetKey]?.downed === true;
+    const revive = action.kind === 'item' && action.item.effect.revive === true;
+    if (downed && !revive) return `${partyName(player, action.targetKey)}倒地了，一般治療無法救起，需要復甦效果。`;
+    if (revive && !downed) return `${action.item.name}只能對倒地的同伴使用。`;
   }
   return undefined;
 }
@@ -565,6 +588,10 @@ export function resolvePlayerCombatAction(player: PlayerState, action: PlayerCom
     ctx.state = { ...ctx.state, mp: ctx.state.mp - action.skill.costMp };
     const restored = action.skill.effect.kind === 'healing' ? healPartyMember(ctx, action.targetKey, action.skill.effect.hpRestore) : { hp: 0, mp: 0 };
     ctx.lines.push(`✨ 你對${isPlayerKey(action.targetKey) ? '自己' : partyName(ctx.state, action.targetKey)}施放${action.skill.name}，HP +${restored.hp}、MP -${action.skill.costMp}。`);
+  } else if (action.kind === 'item' && action.item.effect.revive) {
+    const hp = revivePartyMember(ctx, action.targetKey);
+    ctx.state = applyStateChanges(ctx.state, { storyText: '', suggestedActions: [], stateChanges: { removeItems: [{ itemId: action.item.id, quantity: 1 }] } }, 'game');
+    ctx.lines.push(`🧪 你對${partyName(ctx.state, action.targetKey)}使用${action.item.name}，${partyName(ctx.state, action.targetKey)}以 ${hp} HP 起身，下一次輪到時才會行動。`);
   } else if (action.kind === 'item') {
     const restored = healPartyMember(ctx, action.targetKey, action.item.effect.hpRestore ?? 0, action.item.effect.mpRestore ?? 0);
     ctx.state = applyStateChanges(ctx.state, { storyText: '', suggestedActions: [], stateChanges: { removeItems: [{ itemId: action.item.id, quantity: 1 }] } }, 'game');

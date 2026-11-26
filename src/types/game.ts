@@ -11,6 +11,8 @@ export interface ItemStatic {
   effect: {
     hpRestore?: number;
     mpRestore?: number;
+    /** 復甦（O35-1 D35）：只能對倒地的我方同伴使用，以最大 HP × partyRules.reviveRatio 起身。 */
+    revive?: boolean;
     atkBonus?: number;
     defBonus?: number;
     spdBonus?: number;
@@ -204,6 +206,8 @@ export interface PartyRulesStatic {
   companionHealThreshold: number;
   /** 倒地同伴在勝利或逃跑成功後以此 HP 起身。 */
   reviveHp: number;
+  /** 戰鬥中以復甦效果救起時，以最大 HP 的此比例起身（捨去、至少 1；D35）。 */
+  reviveRatio: number;
 }
 
 /** 重要角色的行動種類（O34 第 1 階段）。 */

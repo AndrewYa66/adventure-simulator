@@ -551,6 +551,11 @@ export function validateWorldUnitData(): string[] {
   if (!(partyRules.aggroWeights?.player > 0 && partyRules.aggroWeights?.companion > 0)) issues.push('party_rules.aggroWeights 的權重須大於 0');
   if (!(partyRules.companionHealThreshold > 0 && partyRules.companionHealThreshold < 1)) issues.push('party_rules.companionHealThreshold 須介於 0 與 1 之間');
   if (!(Number.isInteger(partyRules.reviveHp) && partyRules.reviveHp >= 1)) issues.push('party_rules.reviveHp 須為正整數');
+  if (!(partyRules.reviveRatio > 0 && partyRules.reviveRatio <= 1)) issues.push('party_rules.reviveRatio 須介於 0（不含）與 1 之間');
+  // 復甦效果（D35）：只能放在戰鬥中可用的消耗品上。
+  for (const item of itemsDatabase.filter((entry) => entry.effect.revive !== undefined)) {
+    if (item.effect.revive !== true || item.type !== 'consumable' || !item.usableInCombat) issues.push(`${item.id}: 復甦效果只能是 true，且須為戰鬥中可用的消耗品`);
+  }
 
   for (const shop of shopsDatabase) {
     if (getUnitTemplateById(shop.ownerUnitId)?.shopId !== shop.id) issues.push(`${shop.id}: 經營者 ${shop.ownerUnitId} 不存在或未指向此商店`);

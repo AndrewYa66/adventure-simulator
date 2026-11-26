@@ -968,6 +968,10 @@ export default function App() {
       executeCombatAction({ kind: 'item', item, targetKey });
       return;
     }
+    if (item.effect.revive) {
+      appendSystemMessage(`${item.name}只能在戰鬥中對倒地的同伴使用，沒有消耗道具。`);
+      return;
+    }
     if (targetKey !== player.unitId) {
       const restored = restoreCompanionOutOfCombat(player, targetKey, item.effect.hpRestore ?? 0, item.effect.mpRestore ?? 0);
       if (!restored || (restored.hp <= 0 && restored.mp <= 0)) {

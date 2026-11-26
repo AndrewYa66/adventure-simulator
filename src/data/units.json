@@ -108,6 +108,10 @@
       {
         "itemId": "ITEM-003",
         "quantity": 8
+      },
+      {
+        "itemId": "ITEM-005",
+        "quantity": 3
       }
     ],
     "alignment": "中立善良",

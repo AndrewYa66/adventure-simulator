@@ -1,7 +1,8 @@
 {
-  "_comment": "隊伍規則（O35-1）。數值皆可調：同伴上限、敵人選目標的仇恨基礎權重、同伴治療門檻（HP 比例）、倒地同伴起身 HP。",
+  "_comment": "隊伍規則（O35-1）。數值皆可調：同伴上限、敵人選目標的仇恨基礎權重、同伴治療門檻（HP 比例）、倒地同伴在勝利或逃跑後起身的 HP、復甦效果救起時的最大 HP 比例。",
   "maxCompanions": 3,
   "aggroWeights": { "player": 2, "companion": 1 },
   "companionHealThreshold": 0.4,
-  "reviveHp": 1
+  "reviveHp": 1,
+  "reviveRatio": 0.25
 }

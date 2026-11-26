@@ -1,4 +1,4 @@
-import type { PlayerState } from '../types/game';
+import type { ItemStatic, PlayerState } from '../types/game';
 import { canPlayerEnterMap, getItemById, getMapById, getPlayerResourceCaps, getShopById, getShopForUnit, getUnlockedSkills, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, scenario } from '../data/staticData';
 import { canAcceptQuest, canTurnInQuest, getQuestGiverName, listVisibleQuests } from './questRules';
 import { canPlayerAct, isPlayerUnconscious } from './playerStatus';
@@ -140,18 +140,24 @@ export function buildNoticeBoardOptions(player: PlayerState): SystemOption[] {
   }));
 }
 
-/** 治療與道具的對象（O35-1 D21）：玩家自己與隊伍同伴；includeDowned 為 true 時含倒地的同伴（戰鬥中可救起）。 */
-function getPartyTargets(player: PlayerState, includeDowned: boolean): { key: string; label: string; hp: number; maxHp: number; mp: number; maxMp: number }[] {
+interface PartyTarget { key: string; name: string; label: string; hp: number; maxHp: number; mp: number; maxMp: number; downed: boolean }
+
+/** 治療與道具的對象（O35-1 D21）：玩家自己與隊伍同伴；includeDowned 為 true 時含倒地的同伴（戰鬥中只有復甦效果可用）。label 顯示 HP。 */
+function getPartyTargets(player: PlayerState, includeDowned: boolean): PartyTarget[] {
   const caps = getPlayerResourceCaps(player);
   return [
-    { key: player.unitId, label: `自己（HP ${player.hp}/${caps.maxHp}）`, hp: player.hp, maxHp: caps.maxHp, mp: player.mp, maxMp: caps.maxMp },
+    { key: player.unitId, name: '自己', label: `自己（HP ${player.hp}/${caps.maxHp}）`, hp: player.hp, maxHp: caps.maxHp, mp: player.mp, maxMp: caps.maxMp, downed: false },
     ...getPartyMembers(player).flatMap((unit) => {
       const resources = getCompanionResources(player, unit);
       if (resources.downed && !includeDowned) return [];
-      return [{ key: unit.id, label: `${unit.name}（${resources.downed ? '倒地' : `HP ${resources.hp}/${resources.maxHp}`}）`, ...resources }];
+      return [{ key: unit.id, name: unit.name, label: `${unit.name}（${resources.downed ? '倒地' : `HP ${resources.hp}/${resources.maxHp}`}）`, ...resources }];
     })
   ];
 }
+
+/** 道具對象的顯示：只恢復 MP 的道具顯示 MP，其餘顯示 HP（review 第 1 輪 S6）。 */
+const itemTargetLabel = (item: ItemStatic, member: PartyTarget) =>
+  !member.downed && (item.effect.mpRestore ?? 0) > 0 && !(item.effect.hpRestore ?? 0) ? `${member.name}（MP ${member.mp}/${member.maxMp}）` : member.label;
 
 /** 背包中的消耗品；inCombat 時只列戰鬥中可用的。 */
 function getConsumables(player: PlayerState, inCombat: boolean) {
@@ -178,12 +184,15 @@ export function buildSystemOptions(player: PlayerState): SystemOptionSet {
     const targets: SystemOption[] = getStandingEnemies(combat).filter((enemy) => enemy.key !== target?.key).map((enemy) => ({
       id: `combat:target:${enemy.key}`, label: `🎯 鎖定 ${enemy.label}（HP ${enemy.currentHp}）`, action: { kind: 'switchTarget', enemyKey: enemy.key }
     }));
+    // 一般治療只列站著的成員；復甦道具只列倒地的同伴（D9、D35）。
     const members = getPartyTargets(player, true);
-    const healSkills: SystemOption[] = skills.filter((skill) => skill.effect.kind === 'healing').flatMap((skill) => members.map((member) => ({
+    const standingMembers = members.filter((member) => !member.downed);
+    const downedMembers = members.filter((member) => member.downed);
+    const healSkills: SystemOption[] = skills.filter((skill) => skill.effect.kind === 'healing').flatMap((skill) => standingMembers.map((member) => ({
       id: `combat:heal:${skill.id}:${member.key}`, label: `✨ ${skill.name} → ${member.label}`, title: skill.description,
       disabledReason: notYourTurn ?? (player.mp < skill.costMp ? '魔力不足' : undefined), action: { kind: 'useSkill', skillId: skill.id, targetKey: member.key } } satisfies SystemOption)));
-    const items: SystemOption[] = getConsumables(player, true).flatMap(({ item, quantity }) => members.map((member) => ({
-      id: `combat:item:${item.id}:${member.key}`, label: `🧪 ${item.name} → ${member.label}（持有 ${quantity}）`, title: item.description,
+    const items: SystemOption[] = getConsumables(player, true).flatMap(({ item, quantity }) => (item.effect.revive ? downedMembers : standingMembers).map((member) => ({
+      id: `combat:item:${item.id}:${member.key}`, label: `🧪 ${item.name} → ${itemTargetLabel(item, member)}（持有 ${quantity}）`, title: item.description,
       disabledReason: notYourTurn, action: { kind: 'useItem', itemId: item.id, targetKey: member.key } } satisfies SystemOption)));
     const groups: SystemOptionGroup[] = [
       { id: 'targets', label: '目標', options: targets },
@@ -272,7 +281,7 @@ export function buildSystemOptions(player: PlayerState): SystemOptionSet {
   // 有同伴時，消耗品可對同伴使用（自己的使用仍在 HUD 背包）。
   const itemOptions: SystemOption[] = player.party.length ? getConsumables(player, false).flatMap(({ item, quantity }) => members.filter((member) =>
     member.key !== player.unitId && ((item.effect.hpRestore ?? 0) > 0 && member.hp < member.maxHp || (item.effect.mpRestore ?? 0) > 0 && member.mp < member.maxMp))
-    .map((member): SystemOption => ({ id: `item:${item.id}:${member.key}`, label: `🧪 ${item.name} → ${member.label}（持有 ${quantity}）`, title: item.description, action: { kind: 'useItem', itemId: item.id, targetKey: member.key } }))) : [];
+    .map((member): SystemOption => ({ id: `item:${item.id}:${member.key}`, label: `🧪 ${item.name} → ${itemTargetLabel(item, member)}（持有 ${quantity}）`, title: item.description, action: { kind: 'useItem', itemId: item.id, targetKey: member.key } }))) : [];
 
   const waitMinutes = scenario.rules.waitOptionMinutes.filter((minutes) => minutes > 0 && minutes <= MAX_WAIT_MINUTES);
   const wait: SystemOption[] = [
