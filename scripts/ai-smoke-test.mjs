@@ -48,6 +48,7 @@ const { module: story } = await runnerImport('/src/utils/storylets.ts');
 const { module: route } = await runnerImport('/src/utils/travelRoute.ts');
 const { module: travelIntent } = await runnerImport('/src/utils/travelIntent.ts');
 const { module: agentAI } = await runnerImport('/src/services/agentDecisionService.ts');
+const { module: partyClaims } = await runnerImport('/src/utils/partyClaims.ts');
 
 const base = init.createInitialPlayer('測試員', data.scenario.defaultPlayer.classId, data.scenario.defaultPlayer.alignment, true);
 const startMap = data.getMapById(base.currentMapId);
@@ -131,6 +132,16 @@ const withCompanion = companion ? { ...base, party: [companion.id] } : undefined
 const companionInWild = companion ? { ...spottedFoe, party: [companion.id] } : undefined;
 const nonCompanion = startNpcs.find((unit) => !unit.companion?.recruitable && unit.id !== merchant.id) ?? merchant;
 const partyClaimPattern = /離開了?隊伍|離隊|脫離隊伍|不再同行|就此別過|分道揚鑣|轉身(先行)?(離去|離開|走遠)|留(下)?你(一|獨自一)人|加入了?(你的)?隊伍|成為(了)?(你的)?同伴|答應(與你)?同行|(與你|和你)結伴同行/;
+// D34：敘事宣稱與狀態不符時，前端補說明也算通過（驗收 25），並記錄補說明的次數。
+let companionNotices = 0;
+const consistentWithParty = (r, p) => {
+  const notices = partyClaims.findCompanionClaims(p, r.storyText);
+  if (notices.length) { companionNotices += 1; console.log(`   前端補說明：${notices.join('')}`); }
+  // 判定用的獨立字詞：去掉引號內對話，逐句檢查，句中有否定字詞（例如「沒有轉身離去」）不算宣稱。
+  const claimed = r.storyText.replace(/「[^」]*」|『[^』]*』/g, '').split(/[。！？!?\n]+/)
+    .some((sentence) => partyClaimPattern.test(sentence) && !/沒有|沒|並未|未曾|不會|不願|不肯|拒絕|婉拒|無法|不能/.test(sentence.replace(partyClaimPattern, '')));
+  return !claimed || notices.length > 0;
+};
 const companionUntouched = (r) => companion &&
   !(r.stateChanges?.unitItemTransfers ?? []).some((entry) => entry.unitId === companion.id) &&
   !(r.stateChanges?.unitDispositionChanges ?? []).some((entry) => entry.unitId === companion.id) &&
@@ -246,19 +257,19 @@ const scenarios = [
   ] : []),
   ...(companion ? [
     { group: '同伴', name: '和同伴交談', player: withCompanion, action: `${companion.name}，你覺得我們接下來該先去哪裡？`,
-      check: (r) => r.storyText.includes(companion.name) && companionUntouched(r) && !partyClaimPattern.test(r.storyText),
+      check: (r, p) => r.storyText.includes(companion.name) && companionUntouched(r) && consistentWithParty(r, p),
       expect: '同伴以自己的口吻回應、不宣稱入隊離隊、不改變同伴狀態' },
     { group: '同伴', name: '向同伴要東西', player: withCompanion, action: `${companion.name}，把你身上的東西分我一些吧`,
-      check: (r) => companionUntouched(r) && !partyClaimPattern.test(r.storyText), expect: '沒有同伴的物品轉移' },
+      check: (r, p) => companionUntouched(r) && consistentWithParty(r, p), expect: '沒有同伴的物品轉移' },
     { group: '同伴', name: '打字請同伴離開', player: withCompanion, action: `${companion.name}，你先回去吧，接下來我想一個人走`,
-      check: (r) => companionUntouched(r) && !partyClaimPattern.test(r.storyText), expect: '敘事不宣稱同伴離隊（離隊由選項列執行）' },
+      check: (r, p) => companionUntouched(r) && consistentWithParty(r, p), expect: '敘事不宣稱同伴離隊（離隊由選項列執行）' },
     { group: '同伴', name: '打字邀請非同伴入隊', player: withCompanion, action: `${nonCompanion.name}，跟我們一起去冒險吧！`,
-      check: (r) => companionUntouched(r) && !partyClaimPattern.test(r.storyText), expect: '敘事不宣稱對方入隊' },
+      check: (r, p) => companionUntouched(r) && consistentWithParty(r, p), expect: '敘事不宣稱對方入隊' },
     { group: '同伴', name: '叫同伴替我出手', player: companionInWild, action: `${companion.name}，替我朝${foe.name}射一箭！`,
-      check: (r) => companionUntouched(r) && !encounters.hasCombatClaim(r.storyText) && !partyClaimPattern.test(r.storyText),
+      check: (r, p) => companionUntouched(r) && !encounters.hasCombatClaim(r.storyText) && consistentWithParty(r, p),
       expect: '不宣稱命中或擊倒（開戰與否由規則決定）' },
     { group: '同伴', name: '和他人交談時同伴在旁', player: withCompanion, action: `${merchant.name}，最近古道那邊的狀況怎麼樣？`,
-      check: (r) => companionUntouched(r) && !partyClaimPattern.test(r.storyText), expect: '同伴可插話，但不改變同伴狀態、不宣稱入隊離隊' }
+      check: (r, p) => companionUntouched(r) && consistentWithParty(r, p), expect: '同伴可插話，但不改變同伴狀態、不宣稱入隊離隊' }
   ] : []),
   ...(agentNormal.agentBatch ? [{ group: '角色決策', name: '一般跨日（村長與酋長）', agent: agentNormal,
     check: (resolution) => agentOutcomesOk(resolution), expect: '每位角色都選了合法候選且有動機' }] : []),
@@ -312,7 +323,9 @@ for (const model of models) {
     }
     let response;
     try {
-      response = await ai.sendPlayerAction({ provider: config.provider, model }, config.apiKey, scenario.player, scenario.action, scenario.messages ?? [], scenario.history ?? [], scenario.travel);
+      // 與遊戲相同：玩家打字要同伴離隊時，送 AI 的行動附上「同伴仍在隊伍中」的提醒（D34）。
+      const actionForAI = `${scenario.action}${partyClaims.describeDismissIntentForAI(partyClaims.findDismissIntent(scenario.player, scenario.action))}`;
+      response = await ai.sendPlayerAction({ provider: config.provider, model }, config.apiKey, scenario.player, actionForAI, scenario.messages ?? [], scenario.history ?? [], scenario.travel);
     } catch (error) {
       errors += 1;
       totalCalls += requestCount;
@@ -347,6 +360,7 @@ for (const model of models) {
 }
 
 console.log('\n========== 總結 ==========');
+if (selected.some((scenario) => scenario.group === '同伴')) console.log(`「同伴」前端補說明次數：${companionNotices}`);
 for (const summary of summaries) {
   const answered = selected.length - summary.errors;
   console.log(`${summary.model}：${summary.passed}/${answered} 符合預期${summary.errors ? `（${summary.errors} 個情境呼叫失敗）` : ''}，實際請求 ${summary.totalCalls} 次`);
