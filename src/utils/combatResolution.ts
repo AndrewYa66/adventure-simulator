@@ -344,8 +344,8 @@ function enemyAttack(ctx: Ctx, enemyKey: string, openingStrike = false): void {
       // 擊倒玩家的單位依同一規則獲得玩家的擊倒經驗，並可能升級。
       const victorGrowth = grantUnitExp(ctx.state.unitInstances, unit.id, getPlayerWorldUnit(ctx.state).expReward, ctx.state.world);
       const died: PlayerState = { ...ctx.state, ...(victorGrowth ? { unitInstances: victorGrowth.instances } : {}) };
-      delete died.combat;
-      ctx.state = clearEncounter(died);
+      // 戰鬥結束：倒地的同伴不留在倒地狀態（review 第 1 輪 S1）；之後照舊讀檔。
+      ctx.state = endCombatForParty(died);
       ctx.deathHints[PLAYER_UNIT_ID] = { cause: 'combat', killerUnitId: unit.id };
       ctx.lines.push(`👹 ${enemy.label}${verb}你，命中造成 ${damage} 點傷害。\n☠️ HP 歸零，你已死亡。${victorGrowth && victorGrowth.level > victorGrowth.previousLevel ? `\n📈 ${unit.name}升至 Lv.${victorGrowth.level}。` : ''}`);
       ctx.ended = true;
