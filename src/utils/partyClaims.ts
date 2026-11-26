@@ -72,7 +72,7 @@ export function findCompanionClaims(state: PlayerState, storyText: string): stri
     if (sentences.some((sentence) => claims(sentence, checks.leave) && (refersTo(sentence) || /你(獨自)?一人/.test(sentence)))) {
       add(`${member.name}仍在隊伍中，沒有離開；要讓對方離隊，請用選項列「人物」的「👋 請${member.name}離隊」。`);
     }
-    // 已在隊伍中的同伴拒絕同行或說要留守某處（Andrew 試玩回報：再邀請時 AI 寫他拒絕、要守古道入口）。
+    // 已在隊伍中的同伴拒絕同行或說要留守某處（Andrew 試玩回報：再邀請時 AI 寫同伴拒絕、要留守原居所）。
     if (sentences.some((sentence) => claims(sentence, checks.refuse) && refersTo(sentence))) {
       add(`${member.name}已在你的隊伍中，會跟著你行動。`);
     }

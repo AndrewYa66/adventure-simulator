@@ -131,7 +131,7 @@ const companion = data.unitsDatabase.find((unit) => unit.companion?.recruitable)
 const withCompanion = companion ? { ...base, party: [companion.id] } : undefined;
 const companionInWild = companion ? { ...spottedFoe, party: [companion.id] } : undefined;
 const nonCompanion = startNpcs.find((unit) => !unit.companion?.recruitable && unit.id !== merchant.id) ?? merchant;
-const partyClaimPattern = /離開了?隊伍|離隊|脫離隊伍|不再同行|就此別過|分道揚鑣|轉身(先行)?(離去|離開|走遠)|留(下)?你(一|獨自一)人|加入了?(你的)?隊伍|成為(了)?(你的)?同伴|答應(與你)?同行|(與你|和你)結伴同行/;
+const partyClaimPattern = /離開了?隊伍|離隊|脫離隊伍|不再同行|就此別過|分道揚鑣|轉身(先行)?(離去|離開|走遠)|留(下)?你(一|獨自一)人|加入了?(你的)?隊伍|成為(了)?(你的)?同伴|答應(與你)?同行|(與你|和你)結伴同行|留在原地|拒絕(與你|和你|跟你)?(同行|一起)|婉拒|(要|得|必須)(留下|留守|守在)/;
 // D34：敘事宣稱與狀態不符時，前端補說明也算通過（驗收 25），並記錄補說明的次數。
 let companionNotices = 0;
 const consistentWithParty = (r, p) => {
@@ -268,6 +268,8 @@ const scenarios = [
     { group: '同伴', name: '叫同伴替我出手', player: companionInWild, action: `${companion.name}，替我朝${foe.name}射一箭！`,
       check: (r, p) => companionUntouched(r) && !encounters.hasCombatClaim(r.storyText) && consistentWithParty(r, p),
       expect: '不宣稱命中或擊倒（開戰與否由規則決定）' },
+    { group: '同伴', name: '已在隊伍中再邀請', player: withCompanion, action: `${companion.name}，跟我一起去古道看看吧`,
+      check: (r, p) => companionUntouched(r) && consistentWithParty(r, p), expect: '同伴已在隊伍中，不寫成拒絕同行或留守某處' },
     { group: '同伴', name: '和他人交談時同伴在旁', player: withCompanion, action: `${merchant.name}，最近古道那邊的狀況怎麼樣？`,
       check: (r, p) => companionUntouched(r) && consistentWithParty(r, p), expect: '同伴可插話，但不改變同伴狀態、不宣稱入隊離隊' }
   ] : []),
