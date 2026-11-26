@@ -57,6 +57,17 @@
 - `src/data/staticData.ts` 的 `getWorldUnitsAtMap`／`getResidentIdsAt` 與所有呼叫端是否都傳入了隊伍來源。
 - `src/utils/playerStorage.ts`：倒地只存在於戰鬥中，讀檔時 `currentHp` 為 0 的實例視為死亡（戰鬥不存檔，正常流程不會存到倒地狀態）。
 
+## Review 第 1 輪修正（2026-11-26，給第 2 輪 review）
+
+逐條處理見規格書「Review 紀錄」第 1 輪表格，製作細節見「製作紀錄」的「review 第 1 輪修正」。重點：
+- 新增 `src/utils/partyClaims.ts`（D34）、`party_rules.json` 的 `reviveRatio` 與 `narrativeChecks`、`items.json` 的復甦藥 `ITEM-005`（店與庫存）、`StoryMessage.partyDismissOptions`、OptionBar 的請離隊按鈕。
+- `combatResolution.ts`：一般治療不救起倒地者、`revivePartyMember`、`getCombatActionBlock` 補倒地／復甦／技能解鎖與類型檢查、昏迷自動跳過推進時間、玩家戰死時整理同伴。
+- `factions.ts`：地區勢力在場判定改為隊伍感知（與 review 建議的 `getResidentIdsAt` 不同，理由見製作紀錄）。
+- 新的回歸測試 `npm run test:combat`（72 項）。
+- 驗證：build、lint、分離檢查通過；test:combat 72/72；Playwright 59/59；test:ai「同伴」6/6（共 12 次請求）；test:sim 通過。
+
+請第 2 輪特別看：`partyClaims.ts` 的字詞與誤判風險（目前偏保守：要提到名字、去掉引號、否定句不算）；復甦後不重排行動順序是否符合「下一次輪到他時才行動」。
+
 ## 給 Andrew 看手感的截圖
 
 Playwright 截圖在製作電腦的 scratchpad（未加入版本控制），review 後試玩時再實際看：開戰時的戰鬥區、攻擊後一回合的訊息、伊凡倒地、手機寬度戰鬥。
