@@ -10,7 +10,7 @@ import {
   getFactionRelation,
   getMapById,
   getNextStoryAct,
-  getResidentUnitIds,
+  getResidentIdsAt,
   getShopForUnit,
   getSpeciesById,
   getStoryActById,
@@ -28,6 +28,7 @@ import {
 import { createStoryState, findCompletableStorylets, getActDeadline, isActStuck, resolveEpilogueIndexes, STUCK_RESCUE_CAUSE } from './storylets';
 import { formatGameTime, getGameDay } from './gameTime';
 import { isModifierActive } from './worldModifiers';
+import { applyPartyEffects, removeInvalidPartyMembers } from './party';
 import { findQuest, getActiveQuestGiverId, isGeneratedQuest } from './questRules';
 import { closeGeneratedQuest, expireGeneratedQuests, pruneGeneratedQuests } from './generatedQuests';
 import { settleAgents, type AgentBatch } from './agents';
@@ -57,11 +58,14 @@ export function createWorldState(startMinutes: number): WorldRuntimeState {
 export interface DeathHint {
   cause: DeathCause;
   killerUnitId?: string;
+  /** 實際出手者（O35-1 D32）：同伴擊倒時 killerUnitId 為玩家（承擔後果），這裡記同伴。 */
+  actorUnitId?: string;
   /** 死因補充，例如檢定理由。 */
   note?: string;
 }
 
-const isUnitDead = (instance: UnitInstance | undefined) => !!instance && (instance.isDead === true || instance.currentHp === 0);
+// 倒地的同伴 HP 為 0 但沒有死亡（O35-1 D9）。
+const isUnitDead = (instance: UnitInstance | undefined) => !!instance && (instance.isDead === true || (instance.currentHp === 0 && instance.downed !== true));
 export const isUnitAlive = (state: PlayerState, unitId: string) => !!state.unitInstances[unitId] && !isUnitDead(state.unitInstances[unitId]);
 /** 確實死亡過（潛伏單位雖不在場，但沒有死亡）。 */
 export const hasUnitDied = (instance: UnitInstance | undefined) => isUnitDead(instance) && !instance?.isDormant;
@@ -86,7 +90,7 @@ export function appendEvent(state: PlayerState, event: Omit<WorldEvent, 'id' | '
 }
 
 /**
- * 事件發生時的目擊者：該地區在場且存活的居民，以及戰鬥中或已遭遇的單位。
+ * 事件發生時的目擊者：該地區在場且存活的居民（含跟著玩家的同伴，O35-1 D33），以及戰鬥中或已遭遇的單位。
  * 位置與戰鬥取自事件前的狀態，存活與否取自事件後的狀態。
  */
 function getWitnesses(before: PlayerState, after: PlayerState, mapId: string, exclude: string[]): string[] {
@@ -96,7 +100,7 @@ function getWitnesses(before: PlayerState, after: PlayerState, mapId: string, ex
     ...(before.combat?.participants.filter((participant) => participant.side === 'enemy').map((participant) => participant.unitId) ?? []),
     ...(before.encounteredUnitId ? [before.encounteredUnitId] : [])
   ].filter((unitId) => map.unitsPresent.includes(unitId) && !isUnitDead(after.unitInstances[unitId]));
-  const residents = getResidentUnitIds(map).filter((unitId) => isUnitAlive(after, unitId));
+  const residents = getResidentIdsAt(before, mapId).filter((unitId) => isUnitAlive(after, unitId));
   return [...new Set([...residents, ...engaged])].filter((unitId) => !exclude.includes(unitId));
 }
 
@@ -112,7 +116,8 @@ function describeDeath(victimName: string, mapName: string, hint: DeathHint, kil
 /** 由事件前的戰鬥狀態推斷死因；呼叫端未提供死因時使用。 */
 function inferDeathHint(before: PlayerState, victimUnitId: string): DeathHint {
   const enemies = before.combat?.participants.filter((participant) => participant.side === 'enemy').map((participant) => participant.unitId) ?? [];
-  if (victimUnitId === PLAYER_UNIT_ID) return before.combat ? { cause: 'combat', killerUnitId: before.combat.targetUnitId } : { cause: 'misadventure' };
+  const target = before.combat?.participants.find((participant) => participant.key === before.combat?.targetKey);
+  if (victimUnitId === PLAYER_UNIT_ID) return before.combat ? { cause: 'combat', ...(target ? { killerUnitId: target.unitId } : {}) } : { cause: 'misadventure' };
   return enemies.includes(victimUnitId) ? { cause: 'combat', killerUnitId: PLAYER_UNIT_ID } : { cause: 'unknown' };
 }
 
@@ -121,13 +126,17 @@ function recordDeath(before: PlayerState, state: PlayerState, victimUnitId: stri
   const mapName = getMapById(mapId)?.name ?? mapId;
   const victimName = victimUnitId === PLAYER_UNIT_ID ? getCharacterDisplayName(state) : getUnitDisplayName(victimUnitId);
   const killerName = hint.killerUnitId === PLAYER_UNIT_ID ? getCharacterDisplayName(state) : hint.killerUnitId ? getUnitDisplayName(hint.killerUnitId) : undefined;
-  const { summary, detail } = describeDeath(victimName, mapName, hint, killerName);
+  // 同伴出手（O35-1 D32）：後果算在玩家頭上，經過另記實際出手者。
+  const actorName = hint.actorUnitId && hint.actorUnitId !== hint.killerUnitId ? getUnitDisplayName(hint.actorUnitId) : undefined;
+  const described = describeDeath(victimName, mapName, hint, actorName && killerName ? `${killerName}的同伴${actorName}` : killerName);
+  const { summary, detail } = described;
   const witnesses = getWitnesses(before, state, mapId, [victimUnitId]);
   const appended = appendEvent(state, {
     type: 'unit_death', gameTimeMinutes: state.gameTimeMinutes, mapId, summary, ...(detail ? { detail } : {}),
     knownBy: 'region', witnessUnitIds: witnesses,
     cause: hint.cause === 'combat' ? '戰鬥' : hint.cause === 'self_inflicted' ? '自我了斷' : hint.cause === 'misadventure' ? '意外' : '不明',
-    death: { victimUnitId, victimName, cause: hint.cause, ...(hint.killerUnitId ? { killerUnitId: hint.killerUnitId, killerName } : {}) },
+    death: { victimUnitId, victimName, cause: hint.cause, ...(hint.killerUnitId ? { killerUnitId: hint.killerUnitId, killerName } : {}),
+      ...(actorName ? { actorUnitId: hint.actorUnitId, actorName } : {}) },
     changes: { unitIds: [victimUnitId] }
   });
   if (victimUnitId === PLAYER_UNIT_ID) return appended.state;
@@ -230,7 +239,7 @@ function settleRegion(state: PlayerState, mapId: string): PlayerState {
       next = appendEvent(next, {
         type: 'unit_occupation', gameTimeMinutes: next.gameTimeMinutes, mapId,
         summary: `${template.name}消失後，${occupierFaction ? `${occupierFaction}的` : ''}${getUnitDisplayName(occupier.id)}佔據了${map.name}。`, knownBy: 'region',
-        witnessUnitIds: getResidentUnitIds(map).filter((residentId) => isUnitAlive(next, residentId)), cause: '他方佔領', changes: { unitIds: [unitId, occupier.id] }
+        witnessUnitIds: getResidentIdsAt(next, map.id).filter((residentId) => isUnitAlive(next, residentId)), cause: '他方佔領', changes: { unitIds: [unitId, occupier.id] }
       }).state;
       continue;
     }
@@ -241,7 +250,7 @@ function settleRegion(state: PlayerState, mapId: string): PlayerState {
     next = appendEvent(next, {
       type: 'unit_respawn', gameTimeMinutes: next.gameTimeMinutes, mapId,
       summary: `${map.name}又出現了新的${template.name}。`, knownBy: 'region',
-      witnessUnitIds: getResidentUnitIds(map).filter((residentId) => isUnitAlive(next, residentId)), cause: '重生規則', changes: { unitIds: [unitId] }
+      witnessUnitIds: getResidentIdsAt(next, map.id).filter((residentId) => isUnitAlive(next, residentId)), cause: '重生規則', changes: { unitIds: [unitId] }
     }).state;
   }
   return next;
@@ -304,17 +313,21 @@ export function applyScenarioEvent(state: PlayerState, event: EventStatic, cause
     { ...state.world, modifiers: [...state.world.modifiers, ...modifiers], firedEventIds: [...state.world.firedEventIds, event.id] },
     event.effects.factionRelations
   );
-  const withEffects: PlayerState = applyReputationChanges({ ...state, storyFlags, world }, reputationChanges);
+  // 同伴入隊、離隊（O35-1）：只接受可招募的存活單位，隊伍已滿時略過。
+  const partyResult = applyPartyEffects(applyReputationChanges({ ...state, storyFlags, world }, reputationChanges), event.effects);
+  const withEffects: PlayerState = partyResult.state;
+  const partyUnitIds = [...partyResult.joined, ...partyResult.left];
   return appendEvent(withEffects, {
     type: 'scenario_event', gameTimeMinutes: options.atMinutes ?? state.gameTimeMinutes, mapId, summary: event.summary, knownBy: event.knownBy,
     ...(event.knownByFactions?.length ? { knownByFactions: event.knownByFactions } : {}),
-    witnessUnitIds: eventMap ? getResidentUnitIds(eventMap).filter((unitId) => isUnitAlive(state, unitId)) : [], cause, eventId: event.id,
+    witnessUnitIds: eventMap ? getResidentIdsAt(state, eventMap.id).filter((unitId) => isUnitAlive(state, unitId)) : [], cause, eventId: event.id,
     ...(options.agent ? { agent: options.agent, detail: `${event.summary}${getUnitDisplayName(options.agent.unitId)}這麼做的用意：${options.agent.intent}` } : {}),
     changes: {
       ...(event.effects.setFlags?.length ? { setFlags: event.effects.setFlags } : {}),
       ...(event.effects.clearFlags?.length ? { clearFlags: event.effects.clearFlags } : {}),
       ...(modifiers.length ? { modifierIds: modifiers.map((modifier) => modifier.id) } : {}),
-      ...(relationFactionIds.length ? { factionIds: relationFactionIds } : {})
+      ...(relationFactionIds.length ? { factionIds: relationFactionIds } : {}),
+      ...(partyUnitIds.length ? { unitIds: partyUnitIds } : {})
     },
     ...(reputationChanges.length ? { reputationChanges } : {})
   }).state;
@@ -376,15 +389,19 @@ function completeStorylet(state: PlayerState, storylet: StoryletStatic, wasActiv
     actStartedAtMinutes: nextAct ? state.gameTimeMinutes : story.actStartedAtMinutes
   };
   const map = getMapById(state.currentMapId);
-  let next = appendEvent({ ...state, storyFlags, world: { ...state.world, story: nextStory } }, {
+  // 同伴入隊、離隊（O35-1）。
+  const partyResult = applyPartyEffects({ ...state, storyFlags, world: { ...state.world, story: nextStory } }, onComplete);
+  const partyUnitIds = [...partyResult.joined, ...partyResult.left];
+  let next = appendEvent(partyResult.state, {
     type: 'story_progress', gameTimeMinutes: state.gameTimeMinutes, mapId: state.currentMapId, summary: onComplete.summary,
-    knownBy: onComplete.knownBy ?? 'region', witnessUnitIds: map ? getResidentUnitIds(map).filter((unitId) => isUnitAlive(state, unitId)) : [],
+    knownBy: onComplete.knownBy ?? 'region', witnessUnitIds: map ? getResidentIdsAt(state, map.id).filter((unitId) => isUnitAlive(state, unitId)) : [],
     cause: forced ? `${STUCK_RESCUE_CAUSE}：主線無法以其他方式前進，強制完成預設片段`
       : wasActive ? STORYLET_COMPLETED_CAUSE : `${STORYLET_COMPLETED_CAUSE}（目標在片段開始前已達成）`,
     changes: {
       storyletIds: [storylet.id],
       ...(onComplete.setFlags?.length ? { setFlags: onComplete.setFlags } : {}),
-      ...(nextAct ? { actIds: [nextAct.id] } : {})
+      ...(nextAct ? { actIds: [nextAct.id] } : {}),
+      ...(partyUnitIds.length ? { unitIds: partyUnitIds } : {})
     }
   }).state;
   for (const eventId of onComplete.eventIds ?? []) {
@@ -407,7 +424,7 @@ function reachEnding(state: PlayerState, endingId: string, cause: string): Playe
   const map = getMapById(state.currentMapId);
   return appendEvent({ ...state, world: { ...state.world, story: reached } }, {
     type: 'story_progress', gameTimeMinutes: state.gameTimeMinutes, mapId: state.currentMapId, summary: ending.summary,
-    knownBy: 'world', witnessUnitIds: map ? getResidentUnitIds(map).filter((unitId) => isUnitAlive(state, unitId)) : [],
+    knownBy: 'world', witnessUnitIds: map ? getResidentIdsAt(state, map.id).filter((unitId) => isUnitAlive(state, unitId)) : [],
     cause: `結局：${cause}`, changes: { endingIds: [ending.id] }
   }).state;
 }
@@ -591,6 +608,8 @@ export function finalizeWorldWithAgentBatch(previous: PlayerState, next: PlayerS
     if (state === before) break;
   }
   state = pruneGeneratedQuests(expireGeneratedQuests(state));
+  // 同伴死亡或轉為敵對時自動離隊（O35-1 D30）；訊息由呼叫端比對隊伍前後產生。
+  state = removeInvalidPartyMembers(state).state;
   state = updatePlayerKnownEvents(previous, state, options.positionBefore);
   const modifiers = state.world.modifiers.filter((modifier) => isModifierActive(modifier, state.gameTimeMinutes));
   const world = compressEvents(modifiers.length === state.world.modifiers.length ? state.world : { ...state.world, modifiers });
@@ -622,7 +641,7 @@ function applyActionReputation(previous: PlayerState, current: PlayerState, newD
   const killedByPlayer = newDeaths.filter((event) => event.death?.killerUnitId === PLAYER_UNIT_ID && event.death.victimUnitId !== PLAYER_UNIT_ID);
   // 本次行動開戰的對象（含一擊斃命、戰鬥已結束的情況）。
   const attackedIds = previous.combat ? [] : [...new Set([
-    ...(state.combat ? [state.combat.targetUnitId] : []),
+    ...(state.combat?.participants.flatMap((participant) => participant.side === 'enemy' ? [participant.unitId] : []) ?? []),
     ...killedByPlayer.map((event) => event.death!.victimUnitId)
   ])];
   const provokedIds = attackedIds.filter((unitId) => getUnitFactionId(unitId) && getWorldUnitDisposition(previous, unitId) !== 'hostile');
@@ -674,7 +693,7 @@ export const findLatestPlayerDeath = (state: PlayerState): WorldEvent | undefine
 /** 在場且存活的居民（會說話、可被打聽的人）。 */
 const getPresentResidentIds = (state: PlayerState) => {
   const map = getMapById(state.currentMapId);
-  return map ? getResidentUnitIds(map).filter((unitId) => isUnitAlive(state, unitId)) : [];
+  return map ? getResidentIdsAt(state, map.id).filter((unitId) => isUnitAlive(state, unitId)) : [];
 };
 
 /**

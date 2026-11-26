@@ -1,6 +1,7 @@
-import type { ActionCheckResult, PlayerState } from '../types/game';
-import { getCharacterClassById, getItemById, getPlayerBaseStats, getSpeciesById } from '../data/staticData';
+import type { AbilityScores, ActionCheckResult, PlayerState, WorldUnitStatic } from '../types/game';
+import { getCharacterClassById, getItemById, getPlayerBaseStats, getSpeciesById, getUnitAbilities } from '../data/staticData';
 import { computeCheckBonus } from './unitGrowth';
+import { hasInjectedRandom, randomInt } from './random';
 
 export const STAT_LABELS: Record<ActionCheckResult['stat'], string> = {
   atk: '攻擊',
@@ -24,6 +25,8 @@ export interface PlayerStatBreakdown {
 }
 
 function randomD20(): number {
+  // 驗證腳本注入固定亂數時（O35-1），擲骰同樣可重現。
+  if (hasInjectedRandom()) return randomInt(1, 20);
   if (!globalThis.crypto?.getRandomValues) throw new Error('目前瀏覽器無法產生安全骰點，請更新瀏覽器後重試。');
   const range = 0x1_0000_0000;
   const limit = range - (range % 20);
@@ -60,6 +63,24 @@ export function resolveActionCheck(
   dc: number
 ): Omit<ActionCheckResult, 'reason' | 'stat'> {
   const breakdown = getPlayerStatBreakdown(player, stat);
+  const d20 = randomD20();
+  const total = d20 + breakdown.modifier;
+  return { ...breakdown, d20Rolls: [d20], total, dc, success: total >= dc };
+}
+
+/** 單位（同伴、敵人）的數值分解（O35-1）：戰鬥數值取自單位視圖，能力值依種族與職階；與玩家同一公式，沒有裝備。 */
+export function getUnitStatBreakdown(unit: WorldUnitStatic, stat: ActionCheckResult['stat']): PlayerStatBreakdown {
+  const abilityStat = ['str', 'dex', 'con', 'int', 'wis', 'cha'].includes(stat);
+  const baseStat = abilityStat
+    ? getUnitAbilities(unit)?.[stat as keyof AbilityScores] ?? 10
+    : unit.stats[stat as 'atk' | 'def' | 'spd'];
+  const checkBonus = computeCheckBonus(getSpeciesById(unit.speciesId), unit.classId ? getCharacterClassById(unit.classId) : undefined, stat);
+  return { baseStat, equipmentBonus: 0, statValue: baseStat, checkBonus, modifier: Math.floor((baseStat - 10) / 2) + checkBonus };
+}
+
+/** 單位的檢定（O35-1）：同伴攻擊、同伴閃避等，與玩家同一套 d20 規則。 */
+export function resolveUnitCheck(unit: WorldUnitStatic, stat: ActionCheckResult['stat'], dc: number): Omit<ActionCheckResult, 'reason' | 'stat'> {
+  const breakdown = getUnitStatBreakdown(unit, stat);
   const d20 = randomD20();
   const total = d20 + breakdown.modifier;
   return { ...breakdown, d20Rolls: [d20], total, dc, success: total >= dc };

@@ -1,11 +1,12 @@
 import React from 'react';
 import { AIContextDebugPanel } from './AIContextDebugPanel';
 import type { PlayerState } from '../types/game';
-import { canPlayerEnterMap, factionData, factionsDatabase, getCharacterClassById, getFactionById, getFactionRelation, getFactionReputation, getItemById, getMapById, describeUnitBuild, getLevelBenchmark, getReputationTier, getSpeciesById, getPlayerResourceCaps, getQuestById, getShopForUnit, getStoryActById, getStoryletById, getUnlockedSkills, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap } from '../data/staticData';
+import { canPlayerEnterMap, factionData, factionsDatabase, getCharacterClassById, getFactionById, getFactionRelation, getFactionReputation, getItemById, getMapById, describeUnitBuild, getLevelBenchmark, getReputationTier, getSpeciesById, getPlayerResourceCaps, getQuestById, getShopForUnit, getStoryActById, getStoryletById, getUnlockedSkills, getWorldUnitById, getWorldUnitDisposition, getWorldUnitsAtMap, partyRules } from '../data/staticData';
 import { getPlayerStatBreakdown, STAT_LABELS } from '../utils/gameChecks';
 import { canAcceptQuest, canTurnInQuest, getQuestGiverName, isGeneratedQuest, listVisibleQuests } from '../utils/questRules';
 import { canPlayerAct, isPlayerUnconscious } from '../utils/playerStatus';
-import { getCombatTarget } from '../utils/combatState';
+import { getCombatTarget, getCurrentActorKey, getEnemyParticipants } from '../utils/combatState';
+import { getCompanionResources, getPartyMembers } from '../utils/party';
 import { OPENING_LABELS } from '../utils/combatResolution';
 import { formatGameTime } from '../utils/gameTime';
 import { describeStoryletGiver, getActDeadline, getEndingEpilogue, resolveStoryletGiver } from '../utils/storylets';
@@ -36,7 +37,8 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
   const unlockedSkills = getUnlockedSkills(player.classId, player.level);
 
   const currentMap = getMapById(player.currentMapId);
-  const presentResidents = getWorldUnitsAtMap(player.currentMapId, player).filter((unit) => !unit.requiresEncounter);
+  // 隊伍同伴另列在「隊伍」區（O35-1）。
+  const presentResidents = getWorldUnitsAtMap(player.currentMapId, player).filter((unit) => !unit.requiresEncounter && !player.party.includes(unit.id));
   const weapon = player.equipped.weaponItemId ? getItemById(player.equipped.weaponItemId) : null;
   const armor = player.equipped.armorItemId ? getItemById(player.equipped.armorItemId) : null;
   const combatStats = (['atk', 'def', 'spd'] as const).map((stat) => ({
@@ -150,6 +152,19 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
         })}
       </div>
 
+      <div data-testid="party-panel">
+        <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #444' }}>🛡️ 隊伍（{player.party.length}/{partyRules.maxCompanions}）</h4>
+        {getPartyMembers(player).map((unit) => {
+          const resources = getCompanionResources(player, unit);
+          const statuses = player.unitInstances[unit.id]?.statusEffects ?? [];
+          return <div key={unit.id} style={{ marginBottom: '7px', fontSize: '12px' }}>
+            <strong>{unit.name}{unit.title ? `・${unit.title}` : ''}</strong>
+            <div style={{ color: '#aaa' }}>{describeUnitBuild(unit)} · HP {resources.hp}/{resources.maxHp} · MP {resources.mp}/{resources.maxMp}{resources.downed ? ' · 倒地' : ''}{statuses.map((effect) => effect.id === 'unconscious' ? ' · 💫 昏迷' : ' · 嘲諷中').join('')}</div>
+          </div>;
+        })}
+        {!player.party.length && <div style={{ color: '#888', fontSize: '12px' }}>目前沒有同伴。條件成立時，可從選項列的「人物」邀請同行。</div>}
+      </div>
+
       <div>
         <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #444' }}>🧑‍🤝‍🧑 當前地區人物</h4>
         {presentResidents.map((unit) => {
@@ -173,11 +188,44 @@ export const PlayerHUD: React.FC<PlayerHUDProps> = ({ player, onOpenSaveManager,
       <div>
         <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #444' }}>👹 遭遇</h4>
         {player.combat ? (() => {
-          const unit = getWorldUnitById(player.combat.targetUnitId, player);
-          return <div>
-            <div style={{ marginBottom: '6px' }}>{unit?.name || player.combat.targetUnitId} HP {getCombatTarget(player.combat)?.currentHp ?? 0}/{unit?.stats.hp}</div>
-            <div style={{ color: '#aaa', fontSize: '11px', marginBottom: '8px' }}>第 {player.combat.round} 回合・{OPENING_LABELS[player.combat.opening ?? 'normal']}</div>
-            <div style={{ color: '#ffcc80', fontSize: '11px' }}>{isPlayerUnconscious(player) ? '💫 昏迷中，' : ''}戰鬥動作在選項列：攻擊、技能、逃跑。</div>
+          // 戰鬥區（O35-1）：雙方 HP、行動順序與目前行動者；鎖定的目標以 🎯 標示。
+          const combat = player.combat;
+          const target = getCombatTarget(combat);
+          const currentKey = getCurrentActorKey(combat);
+          const nameOf = (key: string) => {
+            const participant = combat.participants.find((entry) => entry.key === key);
+            return participant?.side === 'enemy' ? participant.label : key === player.unitId ? player.name : getWorldUnitById(key, player)?.name ?? key;
+          };
+          const isDown = (key: string) => {
+            const participant = combat.participants.find((entry) => entry.key === key);
+            if (participant?.side === 'enemy') return participant.currentHp <= 0;
+            return key !== player.unitId && player.unitInstances[key]?.downed === true;
+          };
+          return <div data-testid="combat-panel">
+            <div style={{ color: '#aaa', fontSize: '11px', marginBottom: '6px' }}>第 {combat.round} 回合・{OPENING_LABELS[combat.opening]}</div>
+            <div style={{ fontSize: '12px', marginBottom: '6px' }}>
+              <div style={{ color: '#ef9a9a', marginBottom: '2px' }}>敵方</div>
+              {getEnemyParticipants(combat).map((enemy) => {
+                const unit = getWorldUnitById(enemy.unitId, player);
+                return <div key={enemy.key} style={{ color: enemy.currentHp <= 0 ? '#777' : '#eee', textDecoration: enemy.currentHp <= 0 ? 'line-through' : undefined }}>
+                  {target?.key === enemy.key ? '🎯 ' : ''}{enemy.label} HP {enemy.currentHp}/{unit?.stats.hp ?? '?'}{enemy.currentHp <= 0 ? '（倒下）' : ''}
+                </div>;
+              })}
+            </div>
+            <div style={{ fontSize: '12px', marginBottom: '6px' }}>
+              <div style={{ color: '#a5d6a7', marginBottom: '2px' }}>我方</div>
+              <div>{player.name} HP {player.hp}/{maxHp}{isPlayerUnconscious(player) ? '・💫 昏迷' : ''}</div>
+              {getPartyMembers(player).map((unit) => {
+                const resources = getCompanionResources(player, unit);
+                return <div key={unit.id} style={{ color: resources.downed ? '#777' : '#eee' }}>{unit.name} HP {resources.hp}/{resources.maxHp}{resources.downed ? '（倒地）' : ''}</div>;
+              })}
+            </div>
+            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '6px' }} data-testid="turn-order">
+              行動順序：{combat.turnOrder.map((key, index) => <span key={key} style={{ color: key === currentKey ? '#ffcc80' : isDown(key) ? '#666' : '#bbb', fontWeight: key === currentKey ? 'bold' : undefined }}>
+                {index > 0 ? ' → ' : ''}{key === currentKey ? '▶' : ''}{nameOf(key)}
+              </span>)}
+            </div>
+            <div style={{ color: '#ffcc80', fontSize: '11px' }}>{isPlayerUnconscious(player) ? '💫 昏迷中，' : ''}戰鬥動作在選項列：攻擊、技能、逃跑；「目標」切換鎖定（不耗回合）。</div>
           </div>;
         })() : (() => {
           const unit = player.encounteredUnitId ? getWorldUnitById(player.encounteredUnitId, player) : undefined;

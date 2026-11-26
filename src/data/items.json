@@ -24,6 +24,18 @@
     "description": "使用後恢復 15 點魔力。"
   },
   {
+    "id": "ITEM-005",
+    "name": "復甦藥",
+    "type": "consumable",
+    "usableInCombat": true,
+    "effect": {
+      "revive": true
+    },
+    "buyPrice": 40,
+    "sellPrice": 20,
+    "description": "戰鬥中對倒地的同伴使用，讓對方以四分之一的生命值起身。"
+  },
+  {
     "id": "ITEM-004",
     "name": "哥布林酋長徽記",
     "type": "quest",

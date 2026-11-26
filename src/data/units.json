@@ -108,6 +108,10 @@
       {
         "itemId": "ITEM-003",
         "quantity": 8
+      },
+      {
+        "itemId": "ITEM-005",
+        "quantity": 3
       }
     ],
     "alignment": "中立善良",
@@ -135,7 +139,25 @@
     "defaultDisposition": "friendly",
     "factionId": "FAC-001",
     "alignment": "守序善良",
-    "description": "熟悉綠林古道，追蹤到哥布林巢穴附近的足跡。"
+    "description": "熟悉綠林古道，追蹤到哥布林巢穴附近的足跡。",
+    "companion": {
+      "recruitable": true,
+      "joinConditions": {
+        "notHostile": true,
+        "reputation": [
+          {
+            "factionId": "FAC-001",
+            "minTier": "neutral"
+          }
+        ]
+      },
+      "traits": [
+        "沉默寡言",
+        "觀察入微",
+        "重視村子的安全"
+      ],
+      "voice": "話少、直接，習慣用獵人的眼光描述足跡與風向。"
+    }
   },
   {
     "id": "MON-001",
@@ -156,6 +178,10 @@
     ],
     "requiresEncounter": true,
     "population": true,
+    "groupSize": {
+      "min": 1,
+      "max": 2
+    },
     "loot": {
       "gold": 5,
       "dropItems": [
@@ -189,6 +215,10 @@
     ],
     "requiresEncounter": true,
     "population": true,
+    "groupSize": {
+      "min": 1,
+      "max": 1
+    },
     "loot": {
       "gold": 9,
       "dropItems": [
@@ -289,6 +319,10 @@
     ],
     "requiresEncounter": true,
     "population": true,
+    "groupSize": {
+      "min": 1,
+      "max": 3
+    },
     "loot": {
       "gold": 3,
       "dropItems": []

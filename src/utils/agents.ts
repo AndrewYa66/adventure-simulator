@@ -10,7 +10,7 @@ import {
   getFactionRelation,
   getMapById,
   getQuestTemplateById,
-  getResidentUnitIds,
+  getResidentIdsAt,
   getUnitDisplayName,
   getUnitTemplateById,
   getWorldUnitById,
@@ -77,8 +77,9 @@ const getAgentHomeMapId = (unitId: string) => getWorldUnitById(unitId)?.homeMapI
 
 /** 目前會決策的重要角色：存活、未潛伏，且自身或接手的對象設有 agent。 */
 export function getActiveAgentIds(state: PlayerState): string[] {
+  // 隊伍中的同伴暫停每日決策，離隊後恢復（O35-1 D7）。
   return unitTemplatesDatabase().filter((unit) => isUnitAlive(state, unit.id) && !state.unitInstances[unit.id]?.isDormant &&
-    !!getEffectiveAgentProfile(state.world, unit.id)).map((unit) => unit.id);
+    !state.party.includes(unit.id) && !!getEffectiveAgentProfile(state.world, unit.id)).map((unit) => unit.id);
 }
 
 /** 角色知道某單位已經死亡：死亡事件在紀錄中且角色有認知；已壓縮進編年史的舊死亡視為眾所周知的往事。 */
@@ -157,7 +158,7 @@ export function validateAgentDecision(state: PlayerState, decision: AgentDecisio
 /** 決策的發生地與目擊者：角色居所的存活居民。 */
 function agentWitnesses(state: PlayerState, unitId: string) {
   const map = getMapById(getAgentHomeMapId(unitId));
-  return { mapId: map?.id ?? state.currentMapId, witnessUnitIds: map ? getResidentUnitIds(map).filter((residentId) => isUnitAlive(state, residentId)) : [] };
+  return { mapId: map?.id ?? state.currentMapId, witnessUnitIds: map ? getResidentIdsAt(state, map.id).filter((residentId) => isUnitAlive(state, residentId)) : [] };
 }
 
 const withActionDay = (state: PlayerState, unitId: string, decision: AgentDecision, day: number): PlayerState => {

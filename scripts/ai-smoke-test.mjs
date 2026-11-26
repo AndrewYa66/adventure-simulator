@@ -48,6 +48,7 @@ const { module: story } = await runnerImport('/src/utils/storylets.ts');
 const { module: route } = await runnerImport('/src/utils/travelRoute.ts');
 const { module: travelIntent } = await runnerImport('/src/utils/travelIntent.ts');
 const { module: agentAI } = await runnerImport('/src/services/agentDecisionService.ts');
+const { module: partyClaims } = await runnerImport('/src/utils/partyClaims.ts');
 
 const base = init.createInitialPlayer('測試員', data.scenario.defaultPlayer.classId, data.scenario.defaultPlayer.alignment, true);
 const startMap = data.getMapById(base.currentMapId);
@@ -73,7 +74,7 @@ const merchant = startNpcs.find((unit) => unit.shopId && unit.id !== innService?
 const victimNpc = startNpcs.find((unit) => data.questsDatabase.some((quest) => quest.questGiverId === unit.id));
 const formerName = '亞瑟';
 const former = init.createInitialPlayer(formerName, data.scenario.defaultPlayer.classId, data.scenario.defaultPlayer.alignment, true);
-const formerInCombat = { ...former, combat: { round: 1, participants: [{ unitId: former.unitId, side: 'party' }, { unitId: victimNpc.id, side: 'enemy', currentHp: 1 }], targetUnitId: victimNpc.id } };
+const formerInCombat = { ...former, combat: { round: 1, participants: [{ key: former.unitId, unitId: former.unitId, side: 'party' }, { key: victimNpc.id, unitId: victimNpc.id, side: 'enemy', label: victimNpc.name, currentHp: 1 }], turnOrder: [former.unitId, victimNpc.id], turnIndex: 0, targetKey: victimNpc.id, opening: 'normal' } };
 const formerKilled = world.finalizeWorld(formerInCombat, { ...formerInCombat, combat: undefined, unitInstances: { ...formerInCombat.unitInstances, [victimNpc.id]: { ...formerInCombat.unitInstances[victimNpc.id], currentHp: 0, isDead: true } } }, { [victimNpc.id]: { cause: 'combat', killerUnitId: former.unitId } });
 const formerDead = world.finalizeWorld(formerKilled, { ...formerKilled, hp: 0, isDead: true }, { [former.unitId]: { cause: 'self_inflicted' } });
 const afterDeathHistory = [saves.createHistoryEntry(formerDead)];
@@ -124,6 +125,27 @@ const postedOnce = firstGiver ? generated.postQuestProposals(base, [{ templateId
 const secondGiver = firstOption ? data.getWorldUnitById(firstOption.givers[1].giverId) : merchant;
 
 const none = (value) => value === undefined || value === null || (Array.isArray(value) && value.length === 0);
+
+// 同伴情境（O35-1）：可招募的同伴在隊伍中與玩家同行。AI 可以讓同伴插話，但不能宣稱入隊離隊、不能替同伴給東西、改關係或出手。
+const companion = data.unitsDatabase.find((unit) => unit.companion?.recruitable);
+const withCompanion = companion ? { ...base, party: [companion.id] } : undefined;
+const companionInWild = companion ? { ...spottedFoe, party: [companion.id] } : undefined;
+const nonCompanion = startNpcs.find((unit) => !unit.companion?.recruitable && unit.id !== merchant.id) ?? merchant;
+const partyClaimPattern = /離開了?隊伍|離隊|脫離隊伍|不再同行|就此別過|分道揚鑣|轉身(先行)?(離去|離開|走遠)|留(下)?你(一|獨自一)人|加入了?(你的)?隊伍|成為(了)?(你的)?同伴|答應(與你)?同行|(與你|和你)結伴同行|留在原地|拒絕(與你|和你|跟你)?(同行|一起)|婉拒|(要|得|必須)(留下|留守|守在)/;
+// D34：敘事宣稱與狀態不符時，前端補說明也算通過（驗收 25），並記錄補說明的次數。
+let companionNotices = 0;
+const consistentWithParty = (r, p) => {
+  const notices = partyClaims.findCompanionClaims(p, r.storyText);
+  if (notices.length) { companionNotices += 1; console.log(`   前端補說明：${notices.join('')}`); }
+  // 判定用的獨立字詞：去掉引號內對話，逐句檢查，句中有否定字詞（例如「沒有轉身離去」）不算宣稱。
+  const claimed = r.storyText.replace(/「[^」]*」|『[^』]*』/g, '').split(/[。！？!?\n]+/)
+    .some((sentence) => partyClaimPattern.test(sentence) && !/沒有|沒|並未|未曾|不會|不願|不肯|拒絕|婉拒|無法|不能/.test(sentence.replace(partyClaimPattern, '')));
+  return !claimed || notices.length > 0;
+};
+const companionUntouched = (r) => companion &&
+  !(r.stateChanges?.unitItemTransfers ?? []).some((entry) => entry.unitId === companion.id) &&
+  !(r.stateChanges?.unitDispositionChanges ?? []).some((entry) => entry.unitId === companion.id) &&
+  !(r.questProposals ?? []).some((proposal) => proposal.giverId === companion.id);
 
 // 重要角色決策情境（O34 第 2 階段）：玩家接下村長的劇本任務（村長才會發布支線委託），在村裡跨過午夜；角色決策請求每個情境 1 次。
 const chiefQuests = data.questsDatabase.filter((quest) => quest.questGiverId === 'NPC-001').map((quest) => ({ questId: quest.id, status: 'in_progress', progress: { defeatedUnits: {} } }));
@@ -233,6 +255,24 @@ const scenarios = [
       action: `${storyGiver.name}，你剛說牠們以前不會靠這麼近，「以前」是什麼意思？你以前和哥布林的首領有過什麼來往嗎？請老實告訴我。`,
       check: (r) => none(r.storyletProposals) && !/格羅姆|裂牙/.test(r.storyText), expect: '不提酋長名字、不重複開始片段' }
   ] : []),
+  ...(companion ? [
+    { group: '同伴', name: '和同伴交談', player: withCompanion, action: `${companion.name}，你覺得我們接下來該先去哪裡？`,
+      check: (r, p) => r.storyText.includes(companion.name) && companionUntouched(r) && consistentWithParty(r, p),
+      expect: '同伴以自己的口吻回應、不宣稱入隊離隊、不改變同伴狀態' },
+    { group: '同伴', name: '向同伴要東西', player: withCompanion, action: `${companion.name}，把你身上的東西分我一些吧`,
+      check: (r, p) => companionUntouched(r) && consistentWithParty(r, p), expect: '沒有同伴的物品轉移' },
+    { group: '同伴', name: '打字請同伴離開', player: withCompanion, action: `${companion.name}，你先回去吧，接下來我想一個人走`,
+      check: (r, p) => companionUntouched(r) && consistentWithParty(r, p), expect: '敘事不宣稱同伴離隊（離隊由選項列執行）' },
+    { group: '同伴', name: '打字邀請非同伴入隊', player: withCompanion, action: `${nonCompanion.name}，跟我們一起去冒險吧！`,
+      check: (r, p) => companionUntouched(r) && consistentWithParty(r, p), expect: '敘事不宣稱對方入隊' },
+    { group: '同伴', name: '叫同伴替我出手', player: companionInWild, action: `${companion.name}，替我朝${foe.name}射一箭！`,
+      check: (r, p) => companionUntouched(r) && !encounters.hasCombatClaim(r.storyText) && consistentWithParty(r, p),
+      expect: '不宣稱命中或擊倒（開戰與否由規則決定）' },
+    { group: '同伴', name: '已在隊伍中再邀請', player: withCompanion, action: `${companion.name}，跟我一起去古道看看吧`,
+      check: (r, p) => companionUntouched(r) && consistentWithParty(r, p), expect: '同伴已在隊伍中，不寫成拒絕同行或留守某處' },
+    { group: '同伴', name: '和他人交談時同伴在旁', player: withCompanion, action: `${merchant.name}，最近古道那邊的狀況怎麼樣？`,
+      check: (r, p) => companionUntouched(r) && consistentWithParty(r, p), expect: '同伴可插話，但不改變同伴狀態、不宣稱入隊離隊' }
+  ] : []),
   ...(agentNormal.agentBatch ? [{ group: '角色決策', name: '一般跨日（村長與酋長）', agent: agentNormal,
     check: (resolution) => agentOutcomesOk(resolution), expect: '每位角色都選了合法候選且有動機' }] : []),
   ...(agentSecret.agentBatch ? [{ group: '角色決策', name: '角色只知道部分事件', agent: agentSecret,
@@ -285,7 +325,9 @@ for (const model of models) {
     }
     let response;
     try {
-      response = await ai.sendPlayerAction({ provider: config.provider, model }, config.apiKey, scenario.player, scenario.action, scenario.messages ?? [], scenario.history ?? [], scenario.travel);
+      // 與遊戲相同：玩家打字要同伴離隊時，送 AI 的行動附上「同伴仍在隊伍中」的提醒（D34）。
+      const actionForAI = `${scenario.action}${partyClaims.describeDismissIntentForAI(partyClaims.findDismissIntent(scenario.player, scenario.action))}`;
+      response = await ai.sendPlayerAction({ provider: config.provider, model }, config.apiKey, scenario.player, actionForAI, scenario.messages ?? [], scenario.history ?? [], scenario.travel);
     } catch (error) {
       errors += 1;
       totalCalls += requestCount;
@@ -314,12 +356,13 @@ for (const model of models) {
     if (Object.keys(shown).length) console.log(`   欄位：${JSON.stringify(shown)}`);
     const invalidQuest = (response.questProposals ?? []).map((proposal) => generated.validateQuestProposal(scenario.player, proposal)).find((result) => !result.ok);
     if (invalidQuest) console.log(`   委託驗證：${invalidQuest.reason}`);
-    if (!ok || scenario.travel) console.log(`   敘事：${response.storyText.slice(0, 100)}${response.storyText.length > 100 ? '…' : ''}`);
+    if (!ok || scenario.travel || scenario.group === '同伴') console.log(`   敘事：${response.storyText.slice(0, 160)}${response.storyText.length > 160 ? '…' : ''}`);
   }
   summaries.push({ model, passed, errors, totalCalls });
 }
 
 console.log('\n========== 總結 ==========');
+if (selected.some((scenario) => scenario.group === '同伴')) console.log(`「同伴」前端補說明次數：${companionNotices}`);
 for (const summary of summaries) {
   const answered = selected.length - summary.errors;
   console.log(`${summary.model}：${summary.passed}/${answered} 符合預期${summary.errors ? `（${summary.errors} 個情境呼叫失敗）` : ''}，實際請求 ${summary.totalCalls} 次`);

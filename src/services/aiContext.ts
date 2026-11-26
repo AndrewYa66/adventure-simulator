@@ -13,6 +13,8 @@ import { getEffectiveAgentProfile } from '../utils/agents';
 import { getCombatStartBlock } from '../utils/systemOptions';
 import { getAmbushableUnit } from '../utils/encounters';
 import { OPENING_LABELS } from '../utils/combatResolution';
+import { getCompanionResources, getPartyMembers } from '../utils/party';
+import { getCombatTarget, getCurrentActorKey } from '../utils/combatState';
 
 /**
  * AI 上下文組裝器（O39）：集中負責主持人 AI 每次呼叫的上下文。
@@ -183,6 +185,7 @@ function buildRules(): string {
 - 非戰鬥行動若有風險且失敗會造成實質後果，依最相關能力提出 checkRequest（atk/def/spd 或 str/dex/con/int/wis/cha），在成功/失敗分支填入相應 HP/MP 變化。玩家明確提出自我傷害等會直接改變資源的行動時，必須依其明確數值回報變化，並照常套用 HP 歸零死亡規則。
 - 若玩家有自傷意圖但沒有說明傷害數值，先詢問數值，不要猜測或只用文字敘述扣血。
 - 一般戰鬥由遊戲規則結算，不可敘事中自行宣告擊敗或扣除敵人。
+- 隊伍同伴：「隊伍成員」與玩家同行、此刻在場，玩家可以和他們交談。敘事中可以讓同伴依自己的 traits 與 voice 插話一兩句（評論、提醒、附和），但不可替同伴做會改變狀態的事：不可讓同伴給玩家物品或金錢、不可描寫同伴出手攻擊或施放技能、不可宣稱同伴加入或離開隊伍（入隊與離隊只由遊戲的選項列與劇情決定，玩家在對話中邀請時只能描寫對方的態度與回應，不可寫成已經同行；玩家口頭要同伴先走或分開時，同伴仍留在玩家身邊，只描寫同伴的反應，不可寫成轉身離去或留下玩家一人）；隊伍成員已經加入隊伍，隊伍身分優先於 description 裡入隊前的職責與所在地：玩家再邀請他們同行時，他們早已同行，可以回應「我已經跟著你了」，不可描寫拒絕同行或要留守某處；不可對隊伍成員使用 unitItemTransfers、unitDispositionChanges、questProposals。戰鬥中同伴的行動由遊戲規則結算並顯示。
 - 每次回應都必須包含 serviceRequest；只有玩家明確要求使用、購買某項服務（例如住店、休息一晚）時，才從「當前可使用服務」清單填入 shopId 與 serviceId，否則設為 null。詢問價格或服務內容不算使用。服務的費用、恢復效果與耗時由遊戲端結算，不可同時用 hpChange/mpChange/goldChange 描述同一服務，也不可在 storyText 宣稱已付款或已恢復；若清單中沒有對應服務，只能說明目前無法使用。
 - 遊戲時間由遊戲依行動類型推進；玩家要求原地等待時由遊戲處理，AI 不可在敘事中自行跳過時間。玩家要求等待、睡覺或停留數天等長時間時，本回合只經過一般回合時間：storyText 不得描述數小時以上的時間流逝，應說明單次等待上限為 8 小時，請玩家分次等待或使用旅店休息。
 - 在場人物的 agenda 是重要角色的盤算（goals）與個性（traits），屬於內心動機：依此揣摩他的語氣、立場與取捨，可透過言行流露，但不可讓他直接把盤算說給玩家聽，也不可替他做出世界事件以外的重大行動（重要角色自己的行動由遊戲每日決策並寫入世界事件）。
@@ -262,8 +265,8 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
   }) ?? [];
   const previousMap = playerState.previousMapId ? getMapById(playerState.previousMapId) : undefined;
   const currentUnits = getWorldUnitsAtMap(playerState.currentMapId, playerState);
-  // 地區居民：進入地區即在場、可交談與交易的單位。
-  const presentResidents = currentUnits.flatMap((unit) => !unit.requiresEncounter ? [{
+  // 地區居民：進入地區即在場、可交談與交易的單位。隊伍同伴另列（O35-1 D25）。
+  const presentResidents = currentUnits.flatMap((unit) => !unit.requiresEncounter && !playerState.party.includes(unit.id) ? [{
     id: unit.id,
     name: unit.name,
     title: unit.title,
@@ -283,6 +286,32 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
     })(),
     ...(getUnitMemoriesForAI(playerState, unit.id).length ? { memories: getUnitMemoriesForAI(playerState, unit.id) } : {})
   }] : []);
+  // 隊伍成員（O35-1 D25）：在場、與玩家同行；個性與口吻供同伴插話。
+  const partyMembers = getPartyMembers(playerState).map((unit) => {
+    const resources = getCompanionResources(playerState, unit);
+    const agent = getEffectiveAgentProfile(playerState.world, unit.id);
+    const memories = getUnitMemoriesForAI(playerState, unit.id);
+    return {
+      id: unit.id, name: unit.name, title: unit.title, partyStatus: '已在玩家的隊伍中，此刻與玩家同行', build: describeUnitBuild(unit),
+      hp: `${resources.hp}/${resources.maxHp}`, mp: `${resources.mp}/${resources.maxMp}`, ...(resources.downed ? { downed: true } : {}),
+      traits: unit.companion?.traits ?? agent?.traits ?? [], ...(unit.companion?.voice ? { voice: unit.companion.voice } : {}),
+      description: unit.description, ...(memories.length ? { memories } : {})
+    };
+  });
+  // 戰鬥中（O35-1）：行動順序、目前行動者、雙方 HP 與開場方式。
+  const combatContext = playerState.combat ? (() => {
+    const combat = playerState.combat;
+    const nameOf = (key: string) => {
+      const participant = combat.participants.find((entry) => entry.key === key);
+      return participant?.side === 'enemy' ? participant.label : key === playerState.unitId ? `${playerState.name}（玩家）` : getWorldUnitById(key)?.name ?? key;
+    };
+    return {
+      round: combat.round, opening: OPENING_LABELS[combat.opening], turnOrder: combat.turnOrder.map(nameOf),
+      currentActor: nameOf(getCurrentActorKey(combat) ?? ''), playerTarget: getCombatTarget(combat)?.label,
+      enemies: combat.participants.flatMap((entry) => entry.side === 'enemy' ? [{ name: entry.label, hp: `${entry.currentHp}/${getWorldUnitById(entry.unitId, playerState)?.stats.hp ?? '?'}`, ...(entry.currentHp <= 0 ? { down: true } : {}) }] : []),
+      party: [{ name: `${playerState.name}（玩家）`, hp: playerState.hp }, ...partyMembers.map((member) => ({ name: member.name, hp: member.hp, ...(member.downed ? { downed: true } : {}) }))]
+    };
+  })() : undefined;
   const visibleQuests = listVisibleQuests(playerState);
   const availableQuests = visibleQuests.filter((quest) => canAcceptQuest(playerState, quest))
     .map((quest) => ({ id: quest.id, title: quest.title, giver: getQuestGiverName(playerState, quest), objective: quest.objective,
@@ -339,7 +368,10 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
       `- 可前往的相鄰地區（只可選這些 ID）: ${JSON.stringify(availableDestinations)}`,
       `- 上一個地區: ${previousMap ? `${previousMap.name} (${previousMap.id})，分類 ${JSON.stringify(previousMap.locationTags ?? [])}` : '無'}`
     ) },
-    { id: 'residents', dropped: 0, droppedEntries: 0, text: `- 當前地區在場人物及數值（memories 為該人物記得的與目前玩家的往來，舊→新）: ${JSON.stringify(presentResidents)}` },
+    { id: 'residents', dropped: 0, droppedEntries: 0, text: lines(
+      `- 當前地區在場人物及數值（memories 為該人物記得的與目前玩家的往來，舊→新）: ${JSON.stringify(presentResidents)}`,
+      `- 隊伍成員（在場、與玩家同行，可以交談；traits 為個性、voice 為口吻，見同伴規則）: ${JSON.stringify(partyMembers)}`
+    ) },
     { id: 'factions', dropped: 0, droppedEntries: 0, text: lines(
       `- 各勢力對玩家的聲望（遊戲依勢力得知的事件結算，AI 不可自行改變；可依此調整人物語氣、價格談判與傳聞內容）: ${JSON.stringify(factionContext.reputation)}`,
       `- 勢力間關係（未列出者為中立）: ${JSON.stringify(factionContext.relations)}`,
@@ -361,7 +393,7 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
       `- 可發布的支線委託（questProposals 只可依此提議；沒有列出代表目前不能發布）: ${JSON.stringify(questPostingOptions)}`
     ) },
     { id: 'encounters', dropped: 0, droppedEntries: 0, text: lines(
-      `- 當前戰鬥: ${playerState.combat ? `${JSON.stringify(playerState.combat)}（開場：${OPENING_LABELS[playerState.combat.opening ?? 'normal']}）` : '無'}`,
+      `- 當前戰鬥（行動與結果由遊戲規則結算）: ${combatContext ? JSON.stringify(combatContext) : '無'}`,
       `- 目前已遭遇單位: ${encounterStatus}`,
       `- 可開戰對象（combatRequest 只可選這些 ID）: ${JSON.stringify(combatTargets)}`,
       `- 本地區可遭遇敵人（只可選這些 ID）: ${JSON.stringify(encounterCandidates)}`,
@@ -414,7 +446,7 @@ export function buildAIContext(playerState: PlayerState, characterHistory: Chara
 
   const availableDestinationIds = availableDestinations.map((destination) => destination.id);
   const transferUnitIds = presentResidents.filter((resident) => !resident.isDead && resident.disposition !== 'hostile').map((resident) => resident.id);
-  const dispositionUnitIds = currentUnits.filter((unit) => unit.population ||
+  const dispositionUnitIds = currentUnits.filter((unit) => !playerState.party.includes(unit.id)).filter((unit) => unit.population ||
     (!playerState.unitInstances[unit.id]?.isDead && playerState.unitInstances[unit.id]?.currentHp !== 0)).map((unit) => unit.id);
   const knownItemIds = itemsDatabase.map((item) => item.id);
   const memoryUnitIds = getMemoryEligibleUnitIds(playerState);

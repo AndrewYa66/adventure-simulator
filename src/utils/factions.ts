@@ -24,11 +24,19 @@ const unique = (ids: (string | undefined)[]): string[] => [...new Set(ids.filter
 /** 一組單位所屬的勢力。 */
 export const getFactionsOfUnits = (unitIds: readonly string[]): string[] => unique(unitIds.map(getUnitFactionId));
 
-/** 在某地區有存活成員（不含潛伏單位）的勢力。 */
-function getFactionsPresentAt(state: Pick<PlayerState, 'unitInstances'>, mapId: string): string[] {
+type FactionPresenceSource = Pick<PlayerState, 'unitInstances'> & Partial<Pick<PlayerState, 'party' | 'currentMapId'>>;
+
+/**
+ * 在某地區有存活成員（不含潛伏單位）的勢力。隊伍同伴跟著玩家（O35-1，review 第 1 輪 S2）：
+ * 不算原居所的成員，算玩家所在地的成員；與 getResidentIdsAt 同一規則，另含需遭遇的單位。
+ */
+function getFactionsPresentAt(state: FactionPresenceSource, mapId: string): string[] {
   const map = getMapById(mapId);
   if (!map) return [];
-  return getFactionsOfUnits(map.unitsPresent.filter((unitId) => {
+  const party = state.party ?? [];
+  const here = state.currentMapId === mapId;
+  const unitIds = [...map.unitsPresent.filter((unitId) => !party.includes(unitId) || here), ...(here ? party.filter((unitId) => !map.unitsPresent.includes(unitId)) : [])];
+  return getFactionsOfUnits(unitIds.filter((unitId) => {
     const instance = state.unitInstances[unitId];
     return !!instance && !instance.isDead && instance.currentHp !== 0;
   }));
@@ -39,7 +47,7 @@ function getFactionsPresentAt(state: Pick<PlayerState, 'unitInstances'>, mapId: 
  * 目擊者 → 目擊者所屬勢力；同勢力 → 指定勢力與目擊者勢力；本地區 → 另加在該地區有成員的勢力；全世界 → 所有勢力。
  */
 export function getAwareFactionIds(
-  state: Pick<PlayerState, 'unitInstances'>,
+  state: FactionPresenceSource,
   scope: { knownBy: EventKnownBy; mapId: string; witnessUnitIds: readonly string[]; knownByFactions?: readonly string[] }
 ): string[] {
   if (scope.knownBy === 'world') return factionsDatabase.map((faction) => faction.id);

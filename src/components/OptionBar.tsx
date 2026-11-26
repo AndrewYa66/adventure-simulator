@@ -14,6 +14,8 @@ interface OptionBarProps {
   suggestions: string[];
   /** 最新訊息的候選目的地（移動意圖不明確時）。 */
   travelChoices: { mapId: string; name: string }[];
+  /** 玩家打字要同伴離隊時冒出的請離隊（O35-1 D34）；按下才離隊。 */
+  dismissChoices?: { unitId: string; name: string }[];
   onAction: (action: SystemAction) => void;
   onSuggestion: (text: string) => void;
   onTravel: (mapId: string) => void;
@@ -37,7 +39,7 @@ const chip = (variant: 'system' | 'group' | 'open' | 'suggestion' | 'combat', di
  * 選項列（O50 第一階段）：固定在輸入框上方、不隨訊息捲動。
  * 收合時最多兩行（系統選項一行、建議行動一行，各自橫向捲動）；點分組才展開該組。
  */
-export const OptionBar: React.FC<OptionBarProps> = ({ player, optionSet, busy, busyNote, suggestions, travelChoices, onAction, onSuggestion, onTravel }) => {
+export const OptionBar: React.FC<OptionBarProps> = ({ player, optionSet, busy, busyNote, suggestions, travelChoices, dismissChoices = [], onAction, onSuggestion, onTravel }) => {
   const [panel, setPanel] = useState<Panel | null>(null);
   // 換地區或進出戰鬥時收合面板；面板內容每次依目前狀態重算。
   const panelKey = `${player.currentMapId}|${player.combat ? 'combat' : optionSet.mode}`;
@@ -57,7 +59,8 @@ export const OptionBar: React.FC<OptionBarProps> = ({ player, optionSet, busy, b
     : buildNoticeBoardOptions(player);
   const panelTitle = !panel ? '' : panel.kind === 'group' ? optionSet.groups.find((group) => group.id === panel.id)?.label ?? ''
     : panel.kind === 'shop' ? getShopById(panel.shopId)?.name ?? '' : '告示板';
-  const panelOpen = !!panel && !combat && !blocked && (panel.kind !== 'group' || optionSet.groups.some((group) => group.id === panel.id));
+  // 戰鬥中也可展開分組（O35-1：目標、治療、物品）；商店與告示板只在戰鬥外。
+  const panelOpen = !!panel && !blocked && (panel.kind === 'group' ? optionSet.groups.some((group) => group.id === panel.id) : !combat);
 
   const choose = (option: SystemOption) => {
     if (disabledAll || option.disabledReason) return;
@@ -98,6 +101,9 @@ export const OptionBar: React.FC<OptionBarProps> = ({ player, optionSet, busy, b
         {optionSet.immediate.map((option) => renderOption(option, combat ? 'combat' : 'system'))}
         {travelChoices.map((destination) => <button key={`choice-${destination.mapId}`} type="button" disabled={disabledAll || combat}
           onClick={() => onTravel(destination.mapId)} style={chip('system', disabledAll || combat)}>前往 {destination.name}</button>)}
+        {!combat && dismissChoices.map((member) => <button key={`dismiss-${member.unitId}`} type="button" data-option-id={`intent-dismiss:${member.unitId}`}
+          disabled={disabledAll} title="同伴會回到原居所，之後可以再邀請" onClick={() => onAction({ kind: 'dismiss', unitId: member.unitId })}
+          style={chip('system', disabledAll)}>👋 請{member.name}離隊</button>)}
         {optionSet.groups.map((group) => {
           const open = panelOpen && panel?.kind === 'group' && panel.id === group.id;
           return <button key={group.id} type="button" data-group-id={group.id} aria-expanded={open} disabled={disabledAll}

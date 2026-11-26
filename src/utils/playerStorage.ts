@@ -1,8 +1,7 @@
 import type { AgentRuntimeState, GeneratedQuest, PlayerState, StoryMessage, StoryState, UnitMemoryNote, WorldEvent, WorldModifier, WorldRuntimeState } from '../types/game';
-import { AGENT_ACTION_TYPES, clampReputation, createDefaultUnitInstance, createInitialReputation, FACTION_RELATION_STATUSES, factionData, getBaseExpForLevel, getEventById, getCharacterClassById, getFactionById, getItemById, getMapById, getPlayerResourceCaps, getQuestTemplateById, getSpeciesById, getStoryActById, getStoryEndingById, getStoryletById, getUnitAbilities, getUnitLevelCap, getWorldUnitById, MAX_UNIT_LEVEL, PLAYER_UNIT_ID, scenario, unitTemplatesDatabase } from '../data/staticData';
+import { AGENT_ACTION_TYPES, clampReputation, createDefaultUnitInstance, createInitialReputation, FACTION_RELATION_STATUSES, factionData, getBaseExpForLevel, getEventById, getCharacterClassById, getFactionById, getItemById, getMapById, getPlayerResourceCaps, getQuestTemplateById, getSpeciesById, getStoryActById, getStoryEndingById, getStoryletById, getUnitAbilities, getUnitLevelCap, getUnitTemplateById, getWorldUnitById, MAX_UNIT_LEVEL, partyRules, PLAYER_UNIT_ID, scenario, unitTemplatesDatabase } from '../data/staticData';
 import { isValidGameTime } from './gameTime';
 import { isValidSpeciesClassCombo, UNIT_STAT_KEYS } from './unitGrowth';
-import { createCombat } from './combatState';
 import { parseModifierScope } from './worldModifiers';
 import { findQuest } from './questRules';
 
@@ -178,6 +177,14 @@ function normalizeWorldState(value: unknown): WorldRuntimeState | null {
 const isKnownUnitId = (unitId: string): boolean => !!getWorldUnitById(unitId);
 const isResidentUnitId = (unitId: string): boolean => { const unit = getWorldUnitById(unitId); return !!unit && !unit.requiresEncounter; };
 
+/** 狀態效果（O35-1）：昏迷、嘲諷，剩餘回合須為正整數。 */
+const normalizeStatusEffects = (value: unknown): PlayerState['statusEffects'] => Array.isArray(value)
+  ? value.flatMap((effect) => isRecord(effect) && (effect.id === 'unconscious' || effect.id === 'taunt') &&
+    Number.isInteger(effect.remainingTurns) && (effect.remainingTurns as number) > 0
+    ? [{ id: effect.id, remainingTurns: effect.remainingTurns as number }]
+    : [])
+  : [];
+
 export function normalizePlayerState(value: unknown): PlayerState | null {
   if (!isRecord(value) || typeof value.name !== 'string' || !value.name.trim() ||
       !Number.isInteger(value.level) || (value.level as number) < 1 ||
@@ -255,7 +262,9 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
       (savedState.level as number) <= getUnitLevelCap(template.id) ? savedState.level as number : defaults.level;
     const exp = Number.isSafeInteger(savedState.exp) && (savedState.exp as number) >= getBaseExpForLevel(level)
       ? savedState.exp as number : getBaseExpForLevel(level);
-    const maxHp = getWorldUnitById(template.id, { unitInstances: { [template.id]: { level } }, world })?.stats.hp ?? 1;
+    const unitStats = getWorldUnitById(template.id, { unitInstances: { [template.id]: { level } }, world })?.stats;
+    const maxHp = unitStats?.hp ?? 1;
+    const statusEffects = normalizeStatusEffects(savedState.statusEffects);
     const savedInventory = Array.isArray(savedState.inventory) ? savedState.inventory.flatMap((entry) =>
       isRecord(entry) && typeof entry.itemId === 'string' && getItemById(entry.itemId) &&
       Number.isInteger(entry.quantity) && (entry.quantity as number) > 0
@@ -271,32 +280,19 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
       isDead: savedState.isDead === true || savedState.currentHp === 0,
       ...(isValidGameTime(savedState.diedAtMinutes) ? { diedAtMinutes: savedState.diedAtMinutes } : {}),
       // 潛伏狀態只對潛伏樣板有效；佔領發生後即為一般實例。
-      ...(savedState.isDormant === true && template.dormantUntilOccupation ? { isDormant: true } : {})
+      ...(savedState.isDormant === true && template.dormantUntilOccupation ? { isDormant: true } : {}),
+      // O35-1：同伴的 MP 與狀態（倒地只存在於戰鬥中，戰鬥不存檔，讀檔時不保留）。
+      ...(Number.isInteger(savedState.currentMp) && (savedState.currentMp as number) >= 0 && (savedState.currentMp as number) < (unitStats?.mp ?? 0)
+        ? { currentMp: savedState.currentMp as number } : {}),
+      ...(statusEffects.length ? { statusEffects } : {})
     }];
   })) as PlayerState['unitInstances'];
 
-  let combat: PlayerState['combat'];
-  if (value.combat !== undefined && value.combat !== null) {
-    if (!isRecord(value.combat) || !Number.isInteger(value.combat.round) || (value.combat.round as number) < 1 || !Array.isArray(value.combat.participants)) return null;
-    const savedEnemies = value.combat.participants.filter((participant) => isRecord(participant) && participant.side === 'enemy');
-    const enemies: { unitId: string; currentHp: number }[] = [];
-    for (const enemy of savedEnemies) {
-      const unitId = isRecord(enemy) && typeof enemy.unitId === 'string' ? enemy.unitId : undefined;
-      const unit = unitId ? getWorldUnitById(unitId, { unitInstances, world }) : undefined;
-      const isPresent = !!unit && getMapById(value.currentMapId)?.unitsPresent.includes(unitId!);
-      // 唯一個體的實例已死亡時不可仍在戰鬥中；族群樣板的個體以戰鬥狀態追蹤 HP。
-      const savedUnitState = !!unit && !unit.population && isRecord(savedInstances[unitId!]) ? savedInstances[unitId!] as Record<string, unknown> : undefined;
-      if (!isRecord(enemy) || !unitId || !unit || !isPresent || !Number.isInteger(enemy.currentHp) || (enemy.currentHp as number) <= 0 ||
-          savedUnitState?.isDead === true || savedUnitState?.currentHp === 0) return null;
-      enemies.push({ unitId, currentHp: Math.min(enemy.currentHp as number, unit.stats.hp) });
-    }
-    if (!enemies.length) return null;
-    const savedTarget = value.combat.targetUnitId;
-    const targetUnitId = typeof savedTarget === 'string' && enemies.some((enemy) => enemy.unitId === savedTarget) ? savedTarget : enemies[0].unitId;
-    const opening = ['normal', 'player_ambush', 'trap', 'enemy_ambush'].includes(String(value.combat.opening))
-      ? value.combat.opening as NonNullable<PlayerState['combat']>['opening'] : 'normal';
-    combat = { ...createCombat([PLAYER_UNIT_ID], enemies), round: value.combat.round as number, targetUnitId, opening };
-  }
+  // 戰鬥不存檔（自動存檔停在開戰前、戰鬥中不能手動存檔），存檔中的戰鬥欄位一律略過（O35-1）。
+  // 隊伍（O35-1）：可招募、存活、未潛伏的單位，不重複，最多 maxCompanions 位。
+  const party = Array.isArray(value.party) ? [...new Set(value.party.filter((unitId): unitId is string => typeof unitId === 'string' &&
+    !!getUnitTemplateById(unitId)?.companion?.recruitable && !unitInstances[unitId]?.isDead && unitInstances[unitId]?.currentHp !== 0 && !unitInstances[unitId]?.isDormant))]
+    .slice(0, partyRules.maxCompanions) : [];
   const previousMapId = typeof value.previousMapId === 'string' &&
     getMapById(value.currentMapId)?.connectedMapIds.includes(value.previousMapId)
     ? value.previousMapId
@@ -325,12 +321,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     if (getFactionById(factionId) && Number.isFinite(reputation)) factionReputation[factionId] = clampReputation(reputation as number);
   }
   const hp = Math.min(resourceCaps.maxHp, Math.max(0, value.hp as number));
-  const statusEffects = Array.isArray(value.statusEffects)
-    ? value.statusEffects.flatMap((effect) => isRecord(effect) && effect.id === 'unconscious' &&
-      Number.isInteger(effect.remainingTurns) && (effect.remainingTurns as number) > 0
-      ? [{ id: 'unconscious' as const, remainingTurns: effect.remainingTurns as number }]
-      : [])
-    : [];
+  const statusEffects = normalizeStatusEffects(value.statusEffects);
   const isDead = value.isDead === true || hp === 0;
   const transactionHistory = Array.isArray(value.transactionHistory) ? value.transactionHistory.flatMap((record) =>
     isRecord(record) && typeof record.id === 'string' &&
@@ -378,7 +369,7 @@ export function normalizePlayerState(value: unknown): PlayerState | null {
     world,
     ...(encounteredUnitId && !isDead ? { encounteredUnitId, encounterInfo } : {}),
     ...(residentAggro ? { residentAggro } : {}),
-    ...(combat && !isDead ? { combat } : {})
+    party
   };
 }
 
