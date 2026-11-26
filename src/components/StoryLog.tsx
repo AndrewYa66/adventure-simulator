@@ -74,7 +74,14 @@ export const StoryLog: React.FC<StoryLogProps> = ({ messages, loading, busyText,
             </div>
 
             {msg.checkResult && <CheckResultCard result={msg.checkResult} />}
-            {msg.checkResults?.map((result, index) => <CheckResultCard key={`${msg.id}-check-${index}`} result={result} />)}
+            {msg.checkResults?.filter((result) => !result.detail).map((result, index) => <CheckResultCard key={`${msg.id}-check-${index}`} result={result} />)}
+            {/* 戰鬥明細（O35-1 試玩 P2）：同伴與敵人的檢定預設收起，完整紀錄保留；摘要已寫在訊息的每一行。 */}
+            {(msg.checkResults?.some((result) => result.detail) ?? false) && (
+              <details data-testid="combat-detail" style={{ maxWidth: '420px', marginTop: '8px', fontSize: '13px', color: '#bbb' }}>
+                <summary style={{ cursor: 'pointer' }}>🎲 戰鬥明細（同伴與敵人的 {msg.checkResults!.filter((result) => result.detail).length} 次擲骰）</summary>
+                {msg.checkResults!.filter((result) => result.detail).map((result, index) => <CheckResultCard key={`${msg.id}-detail-${index}`} result={result} />)}
+              </details>
+            )}
             {/* 舊訊息的選項只作為紀錄、不能按；最新訊息的選項顯示在選項列（O50）。 */}
             {msg.id !== activeMessageId && ((msg.travelOptions?.length ?? 0) > 0 || (msg.options?.length ?? 0) > 0) && (
               <div style={{ marginTop: '8px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>

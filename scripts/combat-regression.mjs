@@ -74,6 +74,9 @@ const lines = (r) => r.text.split('\n');
   const actorLines = lines(r).filter((l) => /^(⚔️|🛡️|👹|✨|💫)/.test(l));
   const endsOnPlayer = !r.player.combat || combat.isPlayerTurn(r.player);
   check(5, '一次行動後結算到玩家回合', endsOnPlayer, `turnIndex=${r.player.combat?.turnIndex}`);
+  const playerChecks = r.checks.filter((c) => !c.detail), detailChecks = r.checks.filter((c) => c.detail);
+  check('P2', '同伴與敵人的檢定標為戰鬥明細、玩家自己的攻擊檢定照常顯示', playerChecks.every((c) => c.label === '玩家攻擊檢定') && playerChecks.length === 1 &&
+    detailChecks.length > 0 && detailChecks.every((c) => c.label !== '玩家攻擊檢定'), r.checks.map((c) => `${c.label}${c.detail ? '（明細）' : ''}`).join('、'));
   check(5, '系統訊息每個行動者一行', actorLines.length >= 1 && actorLines.every((l) => !l.includes('\n')), `\n${r.text}`);
   // 玩家昏迷 2 回合：skip 一次後，下一輪自動跳過，最後停在玩家回合且已清醒
   random.setRandomSource(constant(HIGH));

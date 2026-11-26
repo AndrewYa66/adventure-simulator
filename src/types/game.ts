@@ -1059,6 +1059,8 @@ export interface ActionCheckResult {
   dc: number;
   success: boolean;
   label?: string;
+  /** 戰鬥明細（O35-1 試玩 P2）：同伴與敵人行動的檢定，訊息中收進預設收起的「戰鬥明細」；玩家自己的檢定照常顯示。 */
+  detail?: boolean;
 }
 
 // ==========================================

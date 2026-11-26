@@ -285,7 +285,7 @@ function partyAttack(ctx: Ctx, attackerKey: string, enemyKey: string, options: P
   if (!(firstStrike && isPlayerKey(attackerKey))) {
     const dc = 10 + unit.stats.def;
     const roll = attacker ? resolveUnitCheck(attacker, 'atk', dc) : resolveActionCheck(ctx.state, 'atk', dc);
-    ctx.checks.push({ ...roll, stat: 'atk', reason: `第 ${combat.round} 回合：${name === '你' ? '' : name}${actionName}${enemy.label}`, label: `${name === '你' ? '玩家' : name}攻擊檢定` });
+    ctx.checks.push({ ...roll, stat: 'atk', reason: `第 ${combat.round} 回合：${name === '你' ? '' : name}${actionName}${enemy.label}`, label: `${name === '你' ? '玩家' : name}攻擊檢定`, ...(isPlayerKey(attackerKey) ? {} : { detail: true }) });
     hit = roll.success;
   }
   const attack = attacker ? attacker.stats.atk : getPlayerStatBreakdown(ctx.state, 'atk').statValue;
@@ -336,7 +336,9 @@ function enemyAttack(ctx: Ctx, enemyKey: string, openingStrike = false): void {
   ctx.checks.push({
     ...roll, stat: checkStat,
     reason: action ? `${enemy.label}施放${special?.name}：${defenderLabel}進行${checkStat === 'dex' ? '閃避' : '抵抗'}檢定` : `${enemy.label}${verb}${defenderLabel}：${defenderLabel}進行閃避檢定`,
-    label: action ? `${special?.name}檢定` : `${defenderLabel}閃避檢定`
+    label: action ? `${special?.name}檢定` : `${defenderLabel}閃避檢定`,
+    // 敵人的行動：收進戰鬥明細（試玩 P2），結果已寫在每個行動者一行的摘要中。
+    detail: true
   });
   if (roll.success) {
     ctx.lines.push(`👹 ${enemy.label}${verb}${targetName}，${targetName === '你' ? '你' : targetName}閃開了。`);
