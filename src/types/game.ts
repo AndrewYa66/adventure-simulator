@@ -204,8 +204,8 @@ export interface PartyRulesStatic {
   aggroWeights: { player: number; companion: number };
   /** 同伴在我方有人 HP 比例低於此值時優先治療。 */
   companionHealThreshold: number;
-  /** 倒地同伴在勝利或逃跑成功後以此 HP 起身。 */
-  reviveHp: number;
+  /** 倒地同伴在勝利、逃跑成功或玩家戰死後，以最大 HP 的此比例起身（捨去、至少 1；D9，Andrew 2026-11-26 確認）。 */
+  battleEndReviveRatio: number;
   /** 戰鬥中以復甦效果救起時，以最大 HP 的此比例起身（捨去、至少 1；D35）。 */
   reviveRatio: number;
   /** 同伴敘事與狀態不符的輕量處理（D34）：正規表示式來源字串。 */

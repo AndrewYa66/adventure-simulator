@@ -158,11 +158,12 @@ const lines = (r) => r.text.split('\n');
   p = { ...p, statusEffects: [], combat: combatState.setEnemyHp(p.combat, 'MON-004#1', 1), unitInstances: { ...p.unitInstances, [IVAN]: { ...inst(p, IVAN), currentHp: 0, downed: true } } };
   const win = combat.resolvePlayerCombatAction(p, { kind: 'attack' });
   const iv = inst(win.player, IVAN);
-  check(8, '勝利後倒地同伴以 1 HP 起身', win.victory && iv.currentHp === data.partyRules.reviveHp && !iv.downed && !win.player.combat, win.text.split('\n').at(-1));
+  const endHp = Math.max(1, Math.floor(data.getWorldUnitById(IVAN, p).stats.hp * data.partyRules.battleEndReviveRatio));
+  check(8, `勝利後倒地同伴以最大 HP 25%（${endHp}）起身`, win.victory && iv.currentHp === endHp && !iv.downed && !win.player.combat && win.text.includes(`以 ${endHp} HP 起身`), win.text.split('\n').at(-1));
   const fleeState = { ...p, combat: combatState.setEnemyHp(p.combat, 'MON-004#1', 99) };
   const fled = combat.resolvePlayerCombatAction(fleeState, { kind: 'flee' });
   const iv2 = inst(fled.player, IVAN);
-  check(8, '逃跑成功後倒地同伴以 1 HP 起身', !fled.player.combat && iv2.currentHp === 1 && !iv2.downed, lines(fled).at(-1));
+  check(8, '逃跑成功後倒地同伴以最大 HP 25% 起身', !fled.player.combat && iv2.currentHp === endHp && !iv2.downed, lines(fled).at(-1));
   random.setRandomSource(constant(LOW));
   const dying = { ...fleeState, hp: 1 };
   const died = combat.resolvePlayerCombatAction(dying, { kind: 'attack' });
@@ -442,7 +443,7 @@ const lines = (r) => r.text.split('\n');
   p = { ...p, hp: 1, unitInstances: { ...p.unitInstances, [IVAN]: { ...inst(p, IVAN), currentHp: 0, downed: true } } };
   p = { ...p, combat: { ...p.combat, turnIndex: p.combat.turnOrder.indexOf('PLAYER-001') } };
   const r = combat.resolvePlayerCombatAction(p, { kind: 'attack' });
-  check('S1', '玩家戰死後同伴起身、沒有戰鬥狀態', r.player.isDead && !r.player.combat && inst(r.player, IVAN).downed === false && inst(r.player, IVAN).currentHp === data.partyRules.reviveHp);
+  check('S1', '玩家戰死後同伴起身、沒有戰鬥狀態', r.player.isDead && !r.player.combat && inst(r.player, IVAN).downed === false && inst(r.player, IVAN).currentHp === Math.max(1, Math.floor(data.getWorldUnitById(IVAN, r.player).stats.hp * data.partyRules.battleEndReviveRatio)));
 }
 
 // ---------------------------------------------------------------------------

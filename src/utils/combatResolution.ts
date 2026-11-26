@@ -128,7 +128,15 @@ function setCompanionHp(state: PlayerState, unitId: string, hp: number): PlayerS
   return { ...state, unitInstances: { ...state.unitInstances, [unitId]: { ...instance, currentHp: Math.max(0, hp), downed: hp <= 0 } } };
 }
 
-/** 戰鬥結束（勝利或逃跑成功）：倒地同伴以 reviveHp 起身，我方的戰鬥狀態效果解除。 */
+/** 戰鬥結束後倒地同伴起身的 HP（D9）：最大 HP × battleEndReviveRatio（捨去、至少 1）。 */
+const getBattleEndReviveHp = (state: PlayerState, unitId: string): number =>
+  Math.max(1, Math.floor((getWorldUnitById(unitId, state)?.stats.hp ?? 1) * partyRules.battleEndReviveRatio));
+
+/** 倒地同伴起身的說明，例如「某某以 7 HP 起身」。 */
+const describeBattleEndRevive = (state: PlayerState, unitIds: string[]): string =>
+  unitIds.map((unitId) => `${partyName(state, unitId)}以 ${state.unitInstances[unitId]?.currentHp ?? getBattleEndReviveHp(state, unitId)} HP 起身`).join('、');
+
+/** 戰鬥結束（勝利、逃跑成功或玩家戰死）：倒地同伴以最大 HP 的 battleEndReviveRatio 起身，我方的戰鬥狀態效果解除。 */
 function endCombatForParty(state: PlayerState): PlayerState {
   let next: PlayerState = { ...state, statusEffects: [] };
   delete next.combat;
@@ -136,7 +144,7 @@ function endCombatForParty(state: PlayerState): PlayerState {
   for (const unitId of next.party) {
     const instance = unitInstances[unitId];
     if (!instance) continue;
-    unitInstances[unitId] = { ...instance, statusEffects: [], downed: false, ...(instance.downed || instance.currentHp === 0 ? { currentHp: partyRules.reviveHp } : {}) };
+    unitInstances[unitId] = { ...instance, statusEffects: [], downed: false, ...(instance.downed || instance.currentHp === 0 ? { currentHp: getBattleEndReviveHp(state, unitId) } : {}) };
   }
   next = { ...next, unitInstances };
   return clearEncounter(next);
@@ -247,7 +255,7 @@ function checkVictory(ctx: Ctx): boolean {
   const bossDefeated = getEnemyParticipants(ctx.state.combat).some((enemy) => getWorldUnitById(enemy.unitId)?.isBoss);
   const downed = ctx.state.party.filter((unitId) => ctx.state.unitInstances[unitId]?.downed);
   ctx.state = endCombatForParty(ctx.state);
-  ctx.lines.push(`${bossDefeated ? '🏆' : '⚔️'} 敵人全數倒下，戰鬥勝利！${downed.length ? `${downed.map((unitId) => partyName(ctx.state, unitId)).join('、')}以 ${partyRules.reviveHp} HP 起身。` : ''}`);
+  ctx.lines.push(`${bossDefeated ? '🏆' : '⚔️'} 敵人全數倒下，戰鬥勝利！${downed.length ? `${describeBattleEndRevive(ctx.state, downed)}。` : ''}`);
   ctx.victory = true;
   ctx.ended = true;
   return true;
@@ -620,7 +628,7 @@ function resolveFleeCheck(ctx: Ctx): boolean {
   }
   const downed = ctx.state.party.filter((unitId) => ctx.state.unitInstances[unitId]?.downed);
   ctx.state = endCombatForParty(ctx.state);
-  ctx.lines.push(`🏃 全隊拉開距離，戰鬥結束。${downed.length ? `你們帶著${downed.map((unitId) => partyName(ctx.state, unitId)).join('、')}撤離，${downed.length > 1 ? '他們' : '對方'}以 ${partyRules.reviveHp} HP 起身。` : ''}`);
+  ctx.lines.push(`🏃 全隊拉開距離，戰鬥結束。${downed.length ? `你們帶著${downed.map((unitId) => partyName(ctx.state, unitId)).join('、')}撤離：${describeBattleEndRevive(ctx.state, downed)}。` : ''}`);
   ctx.ended = true;
   return true;
 }

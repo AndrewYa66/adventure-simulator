@@ -1,9 +1,9 @@
 {
-  "_comment": "隊伍規則（O35-1）。數值皆可調：同伴上限、敵人選目標的仇恨基礎權重、同伴治療門檻（HP 比例）、倒地同伴在勝利或逃跑後起身的 HP、復甦效果救起時的最大 HP 比例。",
+  "_comment": "隊伍規則（O35-1）。數值皆可調：同伴上限、敵人選目標的仇恨基礎權重、同伴治療門檻（HP 比例）、倒地同伴在勝利、逃跑或玩家戰死後起身的最大 HP 比例（battleEndReviveRatio）、復甦效果救起時的最大 HP 比例（reviveRatio），皆捨去、至少 1。",
   "maxCompanions": 3,
   "aggroWeights": { "player": 2, "companion": 1 },
   "companionHealThreshold": 0.4,
-  "reviveHp": 1,
+  "battleEndReviveRatio": 0.25,
   "reviveRatio": 0.25,
   "narrativeChecks": {
     "_comment": "同伴敘事與狀態不符的輕量處理（D34）。皆為正規表示式來源字串，可調。dismissIntent：玩家文字含隊伍同伴名字且符合時，選項列冒出請離隊；dismissNegations：拿掉符合的離隊字詞後，剩下的文字含這些否定字就不算離隊意圖（例如「你不要先回去」）。leave／refuse／join／act／give：敘事宣稱同伴離去（含「留在原地」「沒有隨你折返」）、已在隊伍中的同伴拒絕同行或要留守某處、他人入隊、同伴出手（戰鬥外）、同伴給東西時補說明（這些字詞本身含否定字，比對時先拿掉字詞再看否定）；give 另須句中提到具體道具名稱（物品資料）或 giveObjects 的字詞。negations：句中有這些否定字詞時不視為宣稱。",

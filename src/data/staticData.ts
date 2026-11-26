@@ -550,7 +550,7 @@ export function validateWorldUnitData(): string[] {
   if (!(Number.isInteger(partyRules.maxCompanions) && partyRules.maxCompanions >= 1 && partyRules.maxCompanions <= 6)) issues.push('party_rules.maxCompanions 須為 1～6 的整數');
   if (!(partyRules.aggroWeights?.player > 0 && partyRules.aggroWeights?.companion > 0)) issues.push('party_rules.aggroWeights 的權重須大於 0');
   if (!(partyRules.companionHealThreshold > 0 && partyRules.companionHealThreshold < 1)) issues.push('party_rules.companionHealThreshold 須介於 0 與 1 之間');
-  if (!(Number.isInteger(partyRules.reviveHp) && partyRules.reviveHp >= 1)) issues.push('party_rules.reviveHp 須為正整數');
+  if (!(partyRules.battleEndReviveRatio > 0 && partyRules.battleEndReviveRatio <= 1)) issues.push('party_rules.battleEndReviveRatio 須介於 0（不含）與 1 之間');
   if (!(partyRules.reviveRatio > 0 && partyRules.reviveRatio <= 1)) issues.push('party_rules.reviveRatio 須介於 0（不含）與 1 之間');
   for (const key of ['dismissIntent', 'dismissNegations', 'leave', 'refuse', 'join', 'act', 'give', 'giveObjects', 'negations'] as const) {
     const patterns = partyRules.narrativeChecks?.[key];
