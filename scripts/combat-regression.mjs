@@ -503,8 +503,19 @@ const lines = (r) => r.text.split('\n');
   check('D34', '婉拒同行、或句中提到隊伍同伴時不算入隊', decline.length === 0, decline.join(''));
   const act = claims.findCompanionClaims(p, `${name}拉開長弓，一箭射中了哥布林的肩膀。`);
   check('D34', '戰鬥外宣稱同伴出手 → 補說明', act.some((text) => text.includes('沒有出手')), act.join(''));
-  const give = claims.findCompanionClaims(village, `${name}從腰間取出一瓶藥水遞給你。`);
-  check('D34', '宣稱同伴給東西 → 補說明', give.some((text) => text.includes('沒有給你任何東西')), give.join(''));
+  const potionName = data.itemsDatabase.find((item) => item.type === 'consumable').name;
+  const give = claims.findCompanionClaims(village, `${name}從腰間取出一瓶${potionName}遞給你。`);
+  check('D34', '宣稱同伴給具體道具 → 補說明', give.some((text) => text.includes('沒有給你任何東西')), give.join(''));
+  const gold = claims.findCompanionClaims(village, `${name}掏出幾枚金幣塞給你。`);
+  check('S7', '宣稱同伴給金幣 → 補說明', gold.some((text) => text.includes('沒有給你任何東西')), gold.join(''));
+  for (const text of [`${name}給了你一個眼神，示意你小心。`, `${name}遞給你一個安心的笑容。`]) {
+    const look = claims.findCompanionClaims(village, text);
+    check('S7', `沒有具體道具不算給東西：「${text}」`, look.length === 0, look.join(''));
+  }
+  for (const text of [`${name}，你不要先回去`, `${name}，你不用離隊`, `${name}，別一個人走`]) {
+    check('S8', `含否定字不算離隊意圖：「${text}」`, claims.findDismissIntent(p, text).length === 0);
+  }
+  check('S8', '否定字是離隊字詞的一部分時仍算（「別跟了」）', claims.findDismissIntent(p, `${name}，別跟了`).length === 1);
   const chat = claims.findCompanionClaims(village, `一旁的${name}抱著長弓，低聲補充：「我在古道邊緣見過牠們的腳印。」`);
   check('D34', '正常的同伴插話不補說明', chat.length === 0, chat.join(''));
 }

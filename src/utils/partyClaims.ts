@@ -1,5 +1,5 @@
 import type { PlayerState } from '../types/game';
-import { getWorldUnitById, getWorldUnitsAtMap, partyRules } from '../data/staticData';
+import { getWorldUnitById, getWorldUnitsAtMap, itemsDatabase, partyRules } from '../data/staticData';
 
 /**
  * 同伴敘事與狀態不符的輕量處理（O35-1 D34）：不改 AI 回應格式、不增加 AI 呼叫。
@@ -29,6 +29,10 @@ function claims(sentence: string, patterns: RegExp[]): boolean {
   return !partyRules.narrativeChecks.negations.some((word) => rest.includes(word));
 }
 
+/** 句中提到具體道具（物品資料的名稱）或 giveObjects 的字詞。 */
+const mentionsObject = (sentence: string) =>
+  itemsDatabase.some((item) => sentence.includes(item.name)) || partyRules.narrativeChecks.giveObjects.some((word) => sentence.includes(word));
+
 const companionNames = (state: PlayerState) => state.party.flatMap((unitId) => {
   const unit = getWorldUnitById(unitId, state);
   return unit ? [{ unitId, name: unit.name }] : [];
@@ -38,6 +42,9 @@ const companionNames = (state: PlayerState) => state.party.flatMap((unitId) => {
 export function findDismissIntent(state: PlayerState, text: string): { unitId: string; name: string }[] {
   if (state.combat || !state.party.length) return [];
   if (!checks.dismissIntent.some((pattern) => pattern.test(text))) return [];
+  // 拿掉符合的離隊字詞後還有否定字（例如「你不要先回去」），不算離隊意圖（review 第 2 輪 S8）。
+  const rest = checks.dismissIntent.reduce((remaining, pattern) => remaining.replace(new RegExp(pattern.source, 'g'), ''), text);
+  if (partyRules.narrativeChecks.dismissNegations.some((word) => rest.includes(word))) return [];
   return companionNames(state).filter((member) => text.includes(member.name));
 }
 
@@ -67,7 +74,8 @@ export function findCompanionClaims(state: PlayerState, storyText: string): stri
     if (!state.combat && sentences.some((sentence) => sentence.includes(member.name) && claims(sentence, checks.act))) {
       add(`${member.name}沒有出手；開戰由規則決定，請用選項列的伏擊或挑戰。`);
     }
-    if (sentences.some((sentence) => sentence.includes(member.name) && claims(sentence, checks.give))) {
+    // 給東西：句中須提到具體道具名稱或 giveObjects（例如金幣），避免「給了你一個眼神」誤判（review 第 2 輪 S7）。
+    if (sentences.some((sentence) => sentence.includes(member.name) && mentionsObject(sentence) && claims(sentence, checks.give))) {
       add(`${member.name}沒有給你任何東西，物品沒有轉移。`);
     }
   }

@@ -552,7 +552,7 @@ export function validateWorldUnitData(): string[] {
   if (!(partyRules.companionHealThreshold > 0 && partyRules.companionHealThreshold < 1)) issues.push('party_rules.companionHealThreshold 須介於 0 與 1 之間');
   if (!(Number.isInteger(partyRules.reviveHp) && partyRules.reviveHp >= 1)) issues.push('party_rules.reviveHp 須為正整數');
   if (!(partyRules.reviveRatio > 0 && partyRules.reviveRatio <= 1)) issues.push('party_rules.reviveRatio 須介於 0（不含）與 1 之間');
-  for (const key of ['dismissIntent', 'leave', 'join', 'act', 'give', 'negations'] as const) {
+  for (const key of ['dismissIntent', 'dismissNegations', 'leave', 'join', 'act', 'give', 'giveObjects', 'negations'] as const) {
     const patterns = partyRules.narrativeChecks?.[key];
     if (!Array.isArray(patterns) || !patterns.length) { issues.push(`party_rules.narrativeChecks.${key} 須為非空陣列`); continue; }
     for (const pattern of patterns) {
