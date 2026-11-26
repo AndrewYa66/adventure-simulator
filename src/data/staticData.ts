@@ -552,6 +552,13 @@ export function validateWorldUnitData(): string[] {
   if (!(partyRules.companionHealThreshold > 0 && partyRules.companionHealThreshold < 1)) issues.push('party_rules.companionHealThreshold 須介於 0 與 1 之間');
   if (!(Number.isInteger(partyRules.reviveHp) && partyRules.reviveHp >= 1)) issues.push('party_rules.reviveHp 須為正整數');
   if (!(partyRules.reviveRatio > 0 && partyRules.reviveRatio <= 1)) issues.push('party_rules.reviveRatio 須介於 0（不含）與 1 之間');
+  for (const key of ['dismissIntent', 'leave', 'join', 'act', 'give', 'negations'] as const) {
+    const patterns = partyRules.narrativeChecks?.[key];
+    if (!Array.isArray(patterns) || !patterns.length) { issues.push(`party_rules.narrativeChecks.${key} 須為非空陣列`); continue; }
+    for (const pattern of patterns) {
+      try { new RegExp(pattern); } catch { issues.push(`party_rules.narrativeChecks.${key} 的「${pattern}」不是有效的正規表示式`); }
+    }
+  }
   // 復甦效果（D35）：只能放在戰鬥中可用的消耗品上。
   for (const item of itemsDatabase.filter((entry) => entry.effect.revive !== undefined)) {
     if (item.effect.revive !== true || item.type !== 'consumable' || !item.usableInCombat) issues.push(`${item.id}: 復甦效果只能是 true，且須為戰鬥中可用的消耗品`);

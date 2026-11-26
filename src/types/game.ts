@@ -208,6 +208,8 @@ export interface PartyRulesStatic {
   reviveHp: number;
   /** 戰鬥中以復甦效果救起時，以最大 HP 的此比例起身（捨去、至少 1；D35）。 */
   reviveRatio: number;
+  /** 同伴敘事與狀態不符的輕量處理（D34）：正規表示式來源字串。 */
+  narrativeChecks: { dismissIntent: string[]; leave: string[]; join: string[]; act: string[]; give: string[]; negations: string[] };
 }
 
 /** 重要角色的行動種類（O34 第 1 階段）。 */
@@ -1036,6 +1038,8 @@ export interface StoryMessage {
   checkResult?: ActionCheckResult;
   checkResults?: ActionCheckResult[];
   travelOptions?: { mapId: string; name: string }[];
+  /** 玩家打字表達要隊伍同伴離隊時（O35-1 D34），選項列冒出的「請 X 離隊」；按下才離隊。 */
+  partyDismissOptions?: { unitId: string; name: string }[];
   /** 改變狀態的系統動作（接取、交付、等待、移動、戰鬥結束等）：之前訊息的建議行動不再可按（O50）。 */
   invalidatesOptions?: boolean;
   timestamp: string;

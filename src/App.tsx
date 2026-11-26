@@ -31,6 +31,7 @@ import { getCombatTarget } from './utils/combatState';
 import { resolveActionCheck } from './utils/gameChecks';
 import { applyPostActionRules, getCombatActionBlock, OPENING_LABELS, resolveAmbush, resolveCombatRequest, resolveFoundByEnemy, resolvePlayerCombatAction, resolveTrapWait, startCombatByPlan, startNormalCombat, switchCombatTarget, type CombatStepResult, type PlayerCombatAction } from './utils/combatResolution';
 import { getInviteBlock, joinParty, leaveParty, getCompanionResources } from './utils/party';
+import { describeDismissIntentForAI, findCompanionClaims, findDismissIntent } from './utils/partyClaims';
 import { clearEncounter, filterCombatSuggestions, findAggressiveResident, getAmbushableUnit, getEncounteredUnit, getSpottedHostileEncounter, hasCombatClaim, hasEnemyNearby, isTypedAmbushText, isTypedCombatText, isTypedTrapText, setEncounter } from './utils/encounters';
 import { applyEventProposals, finalizeWorldWithAgentBatch, getEventSeq, getPlayerKnownEvents, isKnownToPlayerOnOccurrence, type DeathHint, type PlayerPosition } from './utils/worldEvents';
 import { createSuccessorReputation, describeReputationChanges } from './utils/factions';
@@ -420,7 +421,9 @@ export default function App() {
     let applied = false;
 
     try {
-      const aiResponse = await sendPlayerAction(modelSettings, apiKey, turnPlayer, actionText, messages, characterHistory, resolvedTravel);
+      // 玩家打字要隊伍同伴離隊（D34-a）：提醒 AI 同伴仍在隊伍中，並在選項列冒出請離隊（按下才離隊）。
+      const dismissIntent = findDismissIntent(turnPlayer, actionText);
+      const aiResponse = await sendPlayerAction(modelSettings, apiKey, turnPlayer, `${actionText}${describeDismissIntentForAI(dismissIntent)}`, messages, characterHistory, resolvedTravel);
       // O45：玩家以敘事方式開戰（combatRequest）。合法時由規則開戰，只採用 AI 的敘事（接近的過程），
       // 不套用 AI 的檢定、狀態變更與人物記憶，也不另外呼叫開戰敘事（D13）。已先結算移動的回合不處理。
       const combatPlan = resolvedTravel ? undefined : resolveCombatRequest(turnPlayer, aiResponse.combatRequest, (unitId) => getCombatStartBlock(turnPlayer, unitId, true));
@@ -569,6 +572,10 @@ export default function App() {
       const falseClaimNotice = falseCombatClaim
         ? '\n\n⚠️ 系統說明：尚未交戰，敘事中的攻防沒有生效。若要動手，可從選項列伏擊或挑戰。'
         : '';
+      // 敘事宣稱同伴離去、他人入隊、同伴出手或給東西（D34-b）：補一行說明，狀態不變。
+      const companionClaims = findCompanionClaims(turnPlayer, storyText);
+      const companionClaimNotice = companionClaims.length ? `\n\n⚠️ 系統說明：${companionClaims.join('')}` : '';
+      const partyDismissOptions = dismissIntent.filter((member) => nextPlayer.party.includes(member.unitId));
       // 有敵人可交戰時，不建議以打字進行戰鬥（O45 D15），改由選項列的伏擊、挑戰處理。
       const suggestions = hasEnemyNearby(nextPlayer) ? filterCombatSuggestions(aiResponse.suggestedActions) : aiResponse.suggestedActions;
 
@@ -599,13 +606,14 @@ export default function App() {
         {
           id: (Date.now() + 1).toString(),
           sender: 'ai',
-          text: `${storyText}${falseClaimNotice}${combatRequestNotice}${storyletNotice}${postedQuestNotice}${questNotice}${questCompletionNotice}${unitTransferNotice}${unitDispositionNotice}${encounterEndedNotice}${encounterNotice}${serviceNotice}${locationNotice}${deathNotice}`,
+          text: `${storyText}${falseClaimNotice}${companionClaimNotice}${combatRequestNotice}${storyletNotice}${postedQuestNotice}${questNotice}${questCompletionNotice}${unitTransferNotice}${unitDispositionNotice}${encounterEndedNotice}${encounterNotice}${serviceNotice}${locationNotice}${deathNotice}`,
           options: suggestions,
           checkResults: [...(resolvedTravel?.foundByEnemy?.checks ?? []), ...(encounterFound?.checks ?? [])].length
             ? [...(resolvedTravel?.foundByEnemy?.checks ?? []), ...(encounterFound?.checks ?? [])] : undefined,
           travelOptions: textTravelIntent.kind === 'ambiguous'
             ? textTravelIntent.candidates.map((candidate) => ({ mapId: candidate.id, name: candidate.name }))
             : undefined,
+          ...(partyDismissOptions.length ? { partyDismissOptions } : {}),
           checkResult,
           timestamp: new Date().toLocaleTimeString()
         }
@@ -1208,7 +1216,7 @@ export default function App() {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message.sender === 'user' || message.invalidatesOptions) break;
-    if (message.options?.length || message.travelOptions?.length) { activeMessage = message; break; }
+    if (message.options?.length || message.travelOptions?.length || message.partyDismissOptions?.length) { activeMessage = message; break; }
   }
   const optionSet = buildSystemOptions(player);
 
@@ -1229,6 +1237,7 @@ export default function App() {
         activeMessageId={activeMessage?.id}
         optionBar={<OptionBar player={player} optionSet={optionSet} busy={loading || agentThinking} busyNote={agentThinking ? '各方正在盤算…' : undefined}
           suggestions={activeMessage?.options ?? []} travelChoices={activeMessage?.travelOptions ?? []}
+          dismissChoices={(activeMessage?.partyDismissOptions ?? []).filter((member) => player.party.includes(member.unitId))}
           onAction={runSystemAction} onSuggestion={handleSendAction} onTravel={(mapId) => runSystemAction({ kind: 'travel', mapId })} />}
         deathActions={player.isDead || isTimelineEnded(player)
           ? { reason: player.isDead ? 'death' : 'ending', onLoadAutoSave: handleLoadAutoSave, onOpenSaveManager: () => setIsSaveManagerOpen(true) } : undefined}
