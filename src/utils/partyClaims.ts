@@ -4,7 +4,7 @@ import { getWorldUnitById, getWorldUnitsAtMap, itemsDatabase, partyRules } from 
 /**
  * 同伴敘事與狀態不符的輕量處理（O35-1 D34）：不改 AI 回應格式、不增加 AI 呼叫。
  * - 玩家打字對隊伍同伴表達離隊意圖 → 選項列冒出「請 X 離隊」（按下才離隊），並提醒 AI 同伴仍在隊伍中。
- * - 敘事宣稱同伴離去、他人入隊、同伴出手（戰鬥外）、同伴給東西 → 敘事後補一行說明。
+ * - 敘事宣稱同伴離去或留在原地、已在隊伍中的同伴拒絕同行、他人入隊、同伴出手（戰鬥外）、同伴給東西 → 敘事後補一行說明。
  * 字詞在 party_rules.json 的 narrativeChecks（正規表示式來源字串，可調）。
  */
 
@@ -12,6 +12,7 @@ const compile = (patterns: string[]) => patterns.map((pattern) => new RegExp(pat
 const checks = {
   dismissIntent: compile(partyRules.narrativeChecks.dismissIntent),
   leave: compile(partyRules.narrativeChecks.leave),
+  refuse: compile(partyRules.narrativeChecks.refuse),
   join: compile(partyRules.narrativeChecks.join),
   act: compile(partyRules.narrativeChecks.act),
   give: compile(partyRules.narrativeChecks.give)
@@ -50,7 +51,7 @@ export function findDismissIntent(state: PlayerState, text: string): { unitId: s
 
 /** 送給 AI 的提醒（附在玩家行動之後，不顯示給玩家）。 */
 export const describeDismissIntentForAI = (members: { name: string }[]): string =>
-  members.length ? `\n（系統說明：${members.map((member) => member.name).join('、')}此刻仍在隊伍中；離隊只能由玩家使用選項列決定，請只描寫對方的反應，不要寫成已經離開。）` : '';
+  members.length ? `\n（系統說明：${members.map((member) => member.name).join('、')}此刻仍在隊伍中，玩家本回合沒有移動；離隊只能由玩家使用選項列決定，請只描寫對方的反應，不要寫成已經離開或留在原地。）` : '';
 
 /**
  * 敘事中與隊伍狀態不符的宣稱（D34-b）。state 為 AI 看到的狀態（本回合行動前）。
@@ -70,6 +71,10 @@ export function findCompanionClaims(state: PlayerState, storyText: string): stri
     const refersTo = (sentence: string) => sentence.includes(member.name) || (soleCompanion && mentioned && /[他她]|對方/.test(sentence));
     if (sentences.some((sentence) => claims(sentence, checks.leave) && (refersTo(sentence) || /你(獨自)?一人/.test(sentence)))) {
       add(`${member.name}仍在隊伍中，沒有離開；要讓對方離隊，請用選項列「人物」的「👋 請${member.name}離隊」。`);
+    }
+    // 已在隊伍中的同伴拒絕同行或說要留守某處（Andrew 試玩回報：再邀請時 AI 寫他拒絕、要守古道入口）。
+    if (sentences.some((sentence) => claims(sentence, checks.refuse) && refersTo(sentence))) {
+      add(`${member.name}已在你的隊伍中，會跟著你行動。`);
     }
     if (!state.combat && sentences.some((sentence) => sentence.includes(member.name) && claims(sentence, checks.act))) {
       add(`${member.name}沒有出手；開戰由規則決定，請用選項列的伏擊或挑戰。`);

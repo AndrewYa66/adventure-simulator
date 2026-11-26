@@ -546,7 +546,8 @@ export default function App() {
         : '';
 
       // 已先結算移動時忽略 AI 的 travelRequest；否則只接受相鄰地區（意圖不明確、由 AI 判斷的移動）。
-      const requestedDestinationId = resolvedTravel || textTravelIntent.kind !== 'none'
+      // 對同伴說離隊的話時（D34），AI 的 travelRequest 也不採用（試玩 P1）。
+      const requestedDestinationId = resolvedTravel || textTravelIntent.kind !== 'none' || dismissIntent.length
         ? undefined
         : aiResponse.travelRequest?.destinationMapId;
       const travel = requestedDestinationId ? movePlayerTo(requestedDestinationId, nextPlayer) : null;
@@ -1022,6 +1023,13 @@ export default function App() {
     updatePlayer(advanceGameTime(leaveParty(player, unitId), 'dialogue'));
   };
 
+  /**
+   * 玩家文字的移動意圖（O44）。對隊伍同伴說離隊的話（例如「某某，你先回去吧」）是要同伴走、不是玩家要移動，
+   * 不當成移動意圖（O35-1 試玩 P1；離隊由選項列的請離隊決定）。
+   */
+  const resolvePlayerTravelIntent = (actionText: string): TravelIntentResolution =>
+    findDismissIntent(player, actionText).length ? { kind: 'none' } : resolveExplicitTravelIntent(actionText, player);
+
   const handleSendAction = async (actionText: string) => {
     // 角色決策進行中（O34 第 2 階段）不接受新行動；UI 已停用，這裡再擋一次，避免日後新入口繞過。
     if (agentThinking) return;
@@ -1038,7 +1046,7 @@ export default function App() {
         return;
       }
       // 被發現（O45 D1、D9）：攻擊與明確移動以外的行動，會讓敵人搶先出手。
-      if (!attackIntent && resolveExplicitTravelIntent(actionText, player).kind !== 'resolved' && preemptByEnemy(actionText)) return;
+      if (!attackIntent && resolvePlayerTravelIntent(actionText).kind !== 'resolved' && preemptByEnemy(actionText)) return;
       // 打字設陷阱（O45 D4）：有指定合法時長就照時長，否則用預設時長。
       if (!isQuestion && isTypedTrapText(actionText)) {
         const waitIntent = parseWaitIntent(actionText);
@@ -1170,7 +1178,7 @@ export default function App() {
       return;
     }
     // 先移動、再敘事（O44）：玩家文字的移動意圖明確時，與選項列的「前往」同一個執行函式（O50）。
-    const textTravelIntent = resolveExplicitTravelIntent(actionText, player);
+    const textTravelIntent = resolvePlayerTravelIntent(actionText);
     if (textTravelIntent.kind === 'resolved') {
       executeTravel(textTravelIntent.destination.id, { actionText, intent: textTravelIntent });
       return;

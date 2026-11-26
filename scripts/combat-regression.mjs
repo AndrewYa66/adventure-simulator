@@ -516,6 +516,16 @@ const lines = (r) => r.text.split('\n');
     check('S8', `含否定字不算離隊意圖：「${text}」`, claims.findDismissIntent(p, text).length === 0);
   }
   check('S8', '否定字是離隊字詞的一部分時仍算（「別跟了」）', claims.findDismissIntent(p, `${name}，別跟了`).length === 1);
+  // 試玩 P1 與 Andrew 試玩回報：用否定寫的離去、已在隊伍中卻拒絕同行或要留守
+  check('P1', '試玩那句是離隊意圖（遊戲據此不當成移動）', claims.findDismissIntent(p, `${name}，你先回去吧，接下來我想一個人走`).length === 1);
+  const stayed = claims.findCompanionClaims(village, `林地獵人${name}雖然留在原地或因任務未了而搖了搖頭，沒有隨你一同折返，但他看著你離去的背影。`);
+  check('P1', '「留在原地、沒有隨你一同折返」→ 補說明', stayed.some((text) => text.includes('仍在隊伍中')), stayed.join(''));
+  const followed = claims.findCompanionClaims(village, `${name}沒有留在原地，緊跟在你的身旁。`);
+  check('P1', '「沒有留在原地」不算離去', followed.length === 0, followed.join(''));
+  const refused = claims.findCompanionClaims(village, `${name}搖了搖頭，拒絕與你同行，說他得守在古道入口。`);
+  check('P1', '已在隊伍中卻拒絕同行、要留守 → 補「已在你的隊伍中」', refused.some((text) => text.includes(`${name}已在你的隊伍中`)), refused.join(''));
+  const accepted = claims.findCompanionClaims(village, `${name}並沒有拒絕，只是點點頭：「我早就跟著你了。」`);
+  check('P1', '沒有拒絕、或引號內說已同行 → 不補', accepted.length === 0, accepted.join(''));
   const chat = claims.findCompanionClaims(village, `一旁的${name}抱著長弓，低聲補充：「我在古道邊緣見過牠們的腳印。」`);
   check('D34', '正常的同伴插話不補說明', chat.length === 0, chat.join(''));
 }

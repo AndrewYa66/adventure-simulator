@@ -209,7 +209,7 @@ export interface PartyRulesStatic {
   /** 戰鬥中以復甦效果救起時，以最大 HP 的此比例起身（捨去、至少 1；D35）。 */
   reviveRatio: number;
   /** 同伴敘事與狀態不符的輕量處理（D34）：正規表示式來源字串。 */
-  narrativeChecks: { dismissIntent: string[]; dismissNegations: string[]; leave: string[]; join: string[]; act: string[]; give: string[]; giveObjects: string[]; negations: string[] };
+  narrativeChecks: { dismissIntent: string[]; dismissNegations: string[]; leave: string[]; refuse: string[]; join: string[]; act: string[]; give: string[]; giveObjects: string[]; negations: string[] };
 }
 
 /** 重要角色的行動種類（O34 第 1 階段）。 */
