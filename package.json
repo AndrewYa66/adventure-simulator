@@ -10,7 +10,8 @@
     "build": "npm run validate:data && tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test:sim": "node scripts/simulate-story.mjs"
+    "test:sim": "node scripts/simulate-story.mjs",
+    "test:combat": "node scripts/combat-regression.mjs"
   },
   "dependencies": {
     "react": "^19.2.8",
