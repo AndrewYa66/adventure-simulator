@@ -82,8 +82,9 @@ function createRestoreNotice(player: PlayerState, savedAt: number, messageCount:
     `進行中任務：${activeQuests.length ? activeQuests.join('、') : '無'}`,
     `持有物：${inventory.length ? inventory.join('、') : '無'}`
   ];
-  if (combatTarget && player.combat) lines.push(`戰鬥恢復：第 ${player.combat.round} 回合，${combatTarget.label} HP ${combatTarget.currentHp}（${OPENING_LABELS[player.combat.opening]}）`);
+  // 隊伍（O35-1）獨立一行，不影響下面的戰鬥／遭遇判斷（review 第 1 輪 R1）。
   if (player.party.length) lines.push(`隊伍：${player.party.map((unitId) => getWorldUnitById(unitId, player)?.name ?? unitId).join('、')}`);
+  if (combatTarget && player.combat) lines.push(`戰鬥恢復：第 ${player.combat.round} 回合，${combatTarget.label} HP ${combatTarget.currentHp}（${OPENING_LABELS[player.combat.opening]}）`);
   else if (player.encounteredUnitId) lines.push(`已遭遇單位：${getWorldUnitById(player.encounteredUnitId)?.name ?? player.encounteredUnitId}${player.encounterInfo?.playerSpottedFirst ? '（你先發現對方，可從選項列伏擊或挑戰）' : '（可從選項列挑戰）'}`);
   else lines.push('戰鬥狀態：目前沒有進行中的戰鬥，也尚未遭遇敵人。');
   return {
